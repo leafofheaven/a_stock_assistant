@@ -12,7 +12,7 @@ setup(
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     python_requires=">=3.12",
-    packages=find_packages(include=["app", "app.*", "core", "core.*"]),
+    packages=find_packages(include=["app", "app.*", "core", "core.*", "web", "web.*"]),
     install_requires=[
         "duckdb",
         "pandas",

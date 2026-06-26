@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -98,3 +100,31 @@ def test_streamlit_app_contains_five_tab_names() -> None:
 
     for tab_name in ["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态"]:
         assert tab_name in source
+
+
+def test_streamlit_app_import_adds_project_root_for_core_import(monkeypatch) -> None:
+    """Streamlit script import should not fail when only web/ starts on sys.path."""
+    root = Path.cwd().resolve()
+    web_dir = root / "web"
+    script = web_dir / "streamlit_app.py"
+    module_name = "_streamlit_app_import_check"
+    original_path = list(sys.path)
+    monkeypatch.setattr(sys, "path", [str(web_dir), *[path for path in original_path if path != str(root)]])
+
+    spec = importlib.util.spec_from_file_location(module_name, script)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert str(root) in sys.path
+    assert hasattr(module, "sample_dashboard_data")
+
+
+def test_setup_includes_web_package() -> None:
+    """Editable install config should include app, core, and web packages."""
+    setup_source = Path("setup.py").read_text(encoding="utf-8")
+
+    assert '"app", "app.*"' in setup_source
+    assert '"core", "core.*"' in setup_source
+    assert '"web", "web.*"' in setup_source
