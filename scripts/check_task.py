@@ -24,6 +24,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task11": check_task11,
         "task12": check_task12,
         "task13": check_task13,
+        "task14": check_task14,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -488,6 +489,51 @@ def check_task13(root: Path) -> list[str]:
     return failures
 
 
+def check_task14(root: Path) -> list[str]:
+    """Check Task 14 AKShare fallback support."""
+    failures = check_paths(
+        root,
+        [
+            "core/data_sources/provider.py",
+            "core/data_sources/akshare_client.py",
+            "tests/test_akshare_fallback.py",
+            ".env.example",
+        ],
+    )
+    config_source = read_source(root / "app/config.py")
+    env_example = read_source(root / ".env.example")
+    for name in [
+        "DATA_PROVIDER",
+        "ENABLE_AKSHARE_FALLBACK",
+        "AKSHARE_SAMPLE_SYMBOLS",
+        "AKSHARE_ADJUST",
+    ]:
+        if name not in config_source:
+            failures.append(f"app/config.py is missing {name}.")
+        if name not in env_example:
+            failures.append(f".env.example is missing {name}.")
+
+    token_line = next(
+        (line for line in env_example.splitlines() if line.startswith("TUSHARE_TOKEN=")),
+        "",
+    )
+    if token_line != "TUSHARE_TOKEN=":
+        failures.append(".env.example must not contain a real Tushare token.")
+
+    provider_source = read_source(root / "core/data_sources/provider.py")
+    for phrase in ["sample", "tushare", "akshare", "enable_akshare_fallback"]:
+        if phrase not in provider_source:
+            failures.append(f"core/data_sources/provider.py is missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_akshare_fallback.py").lower()
+    for phrase in ["mock", "fallback", "akshare", "sample"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_akshare_fallback.py should cover {phrase}.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -532,6 +578,7 @@ def main(argv: list[str] | None = None) -> int:
             "task11",
             "task12",
             "task13",
+            "task14",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
