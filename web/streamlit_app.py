@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from core.sample_data import get_sample_dashboard_data
+
 SELECTION_COLUMNS = [
     "rank",
     "ts_code",
@@ -116,81 +118,8 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
 
 
 def sample_dashboard_data() -> dict[str, Any]:
-    """Return small local sample data so the first dashboard render is useful."""
-    selection = pd.DataFrame(
-        [
-            {
-                "trade_date": "20240131",
-                "rank": 1,
-                "ts_code": "000001.SZ",
-                "name": "平安银行",
-                "industry": "银行",
-                "total_score": 86.5,
-                "trend_score": 82,
-                "momentum_score": 78,
-                "liquidity_score": 90,
-                "fundamental_score": 84,
-                "volatility_score": 88,
-                "select_reason": "综合分靠前；流动性较强",
-                "risk_note": "需结合基本面与市场环境复核",
-            },
-            {
-                "trade_date": "20240131",
-                "rank": 2,
-                "ts_code": "600000.SH",
-                "name": "浦发银行",
-                "industry": "银行",
-                "total_score": 80.2,
-                "trend_score": 75,
-                "momentum_score": 70,
-                "liquidity_score": 86,
-                "fundamental_score": 82,
-                "volatility_score": 79,
-                "select_reason": "综合分靠前",
-                "risk_note": "需结合基本面与市场环境复核",
-            },
-        ]
-    )
-    price = pd.DataFrame(
-        {
-            "ts_code": ["000001.SZ"] * 65,
-            "trade_date": [f"202401{index + 1:02d}" for index in range(65)],
-            "close": [10 + index * 0.05 for index in range(65)],
-            "amount": [120_000_000 + index * 1_000_000 for index in range(65)],
-            "turnover_rate": [1.5 + index * 0.01 for index in range(65)],
-        }
-    )
-    equity_curve = pd.DataFrame(
-        {"trade_date": ["20240101", "20240108", "20240115"], "equity": [1_000_000, 1_018_000, 1_011_000]}
-    )
-    backtest = {
-        "annual_return": 0.12,
-        "max_drawdown": -0.03,
-        "sharpe_ratio": 1.1,
-        "win_rate": 0.55,
-        "turnover": 1.8,
-        "yearly_returns": {"2024": 0.011},
-        "equity_curve": equity_curve,
-        "trade_records": pd.DataFrame(
-            {"trade_date": ["20240101"], "ts_code": ["000001.SZ"], "side": ["buy"], "trade_value": [500000]}
-        ),
-        "position_records": pd.DataFrame(
-            {"trade_date": ["20240101"], "ts_code": ["000001.SZ"], "weight": [0.5]}
-        ),
-    }
-    return {
-        "selection": selection,
-        "stock_basic": selection[["ts_code", "name", "industry"]],
-        "price": price,
-        "factor_scores": selection,
-        "backtest": backtest,
-        "tables": {
-            "daily_price": price,
-            "factor_scores": selection,
-            "strategy_result": selection,
-            "backtest_result": pd.DataFrame([{"strategy_name": "sample"}]),
-        },
-    }
+    """Return local demo data so the first dashboard render is useful."""
+    return get_sample_dashboard_data()
 
 
 def render_dashboard(data: dict[str, Any] | None = None) -> None:

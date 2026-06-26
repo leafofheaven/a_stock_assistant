@@ -21,6 +21,8 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task8": check_task8,
         "task9": check_task9,
         "task10": check_task10,
+        "task11": check_task11,
+        "task12": check_task12,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -379,6 +381,66 @@ def check_task10(root: Path) -> list[str]:
     return failures
 
 
+def check_task11(root: Path) -> list[str]:
+    """Check Task 11 one-click daily selection entrypoint."""
+    failures = check_paths(root, ["core/jobs/run_daily_selection.py"])
+    source = read_source(root / "core/jobs/run_daily_selection.py")
+    for function_name in ["run_daily_selection", "main"]:
+        if not ast_name_exists(root / "core/jobs/run_daily_selection.py", function_name):
+            failures.append(f"core/jobs/run_daily_selection.py is missing {function_name}.")
+    for phrase in ["run_date", "data_source", "stock_pool_count", "candidate_count"]:
+        if phrase not in source:
+            failures.append(f"core/jobs/run_daily_selection.py is missing summary field {phrase}.")
+    return failures
+
+
+def check_task12(root: Path) -> list[str]:
+    """Check Task 12 MVP smoke-test readiness."""
+    failures = check_paths(
+        root,
+        [
+            "README.md",
+            "web/streamlit_app.py",
+            "core/jobs/run_daily_selection.py",
+            "core/sample_data.py",
+            "tests/test_smoke_mvp.py",
+        ],
+    )
+
+    readme = read_source(root / "README.md")
+    for phrase in [
+        "pip install -e .",
+        "python -m pytest",
+        "python scripts/check_project.py",
+        "python -m core.jobs.run_daily_selection",
+        "streamlit run web/streamlit_app.py",
+        "sample",
+        "不构成投资建议",
+    ]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    sample_source = read_source(root / "core/sample_data.py")
+    for function_name in [
+        "get_sample_stock_basic",
+        "get_sample_daily_price",
+        "get_sample_daily_basic",
+        "get_sample_factor_scores",
+        "get_sample_strategy_result",
+        "get_sample_backtest_result",
+    ]:
+        if not ast_name_exists(root / "core/sample_data.py", function_name):
+            failures.append(f"core/sample_data.py is missing {function_name}.")
+    if "演示数据" not in sample_source:
+        failures.append("core/sample_data.py must clearly label demo data.")
+
+    tests_source = read_source(root / "tests/test_smoke_mvp.py").lower()
+    for phrase in ["sample", "run_daily_selection", "streamlit", "readme"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_smoke_mvp.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -420,6 +482,8 @@ def main(argv: list[str] | None = None) -> int:
             "task8",
             "task9",
             "task10",
+            "task11",
+            "task12",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
