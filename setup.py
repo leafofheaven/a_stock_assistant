@@ -14,6 +14,7 @@ setup(
     python_requires=">=3.12",
     packages=find_packages(include=["app", "app.*", "core", "core.*"]),
     install_requires=[
+        "duckdb",
         "pandas",
         "pydantic-settings",
         "python-dotenv",
@@ -21,7 +22,6 @@ setup(
     extras_require={
         "app": [
             "akshare",
-            "duckdb",
             "fastapi",
             "numpy",
             "pyarrow",
