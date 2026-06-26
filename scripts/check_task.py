@@ -18,6 +18,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task5": check_task5,
         "task6": check_task6,
         "task7": check_task7,
+        "task8": check_task8,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -281,6 +282,37 @@ def check_task7(root: Path) -> list[str]:
     return failures
 
 
+def check_task8(root: Path) -> list[str]:
+    """Check Task 8 selection strategy implementation."""
+    failures = check_paths(
+        root,
+        [
+            "core/strategy/selector.py",
+            "core/strategy/portfolio.py",
+            "tests/test_selector.py",
+        ],
+    )
+    if not ast_name_exists(root / "core/strategy/selector.py", "select_top_stocks"):
+        failures.append("core/strategy/selector.py is missing select_top_stocks.")
+    if not ast_name_exists(root / "core/strategy/portfolio.py", "build_equal_weight_portfolio"):
+        failures.append("core/strategy/portfolio.py is missing build_equal_weight_portfolio.")
+
+    selector_source = read_source(root / "core/strategy/selector.py")
+    portfolio_source = read_source(root / "core/strategy/portfolio.py")
+    for phrase in ["trade_date", "total_score", "rank", "select_reason", "risk_note"]:
+        if phrase not in selector_source:
+            failures.append(f"core/strategy/selector.py is missing {phrase}.")
+    for phrase in ["trade_date", "max_positions", "weight"]:
+        if phrase not in portfolio_source:
+            failures.append(f"core/strategy/portfolio.py is missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_selector.py").lower()
+    for phrase in ["total_score", "top_n", "rank", "select_reason", "risk_note", "weight"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_selector.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -311,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run task-specific repository checks.")
     parser.add_argument(
         "task",
-        choices=["task1", "task2", "task3", "task4", "task5", "task6", "task7"],
+        choices=["task1", "task2", "task3", "task4", "task5", "task6", "task7", "task8"],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
     args = parser.parse_args(argv)
