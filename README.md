@@ -117,6 +117,12 @@ python scripts/check_task.py task12
 python -m core.jobs.update_real_data
 ```
 
+诊断本地 DuckDB 是否足够完成真实数据端到端验证：
+
+```bash
+python -m core.jobs.diagnose_real_data
+```
+
 运行每日选股 smoke 入口：
 
 ```bash
@@ -124,6 +130,39 @@ python -m core.jobs.run_daily_selection
 ```
 
 当前 MVP 在没有真实数据库结果或真实评分/选股结果不足时使用 sample 数据输出摘要，摘要包括运行日期、数据来源、股票池数量、评分股票数量、候选股票数量、候选股票示例和结果保存说明。
+
+## 真实数据端到端验证
+
+第一步，按需在 `.env` 中选择数据源并保持小范围样本股票：
+
+```env
+DATA_PROVIDER=tushare
+REAL_DATA_SAMPLE_SYMBOLS=000001.SZ,600000.SH,000002.SZ
+```
+
+或使用 AKShare 小范围验证：
+
+```env
+DATA_PROVIDER=akshare
+AKSHARE_SAMPLE_SYMBOLS=000001,600000,000002
+```
+
+第二步，依次运行：
+
+```bash
+python -m core.jobs.update_real_data
+python -m core.jobs.diagnose_real_data
+python -m core.jobs.run_daily_selection
+streamlit run web/streamlit_app.py
+```
+
+判断当前使用 sample 数据还是真实数据：
+
+- 命令输出中 `数据来源: sample 数据（演示）` 表示已回退 sample 数据；
+- 命令输出中包含 `本地 DuckDB 真实数据` 表示已读取本地真实数据；
+- Streamlit 页面顶部会显示当前数据来源；如果是 sample，会明确标注“演示数据”；如果是真实数据，会显示最新交易日期。
+
+当前真实数据端到端验证只拉少量股票，不做全市场长周期下载。不构成投资建议，不自动交易。
 
 ## 前端启动命令
 

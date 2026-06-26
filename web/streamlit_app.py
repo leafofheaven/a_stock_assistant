@@ -123,6 +123,20 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     }
 
 
+def describe_dashboard_data_source(data: dict[str, Any]) -> dict[str, str]:
+    """Return user-facing dashboard data source status."""
+    data_source = str(data.get("data_source") or "sample 数据（演示）")
+    tables = data.get("tables", {})
+    latest_price_date = summarize_update_status(tables).get("latest_price_date") if isinstance(tables, dict) else None
+    if "sample" in data_source or "演示" in data_source:
+        message = "当前展示 sample 演示数据，仅用于流程验证。"
+    elif latest_price_date:
+        message = f"当前展示真实数据，最新交易日期：{latest_price_date}。"
+    else:
+        message = "真实数据不足，当前页面仅展示可用数据或友好空状态。"
+    return {"data_source": data_source, "message": message}
+
+
 def sample_dashboard_data() -> dict[str, Any]:
     """Return local demo data so the first dashboard render is useful."""
     return get_sample_dashboard_data()
@@ -136,6 +150,8 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     st.set_page_config(page_title="A 股选股辅助", layout="wide")
     st.title("A 股选股辅助")
     st.caption("仅用于研究与辅助决策，不构成投资建议。")
+    data_source_status = describe_dashboard_data_source(dashboard_data)
+    st.info(f"数据来源：{data_source_status['data_source']}。{data_source_status['message']}")
 
     tabs = st.tabs(["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态"])
     with tabs[0]:

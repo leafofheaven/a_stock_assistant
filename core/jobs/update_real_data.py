@@ -50,6 +50,7 @@ def update_real_data(
             "end_date": end_date,
             "sample_symbols": sample_symbols,
             "written_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "next_steps": ["python -m core.jobs.run_daily_selection"],
         }
 
     if selection.provider_name == "tushare" and not resolved_settings.tushare_token and client is None:
@@ -62,6 +63,7 @@ def update_real_data(
                 "end_date": end_date,
                 "sample_symbols": sample_symbols,
                 "written_rows": {table_name: 0 for table_name in TABLE_ORDER},
+                "next_steps": ["配置 TUSHARE_TOKEN 或 ENABLE_AKSHARE_FALLBACK=true 后重试。"],
             }
         return _run_provider_update(
             provider_name="akshare",
@@ -113,6 +115,7 @@ def _run_provider_update(
             "end_date": end_date,
             "sample_symbols": [],
             "written_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "next_steps": ["python -m core.jobs.run_daily_selection"],
         }
 
     sample_symbols = _sample_symbols_for_provider(settings, provider_name)
@@ -145,6 +148,7 @@ def _run_provider_update(
             "end_date": end_date,
             "sample_symbols": sample_symbols,
             "written_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "next_steps": ["检查数据源配置后重试。"],
         }
 
     return {
@@ -155,6 +159,10 @@ def _run_provider_update(
         "end_date": end_date,
         "sample_symbols": sample_symbols,
         "written_rows": written_rows,
+        "next_steps": [
+            "python -m core.jobs.diagnose_real_data",
+            "python -m core.jobs.run_daily_selection",
+        ],
     }
 
 
@@ -170,6 +178,9 @@ def main() -> None:
     print("- 写入行数:")
     for table_name, row_count in result["written_rows"].items():
         print(f"  {table_name}: {row_count}")
+    print("- 下一步建议:")
+    for step in result.get("next_steps", []):
+        print(f"  {step}")
 
 
 def _filter_stock_basic(df: pd.DataFrame, symbols: list[str]) -> pd.DataFrame:
