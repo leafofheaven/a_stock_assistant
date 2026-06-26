@@ -13,6 +13,10 @@ setup(
     long_description_content_type="text/markdown",
     python_requires=">=3.12",
     packages=find_packages(include=["app", "app.*", "core", "core.*"]),
+    install_requires=[
+        "pydantic-settings",
+        "python-dotenv",
+    ],
     extras_require={
         "app": [
             "akshare",
@@ -21,8 +25,6 @@ setup(
             "numpy",
             "pandas",
             "pyarrow",
-            "pydantic-settings",
-            "python-dotenv",
             "streamlit",
             "tushare",
             "uvicorn",
