@@ -15,6 +15,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task2": check_task2,
         "task3": check_task3,
         "task4": check_task4,
+        "task5": check_task5,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -170,6 +171,46 @@ def check_task4(root: Path) -> list[str]:
     return failures
 
 
+def check_task5(root: Path) -> list[str]:
+    """Check Task 5 stock universe implementation."""
+    failures = check_paths(
+        root,
+        [
+            "core/universe/stock_pool.py",
+            "tests/test_stock_pool.py",
+        ],
+    )
+    if not ast_name_exists(root / "core/universe/stock_pool.py", "build_tradeable_universe"):
+        failures.append("core/universe/stock_pool.py is missing build_tradeable_universe.")
+
+    source = read_source(root / "core/universe/stock_pool.py")
+    for name in [
+        "stock_basic",
+        "daily_price",
+        "daily_basic",
+        "trade_date",
+        "avg_amount_20d",
+        "avg_turnover_20d",
+        "is_tradeable",
+        "exclude_reason",
+    ]:
+        if name not in source:
+            failures.append(f"core/universe/stock_pool.py is missing {name}.")
+
+    tests_source = read_source(root / "tests/test_stock_pool.py")
+    for phrase in [
+        "ST stock",
+        "suspended",
+        "listed less than 120 days",
+        "avg amount 20d below 100 million",
+        "suspended more than 3 days in 20d",
+        "severe financial data missing",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_stock_pool.py does not cover: {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -198,7 +239,7 @@ def read_source(path: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     """Run a task-specific check from the command line."""
     parser = argparse.ArgumentParser(description="Run task-specific repository checks.")
-    parser.add_argument("task", choices=["task1", "task2", "task3", "task4"])
+    parser.add_argument("task", choices=["task1", "task2", "task3", "task4", "task5"])
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
     args = parser.parse_args(argv)
 
