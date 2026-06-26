@@ -8,8 +8,15 @@ from typing import Any
 import pandas as pd
 
 from app.config import Settings, get_settings
+from core.factors.fundamental import calculate_pe_score
+from core.factors.liquidity import calculate_avg_amount_20d, calculate_avg_turnover_20d
+from core.factors.scoring import calculate_total_score, normalize_factor
+from core.factors.trend import calculate_return_20d
+from core.factors.volatility import calculate_volatility_20d
 from core.sample_data import DEMO_DATA_SOURCE, get_sample_dashboard_data
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+from core.strategy.selector import select_top_stocks
+from core.universe.stock_pool import build_tradeable_universe
 
 
 def run_daily_selection(
@@ -25,16 +32,27 @@ def run_daily_selection(
     command execution, and dashboard wiring end to end.
     """
     resolved_settings = settings or get_settings()
-    if resolved_settings.data_provider == "tushare":
-        real_summary = _try_real_data_summary(store or DuckDBStore(resolved_settings.duckdb_path))
+    if resolved_settings.data_provider in {"tushare", "akshare"}:
+        real_summary = _try_real_data_summary(
+            store or DuckDBStore(resolved_settings.duckdb_path),
+            resolved_settings,
+        )
         if real_summary["candidate_count"] > 0:
             return real_summary
         if not use_sample:
             return real_summary
 
+        if use_sample:
+            return _sample_summary(f"真实数据不足，已回退 sample 数据。{real_summary['result_location']}")
+
     if not use_sample:
         return _empty_summary("无数据")
 
+    return _sample_summary("未写入数据库；当前使用演示数据完成本地 smoke test。")
+
+
+def _sample_summary(result_location: str) -> dict[str, Any]:
+    """Return the standard sample-data summary."""
     data = get_sample_dashboard_data()
     selection = data.get("selection", pd.DataFrame())
     factor_scores = data.get("factor_scores", pd.DataFrame())
@@ -46,7 +64,7 @@ def run_daily_selection(
         "scored_stock_count": int(len(factor_scores)),
         "candidate_count": int(len(selection)),
         "top_candidates": _top_candidate_records(selection),
-        "result_location": "未写入数据库；当前使用演示数据完成本地 smoke test。",
+        "result_location": result_location,
     }
 
 
@@ -84,7 +102,7 @@ def _empty_summary(data_source: str) -> dict[str, Any]:
     }
 
 
-def _try_real_data_summary(store: DuckDBStore) -> dict[str, Any]:
+def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, Any]:
     """Try to summarize real local DuckDB results without crashing on empty data."""
     if not store.db_path.exists():
         summary = _empty_summary("无数据")
@@ -94,38 +112,88 @@ def _try_real_data_summary(store: DuckDBStore) -> dict[str, Any]:
     try:
         stock_basic = store.read_table("stock_basic")
         daily_price = store.read_table("daily_price")
-        strategy_result = store.read_table("strategy_result")
-        factor_scores = store.read_table("factor_scores")
+        daily_basic = store.read_table("daily_basic")
     except DuckDBStoreError:
         summary = _empty_summary("无数据")
         summary["result_location"] = "真实 DuckDB 数据不可用；可回退 sample 数据。"
         return summary
 
-    if daily_price.empty or stock_basic.empty:
+    if daily_price.empty or stock_basic.empty or daily_basic.empty:
         summary = _empty_summary("无数据")
-        summary["result_location"] = "真实 DuckDB 数据不足；可回退 sample 数据。"
+        summary["result_location"] = "真实 DuckDB 基础表不足；可回退 sample 数据。"
         return summary
 
-    if strategy_result.empty or factor_scores.empty:
-        return {
-            "run_date": date.today().isoformat(),
-            "data_source": "tushare 本地 DuckDB（未生成真实选股结果，回退 sample 数据）",
-            "stock_pool_count": int(len(stock_basic)),
-            "scored_stock_count": int(len(factor_scores)),
-            "candidate_count": 0,
-            "top_candidates": [],
-            "result_location": "已检测到真实行情数据，但尚无真实因子评分或选股结果。",
-        }
+    latest_trade_date = str(daily_price["trade_date"].dropna().astype(str).max())
+    try:
+        universe = build_tradeable_universe(stock_basic, daily_price, daily_basic, latest_trade_date)
+        tradeable = universe[universe["is_tradeable"].fillna(False)].copy()
+        if tradeable.empty:
+            summary = _empty_summary("无数据")
+            summary["stock_pool_count"] = int(len(universe))
+            summary["result_location"] = "真实数据已读取，但股票池过滤后无可交易股票；可回退 sample 数据。"
+            return summary
+        factor_scores = _calculate_minimal_real_scores(
+            daily_price=daily_price,
+            daily_basic=daily_basic,
+            universe=tradeable,
+            trade_date=latest_trade_date,
+        )
+        selected = select_top_stocks(factor_scores, top_n=settings.default_top_n)
+    except Exception as exc:
+        summary = _empty_summary("无数据")
+        summary["result_location"] = f"真实数据计算失败：{exc}；可回退 sample 数据。"
+        return summary
+
+    if selected.empty:
+        summary = _empty_summary("无数据")
+        summary["stock_pool_count"] = int(len(tradeable))
+        summary["scored_stock_count"] = int(len(factor_scores))
+        summary["result_location"] = "真实数据已计算，但未生成候选股票；可回退 sample 数据。"
+        return summary
 
     return {
         "run_date": date.today().isoformat(),
-        "data_source": "tushare 本地 DuckDB",
-        "stock_pool_count": int(len(stock_basic)),
+        "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
+        "stock_pool_count": int(len(tradeable)),
         "scored_stock_count": int(len(factor_scores)),
-        "candidate_count": int(len(strategy_result)),
-        "top_candidates": _top_candidate_records(strategy_result),
-        "result_location": "读取本地 DuckDB strategy_result。",
+        "candidate_count": int(len(selected)),
+        "top_candidates": _top_candidate_records(selected),
+        "result_location": f"基于本地 DuckDB 真实数据完成最小选股试运行，最新行情日期 {latest_trade_date}。",
     }
+
+
+def _calculate_minimal_real_scores(
+    daily_price: pd.DataFrame,
+    daily_basic: pd.DataFrame,
+    universe: pd.DataFrame,
+    trade_date: str,
+) -> pd.DataFrame:
+    """Calculate existing factors and scores for a minimal real-data validation run."""
+    base = universe[["ts_code", "name", "industry", "trade_date"]].copy()
+    factors = base.copy()
+    for frame in [
+        calculate_return_20d(daily_price),
+        calculate_avg_amount_20d(daily_price),
+        calculate_avg_turnover_20d(daily_basic),
+        calculate_pe_score(daily_basic),
+        calculate_volatility_20d(daily_price),
+    ]:
+        latest = _latest_factor_rows(frame, trade_date)
+        factors = factors.merge(latest, on=["ts_code", "trade_date"], how="left")
+
+    factors["trend_score"] = normalize_factor(factors, "return_20d", higher_is_better=True)
+    factors["momentum_score"] = normalize_factor(factors, "return_20d", higher_is_better=True)
+    factors["liquidity_score"] = normalize_factor(factors, "avg_amount_20d", higher_is_better=True)
+    factors["fundamental_score"] = normalize_factor(factors, "pe_score", higher_is_better=True)
+    factors["volatility_score"] = normalize_factor(factors, "volatility_20d", higher_is_better=False)
+    return calculate_total_score(factors)
+
+
+def _latest_factor_rows(factor_df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
+    """Return factor rows matching the selected trade date."""
+    if factor_df.empty or "trade_date" not in factor_df.columns:
+        return pd.DataFrame(columns=["ts_code", "trade_date"])
+    return factor_df[factor_df["trade_date"].astype(str) == trade_date].copy()
 
 
 def _top_candidate_records(selection: pd.DataFrame, limit: int = 5) -> list[dict[str, Any]]:

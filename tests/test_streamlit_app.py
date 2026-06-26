@@ -10,6 +10,7 @@ import pandas as pd
 from web.streamlit_app import (
     calculate_recent_returns,
     dataframe_to_csv,
+    describe_dashboard_data_source,
     filter_factor_ranking,
     filter_selection_data,
     get_industry_options,
@@ -95,6 +96,20 @@ def test_summarize_update_status_returns_dates_and_row_counts() -> None:
     assert status["latest_factor_date"] == "20240101"
     assert status["latest_selection_date"] == "20240103"
     assert status["table_rows"]["daily_price"] == 2
+
+
+def test_describe_dashboard_data_source_marks_sample_and_real_data() -> None:
+    """Dashboard data source helper should label sample and real data clearly."""
+    sample = describe_dashboard_data_source({"data_source": "sample 数据（演示）", "tables": {}})
+    real = describe_dashboard_data_source(
+        {
+            "data_source": "tushare 本地 DuckDB 真实数据",
+            "tables": {"daily_price": pd.DataFrame({"trade_date": ["20240101", "20240103"]})},
+        }
+    )
+
+    assert "演示数据" in sample["message"]
+    assert "最新交易日期：20240103" in real["message"]
 
 
 def test_render_dashboard_creates_title_and_five_tabs_for_empty_data(monkeypatch) -> None:
