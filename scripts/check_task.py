@@ -23,6 +23,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task10": check_task10,
         "task11": check_task11,
         "task12": check_task12,
+        "task13": check_task13,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -441,6 +442,52 @@ def check_task12(root: Path) -> list[str]:
     return failures
 
 
+def check_task13(root: Path) -> list[str]:
+    """Check Task 13 minimal real Tushare ingestion."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/update_real_data.py",
+            "core/data_sources/tushare_client.py",
+            "tests/test_real_data_ingestion.py",
+            ".env.example",
+        ],
+    )
+    config_source = read_source(root / "app/config.py")
+    env_example = read_source(root / ".env.example")
+    for name in [
+        "DATA_PROVIDER",
+        "ENABLE_AKSHARE_FALLBACK",
+        "REAL_DATA_START_DATE",
+        "REAL_DATA_END_DATE",
+        "REAL_DATA_SAMPLE_SYMBOLS",
+    ]:
+        if name not in config_source:
+            failures.append(f"app/config.py is missing {name}.")
+        if name not in env_example:
+            failures.append(f".env.example is missing {name}.")
+
+    token_line = next(
+        (line for line in env_example.splitlines() if line.startswith("TUSHARE_TOKEN=")),
+        "",
+    )
+    if token_line != "TUSHARE_TOKEN=":
+        failures.append(".env.example must not contain a real Tushare token.")
+
+    update_source = read_source(root / "core/jobs/update_real_data.py")
+    for phrase in ["update_real_data", "TUSHARE_TOKEN 为空", "stock_basic", "daily_price"]:
+        if phrase not in update_source:
+            failures.append(f"core/jobs/update_real_data.py is missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_real_data_ingestion.py").lower()
+    for phrase in ["mock", "tushare_token", "duckdb", "sample"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_real_data_ingestion.py should cover {phrase}.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -484,6 +531,7 @@ def main(argv: list[str] | None = None) -> int:
             "task10",
             "task11",
             "task12",
+            "task13",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

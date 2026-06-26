@@ -102,6 +102,31 @@ def test_tushare_client_methods_return_dataframes() -> None:
     assert pro_api.calls[2][1] == {"start_date": "20240101", "end_date": "20240131"}
 
 
+def test_tushare_client_limits_market_data_to_sample_symbols() -> None:
+    """Tushare market data calls should support small configured symbol batches."""
+    pro_api = MockTushareProApi()
+    client = TushareClient(token="test-token", pro_api=pro_api)
+
+    result = client.get_daily_price("20240101", "20240131", symbols=["000001.SZ", "600000.SH"])
+
+    assert isinstance(result, pd.DataFrame)
+    assert [call[0] for call in pro_api.calls] == ["daily", "daily"]
+    assert pro_api.calls[0][1]["ts_code"] == "000001.SZ"
+    assert pro_api.calls[1][1]["ts_code"] == "600000.SH"
+
+
+def test_tushare_client_standardizes_project_fields() -> None:
+    """Tushare client should map provider fields to project table fields."""
+    pro_api = MockTushareProApi()
+    client = TushareClient(token="test-token", pro_api=pro_api)
+
+    daily_price = client.get_daily_price("20240101", "20240131")
+    daily_basic = client.get_daily_basic("20240101", "20240131")
+
+    assert {"ts_code", "trade_date", "open", "close", "amount"}.issubset(daily_price.columns)
+    assert {"ts_code", "trade_date", "turnover_rate", "pe", "pb"}.issubset(daily_basic.columns)
+
+
 def test_tushare_client_reads_token_from_settings(monkeypatch) -> None:
     """Tushare token should be read from application settings when not injected."""
     class MockSettings:

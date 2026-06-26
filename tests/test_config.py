@@ -17,6 +17,11 @@ def test_settings_defaults() -> None:
     assert settings.log_level == "INFO"
     assert settings.default_top_n == 30
     assert settings.default_backtest_top_n == 20
+    assert settings.data_provider == "tushare"
+    assert settings.enable_akshare_fallback is False
+    assert settings.real_data_start_date == "20240101"
+    assert settings.real_data_end_date == ""
+    assert settings.sample_symbols == ["000001.SZ", "600000.SH", "000002.SZ"]
 
 
 def test_settings_loads_from_env_file(tmp_path: Path) -> None:
@@ -31,6 +36,11 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
                 "LOG_LEVEL=debug",
                 "DEFAULT_TOP_N=12",
                 "DEFAULT_BACKTEST_TOP_N=8",
+                "DATA_PROVIDER=tushare",
+                "ENABLE_AKSHARE_FALLBACK=true",
+                "REAL_DATA_START_DATE=20240201",
+                "REAL_DATA_END_DATE=20240229",
+                "REAL_DATA_SAMPLE_SYMBOLS=000001.SZ, 600000.SH",
             ]
         ),
         encoding="utf-8",
@@ -44,6 +54,11 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
     assert settings.log_level == "DEBUG"
     assert settings.default_top_n == 12
     assert settings.default_backtest_top_n == 8
+    assert settings.data_provider == "tushare"
+    assert settings.enable_akshare_fallback is True
+    assert settings.real_data_start_date == "20240201"
+    assert settings.real_data_end_date == "20240229"
+    assert settings.sample_symbols == ["000001.SZ", "600000.SH"]
 
 
 def test_environment_overrides_env_file(tmp_path: Path, monkeypatch) -> None:
