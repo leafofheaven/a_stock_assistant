@@ -41,6 +41,11 @@ class Settings(BaseSettings):
         default="000001.SZ,600000.SH,000002.SZ",
         validation_alias="REAL_DATA_SAMPLE_SYMBOLS",
     )
+    akshare_sample_symbols: str = Field(
+        default="000001,600000,000002",
+        validation_alias="AKSHARE_SAMPLE_SYMBOLS",
+    )
+    akshare_adjust: str = Field(default="qfq", validation_alias="AKSHARE_ADJUST")
 
     @field_validator("log_level")
     @classmethod
@@ -60,6 +65,15 @@ class Settings(BaseSettings):
         return [
             symbol.strip()
             for symbol in self.real_data_sample_symbols.split(",")
+            if symbol.strip()
+        ]
+
+    @property
+    def akshare_symbols(self) -> list[str]:
+        """Return configured AKShare sample symbols as six-digit codes."""
+        return [
+            symbol.strip()
+            for symbol in self.akshare_sample_symbols.split(",")
             if symbol.strip()
         ]
 

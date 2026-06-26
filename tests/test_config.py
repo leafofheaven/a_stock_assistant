@@ -22,6 +22,8 @@ def test_settings_defaults() -> None:
     assert settings.real_data_start_date == "20240101"
     assert settings.real_data_end_date == ""
     assert settings.sample_symbols == ["000001.SZ", "600000.SH", "000002.SZ"]
+    assert settings.akshare_symbols == ["000001", "600000", "000002"]
+    assert settings.akshare_adjust == "qfq"
 
 
 def test_settings_loads_from_env_file(tmp_path: Path) -> None:
@@ -41,6 +43,8 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
                 "REAL_DATA_START_DATE=20240201",
                 "REAL_DATA_END_DATE=20240229",
                 "REAL_DATA_SAMPLE_SYMBOLS=000001.SZ, 600000.SH",
+                "AKSHARE_SAMPLE_SYMBOLS=000001, 600000",
+                "AKSHARE_ADJUST=hfq",
             ]
         ),
         encoding="utf-8",
@@ -59,6 +63,8 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
     assert settings.real_data_start_date == "20240201"
     assert settings.real_data_end_date == "20240229"
     assert settings.sample_symbols == ["000001.SZ", "600000.SH"]
+    assert settings.akshare_symbols == ["000001", "600000"]
+    assert settings.akshare_adjust == "hfq"
 
 
 def test_environment_overrides_env_file(tmp_path: Path, monkeypatch) -> None:

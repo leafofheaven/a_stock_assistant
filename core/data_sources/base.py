@@ -23,13 +23,28 @@ class StockDataSource(ABC):
         """Return exchange trading calendar data."""
 
     @abstractmethod
-    def get_daily_price(self, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_daily_price(
+        self,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
         """Return daily price data for the given date range."""
 
     @abstractmethod
-    def get_daily_basic(self, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_daily_basic(
+        self,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
         """Return daily valuation and trading indicator data."""
 
     @abstractmethod
-    def get_adj_factor(self, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_adj_factor(
+        self,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
         """Return adjustment factor data for the given date range."""

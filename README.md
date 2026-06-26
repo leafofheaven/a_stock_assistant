@@ -64,6 +64,25 @@ REAL_DATA_SAMPLE_SYMBOLS=000001.SZ,600000.SH,000002.SZ
 `REAL_DATA_END_DATE` 为空时会使用当前日期。当前真实数据接入只拉取
 `REAL_DATA_SAMPLE_SYMBOLS` 中的少量股票，用于验证流程，不做全市场长周期下载。
 
+如需手动使用 AKShare 作为备用 / 低成本数据源，可配置：
+
+```env
+DATA_PROVIDER=akshare
+AKSHARE_SAMPLE_SYMBOLS=000001,600000,000002
+AKSHARE_ADJUST=qfq
+```
+
+如需保持 Tushare 为主数据源，并在 Tushare 失败或 token 缺失时尝试 AKShare，可配置：
+
+```env
+DATA_PROVIDER=tushare
+ENABLE_AKSHARE_FALLBACK=true
+AKSHARE_SAMPLE_SYMBOLS=000001,600000,000002
+AKSHARE_ADJUST=qfq
+```
+
+AKShare 当前只用于小范围验证，不保证所有字段与 Tushare 完全一致；部分 AKShare 不稳定或缺失字段会写入空表或空值，并保留 sample smoke test 可用。
+
 ## 本地检查命令
 
 运行自动测试：
@@ -142,6 +161,7 @@ streamlit run web/streamlit_app.py
 - sample 数据规模很小，只用于验证流程能跑通。
 - 默认只会在手动运行 `python -m core.jobs.update_real_data` 且配置 `TUSHARE_TOKEN` 后连接 Tushare。
 - 当前真实数据接入只拉取少量样本股票，不接雪球，不做全市场长周期下载。
+- AKShare 仅作为备用 / 低成本数据源，不覆盖 Tushare 主流程。
 - 当前一键任务在无真实数据库结果时不写入 DuckDB，只输出演示摘要。
 - Streamlit 页面第一版偏展示和 smoke 验证，不包含复杂交互和生产级数据刷新。
 - 回测结果可展示 sample 结构，但不代表真实策略表现。
