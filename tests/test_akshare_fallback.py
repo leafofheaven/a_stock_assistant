@@ -77,20 +77,23 @@ class MockAKShareModule:
             return pd.DataFrame()
         return pd.DataFrame({"trade_date": ["2024-01-02", "2024-01-03"]})
 
-    def stock_zh_a_daily(self, **kwargs: Any) -> pd.DataFrame:
-        """Return mock AKShare daily data."""
-        self.calls.append(("stock_zh_a_daily", kwargs))
+    def stock_zh_a_hist(self, **kwargs: Any) -> pd.DataFrame:
+        """Return mock AKShare historical daily data with Chinese fields."""
+        self.calls.append(("stock_zh_a_hist", kwargs))
         if self.empty:
             return pd.DataFrame()
         return pd.DataFrame(
             {
-                "date": ["2024-01-02"],
-                "open": [10.0],
-                "high": [10.5],
-                "low": [9.8],
-                "close": [10.2],
-                "volume": [1000.0],
-                "amount": [100000.0],
+                "日期": ["2024-01-02"],
+                "开盘": [10.0],
+                "最高": [10.5],
+                "最低": [9.8],
+                "收盘": [10.2],
+                "成交量": [1000.0],
+                "成交额": [100000.0],
+                "涨跌幅": [1.2],
+                "涨跌额": [0.12],
+                "换手率": [2.5],
             }
         )
 
@@ -120,6 +123,24 @@ class BrokenTushareClient:
     def get_trade_calendar(self) -> pd.DataFrame:
         """Unused."""
         return pd.DataFrame()
+
+
+class PartiallyFailingAKShareModule(MockAKShareModule):
+    """Mock AKShare module where one symbol fails and the others succeed."""
+
+    def stock_zh_a_hist(self, **kwargs: Any) -> pd.DataFrame:
+        """Raise for one symbol to test partial failure handling."""
+        if kwargs.get("symbol") == "600000":
+            raise KeyError("date")
+        return super().stock_zh_a_hist(**kwargs)
+
+
+class FullyFailingAKShareModule(MockAKShareModule):
+    """Mock AKShare module where all daily history calls fail."""
+
+    def stock_zh_a_hist(self, **kwargs: Any) -> pd.DataFrame:
+        """Raise for every symbol to test all-failure summaries."""
+        raise KeyError("date")
 
     def get_daily_price(self, start_date: str, end_date: str, symbols: list[str] | None = None) -> pd.DataFrame:
         """Unused."""
@@ -166,8 +187,28 @@ def test_akshare_field_mapping_uses_project_columns() -> None:
     assert stock_basic["ts_code"].tolist() == ["000001.SZ", "600000.SH"]
     assert trade_calendar["cal_date"].tolist() == ["20240102", "20240103"]
     assert daily_price.loc[0, "ts_code"] == "000001.SZ"
-    assert {"ts_code", "trade_date", "pe", "pb"}.issubset(daily_basic.columns)
+    assert daily_price.loc[0, "trade_date"] == "20240102"
+    assert daily_price.loc[0, "open"] == 10.0
+    assert daily_price.loc[0, "close"] == 10.2
+    assert daily_price.loc[0, "high"] == 10.5
+    assert daily_price.loc[0, "low"] == 9.8
+    assert daily_price.loc[0, "vol"] == 1000.0
+    assert daily_price.loc[0, "amount"] == 100000.0
+    assert daily_price.loc[0, "pct_chg"] == 1.2
+    assert daily_price.loc[0, "change"] == 0.12
+    assert daily_price.loc[0, "turnover_rate"] == 2.5
+    assert {"ts_code", "trade_date", "turnover_rate", "pe", "pb"}.issubset(daily_basic.columns)
+    assert daily_basic.loc[0, "ts_code"] == "000001.SZ"
     assert adj_factor.loc[0, "adj_factor"] == 1.0
+
+
+def test_akshare_symbol_suffix_mapping() -> None:
+    """AKShare raw symbols should map to internal ts_code suffixes."""
+    client = AKShareClient(akshare_module=MockAKShareModule())
+
+    result = client.get_daily_price("20240101", "20240105", ["000001", "600000"])
+
+    assert result["ts_code"].tolist() == ["000001.SZ", "600000.SH"]
 
 
 def test_akshare_empty_data_is_handled_clearly(tmp_path: Path) -> None:
@@ -177,8 +218,9 @@ def test_akshare_empty_data_is_handled_clearly(tmp_path: Path) -> None:
 
     result = update_real_data(settings=AkshareSettings(), store=store, client=client)
 
-    assert result["status"] == "success"
+    assert result["status"] == "failed"
     assert result["data_source"] == "akshare"
+    assert "所有样本股票日线行情均为空或失败" in result["message"]
     assert result["written_rows"]["stock_basic"] == 0
     assert result["written_rows"]["trade_calendar"] == 0
     assert result["written_rows"]["daily_price"] == 0
@@ -201,6 +243,30 @@ def test_akshare_fallback_runs_when_tushare_fails(tmp_path: Path) -> None:
     assert result["data_source"] == "akshare"
     assert result["written_rows"]["stock_basic"] == 2
     assert len(store.read_table("daily_price")) == 2
+
+
+def test_akshare_single_symbol_failure_keeps_successful_symbols(tmp_path: Path) -> None:
+    """One failed AKShare symbol should not discard other successful symbols."""
+    store = DuckDBStore(tmp_path / "partial-akshare.duckdb")
+    client = AKShareClient(akshare_module=PartiallyFailingAKShareModule())
+
+    result = update_real_data(settings=AkshareSettings(), store=store, client=client)
+
+    assert result["status"] == "success"
+    daily_price = store.read_table("daily_price")
+    assert daily_price["ts_code"].tolist() == ["000001.SZ"]
+
+
+def test_akshare_all_symbol_failures_return_clear_failure(tmp_path: Path) -> None:
+    """All failed AKShare symbols should produce a clear failed update summary."""
+    store = DuckDBStore(tmp_path / "failed-akshare.duckdb")
+    client = AKShareClient(akshare_module=FullyFailingAKShareModule())
+
+    result = update_real_data(settings=AkshareSettings(), store=store, client=client)
+
+    assert result["status"] == "failed"
+    assert "所有样本股票日线行情均为空或失败" in result["message"]
+    assert result["written_rows"]["daily_price"] == 0
 
 
 def test_empty_tushare_token_can_use_akshare_fallback(tmp_path: Path) -> None:

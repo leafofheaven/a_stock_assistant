@@ -39,14 +39,33 @@ class AKShareClient(StockDataSource):
         end_date: str,
         symbols: list[str] | None = None,
     ) -> pd.DataFrame:
-        """Return daily basic indicator data from AKShare."""
-        if symbols:
-            frames = [
-                self._call("stock_a_lg_indicator", symbol=_normalize_symbol(symbol))
-                for symbol in symbols
-            ]
-            return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        return self._call("stock_a_lg_indicator", start_date=start_date, end_date=end_date)
+        """Return daily basic indicator data from AKShare.
+
+        AKShare does not provide a stable PE/PB daily-basic endpoint across
+        versions. For the fallback path we derive ``turnover_rate`` from
+        ``stock_zh_a_hist`` and keep PE/PB fields nullable.
+        """
+        hist = self._call_market_data("stock_zh_a_hist", start_date, end_date, symbols)
+        if hist.empty:
+            return pd.DataFrame(
+                columns=[
+                    "ts_code",
+                    "trade_date",
+                    "turnover_rate",
+                    "volume_ratio",
+                    "pe",
+                    "pb",
+                    "ps",
+                    "total_mv",
+                    "circ_mv",
+                ]
+            )
+        result = hist[["ts_code", "trade_date", "turnover_rate"]].copy()
+        for column in ["volume_ratio", "pe", "pb", "ps", "total_mv", "circ_mv"]:
+            result[column] = pd.NA
+        return result[
+            ["ts_code", "trade_date", "turnover_rate", "volume_ratio", "pe", "pb", "ps", "total_mv", "circ_mv"]
+        ]
 
     def get_adj_factor(
         self,
@@ -59,14 +78,10 @@ class AKShareClient(StockDataSource):
             rows: list[dict[str, Any]] = []
             for symbol in symbols:
                 rows.append({"ts_code": _to_ts_code(symbol), "trade_date": start_date, "adj_factor": 1.0})
-            logger.info("AKShare adjustment factors are approximated as 1.0 for sample symbols.")
+            logger.warning("AKShare fallback uses adj_factor=1.0 because no stable factor endpoint is used.")
             return pd.DataFrame(rows)
-        return self._call(
-            "stock_zh_a_daily",
-            start_date=start_date,
-            end_date=end_date,
-            adjust=self.adjust,
-        )
+        logger.warning("AKShare adj_factor requested without symbols; returning empty DataFrame.")
+        return pd.DataFrame(columns=["ts_code", "trade_date", "adj_factor"])
 
     def get_daily_price(
         self,
@@ -75,7 +90,7 @@ class AKShareClient(StockDataSource):
         symbols: list[str] | None = None,
     ) -> pd.DataFrame:
         """Return daily price data from AKShare for all or selected symbols."""
-        return self._call_market_data("stock_zh_a_daily", start_date, end_date, symbols)
+        return self._call_market_data("stock_zh_a_hist", start_date, end_date, symbols)
 
     def _module(self) -> Any:
         """Return the underlying AKShare module."""
@@ -119,23 +134,29 @@ class AKShareClient(StockDataSource):
     ) -> pd.DataFrame:
         """Call AKShare market data APIs with optional sample symbol limiting."""
         if not symbols:
-            return self._call(function_name, start_date=start_date, end_date=end_date)
+            logger.warning("AKShare market data requires explicit sample symbols; returning empty DataFrame.")
+            return pd.DataFrame()
 
         frames: list[pd.DataFrame] = []
         for symbol in symbols:
-            frames.append(
-                self._call(
+            try:
+                frame = self._call(
                     function_name,
                     symbol=_normalize_symbol(symbol),
+                    period="daily",
                     start_date=start_date,
                     end_date=end_date,
                     adjust=self.adjust,
                 )
-            )
-            if not frames[-1].empty and (
-                "ts_code" not in frames[-1].columns or frames[-1]["ts_code"].isna().all()
-            ):
-                frames[-1]["ts_code"] = _to_ts_code(symbol)
+            except DataSourceError as exc:
+                logger.warning("AKShare %s failed for %s: %s", function_name, symbol, exc)
+                continue
+            if frame.empty:
+                logger.warning("AKShare %s returned empty data for %s.", function_name, symbol)
+                continue
+            if "ts_code" not in frame.columns or frame["ts_code"].isna().all():
+                frame["ts_code"] = _to_ts_code(symbol)
+            frames.append(frame)
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
@@ -166,15 +187,63 @@ def _standardize_fields(function_name: str, df: pd.DataFrame) -> pd.DataFrame:
             result["pretrade_date"] = pd.NA
         return result[["exchange", "cal_date", "is_open", "pretrade_date"]]
 
-    if function_name == "stock_zh_a_daily":
-        result = result.rename(columns={"date": "trade_date", "volume": "vol"})
+    if function_name in {"stock_zh_a_daily", "stock_zh_a_hist"}:
+        result = result.rename(
+            columns={
+                "date": "trade_date",
+                "日期": "trade_date",
+                "open": "open",
+                "开盘": "open",
+                "close": "close",
+                "收盘": "close",
+                "high": "high",
+                "最高": "high",
+                "low": "low",
+                "最低": "low",
+                "volume": "vol",
+                "成交量": "vol",
+                "amount": "amount",
+                "成交额": "amount",
+                "pct_chg": "pct_chg",
+                "涨跌幅": "pct_chg",
+                "change": "change",
+                "涨跌额": "change",
+                "turnover_rate": "turnover_rate",
+                "换手率": "turnover_rate",
+            }
+        )
         if "trade_date" in result.columns:
             result["trade_date"] = result["trade_date"].astype(str).str.replace("-", "", regex=False)
-        for column in ["ts_code", "open", "high", "low", "close", "pre_close", "change", "pct_chg", "vol", "amount"]:
+        for column in [
+            "ts_code",
+            "open",
+            "high",
+            "low",
+            "close",
+            "pre_close",
+            "change",
+            "pct_chg",
+            "vol",
+            "amount",
+            "turnover_rate",
+        ]:
             if column not in result.columns:
                 result[column] = pd.NA
         return result[
-            ["ts_code", "trade_date", "open", "high", "low", "close", "pre_close", "change", "pct_chg", "vol", "amount"]
+            [
+                "ts_code",
+                "trade_date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "pre_close",
+                "change",
+                "pct_chg",
+                "vol",
+                "amount",
+                "turnover_rate",
+            ]
         ]
 
     if function_name == "stock_a_lg_indicator":

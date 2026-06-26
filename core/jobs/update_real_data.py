@@ -162,6 +162,20 @@ def _run_provider_update(
             for table_name, frame in normalized_frames.items()
             if frame.empty
         ]
+        if provider_name == "akshare" and normalized_frames["daily_price"].empty and sample_symbols:
+            return {
+                "status": "failed",
+                "message": "真实数据更新失败：AKShare 所有样本股票日线行情均为空或失败。",
+                "data_source": provider_name,
+                "start_date": start_date,
+                "end_date": end_date,
+                "sample_symbols": sample_symbols,
+                "written_rows": {table_name: 0 for table_name in TABLE_ORDER},
+                "before_rows": before_rows,
+                "after_rows": before_rows,
+                "empty_tables": empty_tables,
+                "next_steps": ["检查 AKShare 网络、版本或样本股票配置后重试。"],
+            }
         written_rows = {
             table_name: resolved_store.upsert_dataframe(table_name, frame)
             for table_name, frame in normalized_frames.items()
