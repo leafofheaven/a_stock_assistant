@@ -89,7 +89,7 @@ python -m core.jobs.run_daily_selection
 
 ## 前端启动命令
 
-启动 Streamlit 页面：
+请在项目根目录执行以下命令启动 Streamlit 页面：
 
 ```bash
 streamlit run web/streamlit_app.py

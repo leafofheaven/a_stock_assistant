@@ -85,6 +85,7 @@ def test_readme_contains_mvp_commands_and_paths() -> None:
         "python scripts/check_task.py task11",
         "python -m core.jobs.run_daily_selection",
         "streamlit run web/streamlit_app.py",
+        "项目根目录",
         "不构成投资建议",
     ]:
         assert text in readme
