@@ -164,6 +164,43 @@ streamlit run web/streamlit_app.py
 
 当前真实数据端到端验证只拉少量股票，不做全市场长周期下载。不构成投资建议，不自动交易。
 
+## 真实数据日常使用流程
+
+日常验证时建议固定按以下顺序执行：
+
+1. 配置 `.env`，选择 `DATA_PROVIDER=tushare` 或 `DATA_PROVIDER=akshare`，并保持样本股票范围较小。
+2. 更新真实数据：
+
+```bash
+python -m core.jobs.update_real_data
+```
+
+3. 诊断数据状态：
+
+```bash
+python -m core.jobs.diagnose_real_data
+```
+
+4. 运行选股：
+
+```bash
+python -m core.jobs.run_daily_selection
+```
+
+5. 启动页面：
+
+```bash
+streamlit run web/streamlit_app.py
+```
+
+判断当前使用 sample 数据还是真实数据：
+
+- `数据来源: sample 数据（演示）` 表示当前展示的是演示数据；
+- `真实数据不足，已回退 sample 数据` 表示本地真实数据不足，流程已自动回退；
+- `本地 DuckDB 真实数据` 表示当前读取的是本地真实数据。
+
+当前仅支持少量股票验证，不建议直接全市场长周期运行。不构成投资建议，不自动交易。
+
 ## 前端启动命令
 
 请在项目根目录执行以下命令启动 Streamlit 页面：

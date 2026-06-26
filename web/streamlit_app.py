@@ -142,11 +142,57 @@ def sample_dashboard_data() -> dict[str, Any]:
     return get_sample_dashboard_data()
 
 
+def load_dashboard_data() -> dict[str, Any]:
+    """Load local real dashboard data when available, otherwise return sample data."""
+    from app.config import get_settings
+    from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+
+    settings = get_settings()
+    if settings.data_provider == "sample":
+        return sample_dashboard_data()
+
+    store = DuckDBStore(settings.duckdb_path)
+    if not store.db_path.exists():
+        data = sample_dashboard_data()
+        data["data_source"] = "sample 数据（演示，真实 DuckDB 文件不存在）"
+        return data
+
+    try:
+        tables = {
+            "stock_basic": store.read_table("stock_basic"),
+            "daily_price": store.read_table("daily_price"),
+            "daily_basic": store.read_table("daily_basic"),
+            "factor_scores": store.read_table("factor_scores"),
+            "strategy_result": store.read_table("strategy_result"),
+            "backtest_result": store.read_table("backtest_result"),
+        }
+    except DuckDBStoreError:
+        data = sample_dashboard_data()
+        data["data_source"] = "sample 数据（演示，真实数据读取失败）"
+        return data
+
+    if tables["strategy_result"].empty:
+        data = sample_dashboard_data()
+        data["data_source"] = "sample 数据（演示，真实选股结果不足）"
+        return data
+
+    return {
+        "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
+        "selection": tables["strategy_result"],
+        "stock_basic": tables["stock_basic"],
+        "price": tables["daily_price"],
+        "daily_basic": tables["daily_basic"],
+        "factor_scores": tables["factor_scores"],
+        "backtest": {},
+        "tables": tables,
+    }
+
+
 def render_dashboard(data: dict[str, Any] | None = None) -> None:
     """Render the Streamlit dashboard from preloaded or sample local data."""
     import streamlit as st
 
-    dashboard_data = data or sample_dashboard_data()
+    dashboard_data = data or load_dashboard_data()
     st.set_page_config(page_title="A 股选股辅助", layout="wide")
     st.title("A 股选股辅助")
     st.caption("仅用于研究与辅助决策，不构成投资建议。")

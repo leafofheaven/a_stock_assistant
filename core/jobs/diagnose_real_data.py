@@ -77,6 +77,9 @@ def main() -> None:
         print("- 不足原因:")
         for reason in result["reasons"]:
             print(f"  {reason}")
+    print("- 下一步建议:")
+    for step in result["next_steps"]:
+        print(f"  {step}")
 
 
 def _build_result(
@@ -119,6 +122,7 @@ def _build_result(
         "missing_fields": missing_fields,
         "is_ready_for_selection": is_ready,
         "reasons": computed_reasons,
+        "next_steps": _next_steps(is_ready),
     }
 
 
@@ -143,6 +147,13 @@ def _latest_date(df: pd.DataFrame, column: str) -> str | None:
         return None
     values = df[column].dropna().astype(str)
     return None if values.empty else str(values.max())
+
+
+def _next_steps(is_ready: bool) -> list[str]:
+    """Return suggested next commands for the current diagnostic state."""
+    if is_ready:
+        return ["python -m core.jobs.run_daily_selection", "streamlit run web/streamlit_app.py"]
+    return ["python -m core.jobs.update_real_data", "python -m core.jobs.diagnose_real_data"]
 
 
 def _to_ts_code(symbol: str) -> str:

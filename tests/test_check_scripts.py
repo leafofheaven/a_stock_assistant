@@ -82,6 +82,7 @@ def test_task_checks_pass_for_current_repository() -> None:
     assert run_task_check("task13", root) == []
     assert run_task_check("task14", root) == []
     assert run_task_check("task15", root) == []
+    assert run_task_check("task16", root) == []
 
 
 def test_task_check_rejects_unsupported_task() -> None:

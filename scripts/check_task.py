@@ -26,6 +26,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task13": check_task13,
         "task14": check_task14,
         "task15": check_task15,
+        "task16": check_task16,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -572,6 +573,38 @@ def check_task15(root: Path) -> list[str]:
     return failures
 
 
+def check_task16(root: Path) -> list[str]:
+    """Check Task 16 real-data daily workflow support."""
+    failures = check_paths(
+        root,
+        [
+            "tests/test_real_data_daily_workflow.py",
+            "core/jobs/diagnose_real_data.py",
+            "core/jobs/update_real_data.py",
+            "README.md",
+        ],
+    )
+    readme = read_source(root / "README.md")
+    for phrase in [
+        "真实数据日常使用流程",
+        "python -m core.jobs.update_real_data",
+        "python -m core.jobs.diagnose_real_data",
+        "python -m core.jobs.run_daily_selection",
+        "streamlit run web/streamlit_app.py",
+    ]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_real_data_daily_workflow.py").lower()
+    for phrase in ["temporary duckdb", "mock", "duplicate", "fallback", "streamlit"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_real_data_daily_workflow.py should cover {phrase}.")
+
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -618,6 +651,7 @@ def main(argv: list[str] | None = None) -> int:
             "task13",
             "task14",
             "task15",
+            "task16",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
