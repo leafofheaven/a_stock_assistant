@@ -14,6 +14,7 @@ setup(
     python_requires=">=3.12",
     packages=find_packages(include=["app", "app.*", "core", "core.*"]),
     install_requires=[
+        "pandas",
         "pydantic-settings",
         "python-dotenv",
     ],
@@ -23,7 +24,6 @@ setup(
             "duckdb",
             "fastapi",
             "numpy",
-            "pandas",
             "pyarrow",
             "streamlit",
             "tushare",
