@@ -1,0 +1,1 @@
+"""Stock pool construction placeholder."""
