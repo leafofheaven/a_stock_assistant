@@ -43,17 +43,32 @@ class TushareClient(StockDataSource):
             fields="exchange,cal_date,is_open,pretrade_date",
         )
 
-    def get_daily_price(self, start_date: str, end_date: str) -> pd.DataFrame:
-        """Return daily price data from Tushare."""
-        return self._call("daily", start_date=start_date, end_date=end_date)
+    def get_daily_price(
+        self,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Return daily price data from Tushare for all or selected symbols."""
+        return self._call_market_data("daily", start_date, end_date, symbols)
 
-    def get_daily_basic(self, start_date: str, end_date: str) -> pd.DataFrame:
-        """Return daily basic indicator data from Tushare."""
-        return self._call("daily_basic", start_date=start_date, end_date=end_date)
+    def get_daily_basic(
+        self,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Return daily basic indicator data from Tushare for all or selected symbols."""
+        return self._call_market_data("daily_basic", start_date, end_date, symbols)
 
-    def get_adj_factor(self, start_date: str, end_date: str) -> pd.DataFrame:
-        """Return adjustment factor data from Tushare."""
-        return self._call("adj_factor", start_date=start_date, end_date=end_date)
+    def get_adj_factor(
+        self,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Return adjustment factor data from Tushare for all or selected symbols."""
+        return self._call_market_data("adj_factor", start_date, end_date, symbols)
 
     def _client(self) -> Any:
         """Return the underlying Tushare pro API client."""
@@ -92,4 +107,91 @@ class TushareClient(StockDataSource):
             raise DataSourceError(f"Tushare call did not return a DataFrame: {method_name}")
 
         logger.info("Fetched %s rows from Tushare method %s.", len(result), method_name)
-        return result
+        return _standardize_fields(method_name, result)
+
+    def _call_market_data(
+        self,
+        method_name: str,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None,
+    ) -> pd.DataFrame:
+        """Call date-range market data APIs, optionally limited to selected symbols."""
+        if not symbols:
+            return self._call(method_name, start_date=start_date, end_date=end_date)
+
+        frames: list[pd.DataFrame] = []
+        for symbol in symbols:
+            frames.append(
+                self._call(
+                    method_name,
+                    ts_code=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            )
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _standardize_fields(method_name: str, df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with columns aligned to project DuckDB table names."""
+    if df.empty:
+        return df.copy()
+
+    column_map = {
+        "trade_cal": {
+            "exchange": "exchange",
+            "cal_date": "cal_date",
+            "is_open": "is_open",
+            "pretrade_date": "pretrade_date",
+        },
+        "daily": {
+            "ts_code": "ts_code",
+            "trade_date": "trade_date",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "pre_close": "pre_close",
+            "change": "change",
+            "pct_chg": "pct_chg",
+            "vol": "vol",
+            "amount": "amount",
+        },
+        "daily_basic": {
+            "ts_code": "ts_code",
+            "trade_date": "trade_date",
+            "turnover_rate": "turnover_rate",
+            "volume_ratio": "volume_ratio",
+            "pe": "pe",
+            "pb": "pb",
+            "ps": "ps",
+            "total_mv": "total_mv",
+            "circ_mv": "circ_mv",
+        },
+        "adj_factor": {
+            "ts_code": "ts_code",
+            "trade_date": "trade_date",
+            "adj_factor": "adj_factor",
+        },
+        "stock_basic": {
+            "ts_code": "ts_code",
+            "symbol": "symbol",
+            "name": "name",
+            "area": "area",
+            "industry": "industry",
+            "market": "market",
+            "list_date": "list_date",
+            "delist_date": "delist_date",
+            "is_hs": "is_hs",
+        },
+    }
+    mapping = column_map.get(method_name)
+    if not mapping:
+        return df.copy()
+
+    result = df.rename(columns=mapping).copy()
+    for source_column in mapping.values():
+        if source_column not in result.columns:
+            result[source_column] = pd.NA
+    return result[list(mapping.values())]

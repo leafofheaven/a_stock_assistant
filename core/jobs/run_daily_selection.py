@@ -7,10 +7,16 @@ from typing import Any
 
 import pandas as pd
 
+from app.config import Settings, get_settings
 from core.sample_data import DEMO_DATA_SOURCE, get_sample_dashboard_data
+from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 
-def run_daily_selection(use_sample: bool = True) -> dict[str, Any]:
+def run_daily_selection(
+    use_sample: bool = True,
+    settings: Settings | None = None,
+    store: DuckDBStore | None = None,
+) -> dict[str, Any]:
     """Run the MVP daily selection command and return a summary.
 
     The current MVP does not fetch external data, place trades, or promise
@@ -18,6 +24,14 @@ def run_daily_selection(use_sample: bool = True) -> dict[str, Any]:
     function uses clearly marked demo data so users can verify installation,
     command execution, and dashboard wiring end to end.
     """
+    resolved_settings = settings or get_settings()
+    if resolved_settings.data_provider == "tushare":
+        real_summary = _try_real_data_summary(store or DuckDBStore(resolved_settings.duckdb_path))
+        if real_summary["candidate_count"] > 0:
+            return real_summary
+        if not use_sample:
+            return real_summary
+
     if not use_sample:
         return _empty_summary("无数据")
 
@@ -67,6 +81,50 @@ def _empty_summary(data_source: str) -> dict[str, Any]:
         "candidate_count": 0,
         "top_candidates": [],
         "result_location": "未生成结果；请导入本地数据或启用演示数据。",
+    }
+
+
+def _try_real_data_summary(store: DuckDBStore) -> dict[str, Any]:
+    """Try to summarize real local DuckDB results without crashing on empty data."""
+    if not store.db_path.exists():
+        summary = _empty_summary("无数据")
+        summary["result_location"] = "真实 DuckDB 文件不存在；可回退 sample 数据。"
+        return summary
+
+    try:
+        stock_basic = store.read_table("stock_basic")
+        daily_price = store.read_table("daily_price")
+        strategy_result = store.read_table("strategy_result")
+        factor_scores = store.read_table("factor_scores")
+    except DuckDBStoreError:
+        summary = _empty_summary("无数据")
+        summary["result_location"] = "真实 DuckDB 数据不可用；可回退 sample 数据。"
+        return summary
+
+    if daily_price.empty or stock_basic.empty:
+        summary = _empty_summary("无数据")
+        summary["result_location"] = "真实 DuckDB 数据不足；可回退 sample 数据。"
+        return summary
+
+    if strategy_result.empty or factor_scores.empty:
+        return {
+            "run_date": date.today().isoformat(),
+            "data_source": "tushare 本地 DuckDB（未生成真实选股结果，回退 sample 数据）",
+            "stock_pool_count": int(len(stock_basic)),
+            "scored_stock_count": int(len(factor_scores)),
+            "candidate_count": 0,
+            "top_candidates": [],
+            "result_location": "已检测到真实行情数据，但尚无真实因子评分或选股结果。",
+        }
+
+    return {
+        "run_date": date.today().isoformat(),
+        "data_source": "tushare 本地 DuckDB",
+        "stock_pool_count": int(len(stock_basic)),
+        "scored_stock_count": int(len(factor_scores)),
+        "candidate_count": int(len(strategy_result)),
+        "top_candidates": _top_candidate_records(strategy_result),
+        "result_location": "读取本地 DuckDB strategy_result。",
     }
 
 

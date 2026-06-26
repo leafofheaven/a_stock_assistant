@@ -30,12 +30,38 @@ class Settings(BaseSettings):
         default=20,
         validation_alias="DEFAULT_BACKTEST_TOP_N",
     )
+    data_provider: str = Field(default="tushare", validation_alias="DATA_PROVIDER")
+    enable_akshare_fallback: bool = Field(
+        default=False,
+        validation_alias="ENABLE_AKSHARE_FALLBACK",
+    )
+    real_data_start_date: str = Field(default="20240101", validation_alias="REAL_DATA_START_DATE")
+    real_data_end_date: str = Field(default="", validation_alias="REAL_DATA_END_DATE")
+    real_data_sample_symbols: str = Field(
+        default="000001.SZ,600000.SH,000002.SZ",
+        validation_alias="REAL_DATA_SAMPLE_SYMBOLS",
+    )
 
     @field_validator("log_level")
     @classmethod
     def normalize_log_level(cls, value: str) -> str:
         """Normalize log level values to uppercase names."""
         return value.upper()
+
+    @field_validator("data_provider")
+    @classmethod
+    def normalize_data_provider(cls, value: str) -> str:
+        """Normalize data provider names to lowercase."""
+        return value.lower()
+
+    @property
+    def sample_symbols(self) -> list[str]:
+        """Return configured sample symbols as a clean list."""
+        return [
+            symbol.strip()
+            for symbol in self.real_data_sample_symbols.split(",")
+            if symbol.strip()
+        ]
 
 
 @lru_cache

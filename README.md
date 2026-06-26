@@ -51,6 +51,19 @@ cp .env.example .env
 
 `TUSHARE_TOKEN` 可以为空。当前 MVP 的 smoke test 和演示页面不依赖真实 token，也不会自动访问真实外部 API。
 
+如需手动验证少量真实 Tushare 数据接入，可在 `.env` 中配置：
+
+```env
+TUSHARE_TOKEN=你的 Tushare token
+DATA_PROVIDER=tushare
+REAL_DATA_START_DATE=20240101
+REAL_DATA_END_DATE=
+REAL_DATA_SAMPLE_SYMBOLS=000001.SZ,600000.SH,000002.SZ
+```
+
+`REAL_DATA_END_DATE` 为空时会使用当前日期。当前真实数据接入只拉取
+`REAL_DATA_SAMPLE_SYMBOLS` 中的少量股票，用于验证流程，不做全市场长周期下载。
+
 ## 本地检查命令
 
 运行自动测试：
@@ -79,13 +92,19 @@ python scripts/check_task.py task12
 
 ## 一键运行命令
 
+手动更新少量真实 Tushare 数据到 DuckDB：
+
+```bash
+python -m core.jobs.update_real_data
+```
+
 运行每日选股 smoke 入口：
 
 ```bash
 python -m core.jobs.run_daily_selection
 ```
 
-当前 MVP 在没有真实数据库结果时使用 sample 数据输出摘要，摘要包括运行日期、数据来源、股票池数量、评分股票数量、候选股票数量、候选股票示例和结果保存说明。
+当前 MVP 在没有真实数据库结果或真实评分/选股结果不足时使用 sample 数据输出摘要，摘要包括运行日期、数据来源、股票池数量、评分股票数量、候选股票数量、候选股票示例和结果保存说明。
 
 ## 前端启动命令
 
@@ -121,7 +140,8 @@ streamlit run web/streamlit_app.py
 ## 当前 MVP 限制
 
 - sample 数据规模很小，只用于验证流程能跑通。
-- 默认不会连接真实 Tushare / AKShare 服务。
+- 默认只会在手动运行 `python -m core.jobs.update_real_data` 且配置 `TUSHARE_TOKEN` 后连接 Tushare。
+- 当前真实数据接入只拉取少量样本股票，不接雪球，不做全市场长周期下载。
 - 当前一键任务在无真实数据库结果时不写入 DuckDB，只输出演示摘要。
 - Streamlit 页面第一版偏展示和 smoke 验证，不包含复杂交互和生产级数据刷新。
 - 回测结果可展示 sample 结构，但不代表真实策略表现。
