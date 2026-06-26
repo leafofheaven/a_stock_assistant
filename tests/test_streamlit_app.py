@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pandas as pd
 
 from web.streamlit_app import (
@@ -10,6 +13,7 @@ from web.streamlit_app import (
     filter_factor_ranking,
     filter_selection_data,
     get_industry_options,
+    render_dashboard,
     summarize_update_status,
 )
 
@@ -93,6 +97,27 @@ def test_summarize_update_status_returns_dates_and_row_counts() -> None:
     assert status["table_rows"]["daily_price"] == 2
 
 
+def test_render_dashboard_creates_title_and_five_tabs_for_empty_data(monkeypatch) -> None:
+    """Dashboard render should show title and tabs even when no real data exists."""
+    fake_streamlit = FakeStreamlit()
+    monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
+
+    render_dashboard(
+        {
+            "selection": pd.DataFrame(),
+            "stock_basic": pd.DataFrame(),
+            "price": pd.DataFrame(),
+            "factor_scores": pd.DataFrame(),
+            "backtest": {},
+            "tables": {},
+        }
+    )
+
+    assert fake_streamlit.title_text == "A 股选股辅助"
+    assert fake_streamlit.tab_names == ["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态"]
+    assert fake_streamlit.info_messages
+
+
 def _selection_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -111,3 +136,71 @@ def _selection_df() -> pd.DataFrame:
             "risk_note": ["复核风险", "复核风险", "复核风险"],
         }
     )
+
+
+class FakeTab:
+    """Minimal context manager used to test Streamlit tab rendering."""
+
+    def __enter__(self) -> "FakeTab":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+
+class FakeStreamlit:
+    """Small fake of the Streamlit API used by render_dashboard."""
+
+    def __init__(self) -> None:
+        self.title_text = ""
+        self.tab_names: list[str] = []
+        self.info_messages: list[str] = []
+
+    def set_page_config(self, **kwargs) -> None:
+        return None
+
+    def title(self, text: str) -> None:
+        self.title_text = text
+
+    def caption(self, text: str) -> None:
+        return None
+
+    def tabs(self, names: list[str]) -> list[FakeTab]:
+        self.tab_names = names
+        return [FakeTab() for _ in names]
+
+    def subheader(self, text: str) -> None:
+        return None
+
+    def info(self, text: str) -> None:
+        self.info_messages.append(text)
+
+    def metric(self, label: str, value) -> None:
+        return None
+
+    def write(self, value) -> None:
+        return None
+
+    def dataframe(self, data, **kwargs) -> None:
+        return None
+
+    def json(self, value) -> None:
+        return None
+
+    def line_chart(self, data) -> None:
+        return None
+
+    def selectbox(self, label: str, options, **kwargs):
+        return list(options)[0] if options else None
+
+    def checkbox(self, label: str, value: bool = False) -> bool:
+        return value
+
+    def text_input(self, label: str, value: str = "") -> str:
+        return value
+
+    def download_button(self, *args, **kwargs) -> None:
+        return None
+
+    def columns(self, count: int):
+        return [SimpleNamespace(metric=lambda label, value: None) for _ in range(count)]

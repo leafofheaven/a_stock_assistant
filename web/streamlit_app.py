@@ -290,7 +290,7 @@ def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:
         return
     st.write({"调仓频率": "W", "持仓数量": 20, "初始资金": 1_000_000})
     cols = st.columns(5)
-    for col, key in zip(cols, ["annual_return", "max_drawdown", "sharpe_ratio", "win_rate", "turnover"], strict=False):
+    for col, key in zip(cols, ["annual_return", "max_drawdown", "sharpe_ratio", "win_rate", "turnover"]):
         col.metric(key, backtest.get(key, 0))
     equity_curve = backtest.get("equity_curve", pd.DataFrame())
     if not equity_curve.empty and {"trade_date", "equity"}.issubset(equity_curve.columns):
