@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import sys
 from io import StringIO
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.sample_data import get_sample_dashboard_data
 
