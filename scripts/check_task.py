@@ -17,6 +17,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task4": check_task4,
         "task5": check_task5,
         "task6": check_task6,
+        "task7": check_task7,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -261,6 +262,25 @@ def check_task6(root: Path) -> list[str]:
     return failures
 
 
+def check_task7(root: Path) -> list[str]:
+    """Check Task 7 factor scoring implementation."""
+    failures = check_paths(root, ["core/factors/scoring.py", "tests/test_scoring.py"])
+    for function_name in ["normalize_factor", "calculate_total_score"]:
+        if not ast_name_exists(root / "core/factors/scoring.py", function_name):
+            failures.append(f"core/factors/scoring.py is missing {function_name}.")
+
+    scoring_source = read_source(root / "core/factors/scoring.py")
+    for phrase in ["trade_date", "higher_is_better", "DEFAULT_WEIGHTS", "total_score"]:
+        if phrase not in scoring_source:
+            failures.append(f"core/factors/scoring.py is missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_scoring.py").lower()
+    for phrase in ["higher_is_better", "trade_date", "nan", "custom weights", "invalid weights"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_scoring.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -289,7 +309,10 @@ def read_source(path: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     """Run a task-specific check from the command line."""
     parser = argparse.ArgumentParser(description="Run task-specific repository checks.")
-    parser.add_argument("task", choices=["task1", "task2", "task3", "task4", "task5", "task6"])
+    parser.add_argument(
+        "task",
+        choices=["task1", "task2", "task3", "task4", "task5", "task6", "task7"],
+    )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
     args = parser.parse_args(argv)
 
