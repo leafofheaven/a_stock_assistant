@@ -16,6 +16,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task3": check_task3,
         "task4": check_task4,
         "task5": check_task5,
+        "task6": check_task6,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -211,6 +212,55 @@ def check_task5(root: Path) -> list[str]:
     return failures
 
 
+def check_task6(root: Path) -> list[str]:
+    """Check Task 6 base factor calculation modules."""
+    factor_files = [
+        "core/factors/trend.py",
+        "core/factors/momentum.py",
+        "core/factors/liquidity.py",
+        "core/factors/volatility.py",
+        "core/factors/fundamental.py",
+        "tests/test_factors.py",
+    ]
+    failures = check_paths(root, factor_files)
+    expected_functions = {
+        "core/factors/trend.py": [
+            "calculate_return_20d",
+            "calculate_return_60d",
+            "calculate_ma_position",
+            "calculate_ma_alignment",
+        ],
+        "core/factors/momentum.py": [
+            "calculate_relative_strength",
+            "calculate_new_high_60d",
+        ],
+        "core/factors/liquidity.py": [
+            "calculate_avg_amount_20d",
+            "calculate_avg_turnover_20d",
+        ],
+        "core/factors/volatility.py": [
+            "calculate_volatility_20d",
+            "calculate_max_drawdown_60d",
+        ],
+        "core/factors/fundamental.py": [
+            "calculate_roe",
+            "calculate_pe_score",
+            "calculate_pb_score",
+            "calculate_revenue_growth",
+        ],
+    }
+    for path, function_names in expected_functions.items():
+        for function_name in function_names:
+            if not ast_name_exists(root / path, function_name):
+                failures.append(f"{path} is missing {function_name}.")
+
+    tests_source = read_source(root / "tests/test_factors.py")
+    for phrase in ["mock", "insufficient", "future", "missing"]:
+        if phrase not in tests_source.lower():
+            failures.append(f"tests/test_factors.py should cover {phrase} data behavior.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -239,7 +289,7 @@ def read_source(path: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     """Run a task-specific check from the command line."""
     parser = argparse.ArgumentParser(description="Run task-specific repository checks.")
-    parser.add_argument("task", choices=["task1", "task2", "task3", "task4", "task5"])
+    parser.add_argument("task", choices=["task1", "task2", "task3", "task4", "task5", "task6"])
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
     args = parser.parse_args(argv)
 
