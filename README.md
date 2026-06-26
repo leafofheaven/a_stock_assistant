@@ -57,7 +57,21 @@ streamlit run web/streamlit_app.py
 ## 如何运行测试
 
 ```bash
-pytest
+python -m pytest
+```
+
+## 如何运行质量检查
+
+运行项目级检查：
+
+```bash
+python scripts/check_project.py
+```
+
+运行指定任务检查，例如 Task 4：
+
+```bash
+python scripts/check_task.py task4
 ```
 
 ## 当前限制

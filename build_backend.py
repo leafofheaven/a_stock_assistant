@@ -99,6 +99,7 @@ def _metadata() -> str:
             "Requires-Dist: duckdb",
             "Requires-Dist: pandas",
             "Requires-Dist: pydantic-settings",
+            "Requires-Dist: pytest",
             "Requires-Dist: python-dotenv",
             "Provides-Extra: app",
             "Requires-Dist: akshare; extra == 'app'",
@@ -109,7 +110,6 @@ def _metadata() -> str:
             "Requires-Dist: tushare; extra == 'app'",
             "Requires-Dist: uvicorn; extra == 'app'",
             "Provides-Extra: dev",
-            "Requires-Dist: pytest; extra == 'dev'",
             "Requires-Dist: ruff; extra == 'dev'",
             "",
         ]

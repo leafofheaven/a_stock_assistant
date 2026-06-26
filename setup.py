@@ -17,6 +17,7 @@ setup(
         "duckdb",
         "pandas",
         "pydantic-settings",
+        "pytest",
         "python-dotenv",
     ],
     extras_require={
@@ -30,7 +31,6 @@ setup(
             "uvicorn",
         ],
         "dev": [
-            "pytest",
             "ruff",
         ],
     },
