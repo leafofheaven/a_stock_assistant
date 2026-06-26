@@ -83,6 +83,10 @@ AKSHARE_ADJUST=qfq
 
 AKShare 当前只用于小范围验证，不保证所有字段与 Tushare 完全一致；部分 AKShare 不稳定或缺失字段会写入空表或空值，并保留 sample smoke test 可用。
 
+AKShare 日线行情当前使用 `stock_zh_a_hist` 做低成本验证。字段完整性可能弱于
+Tushare：PE/PB 等估值字段可能为空，复权因子当前可能简化为 `adj_factor=1.0`，
+仅用于流程验证，不构成投资建议。
+
 ## 本地检查命令
 
 运行自动测试：

@@ -61,10 +61,10 @@ class MockAKShareModule:
         self.calls.append(("tool_trade_date_hist_sina", kwargs))
         return pd.DataFrame({"trade_date": ["2024-01-02"]})
 
-    def stock_zh_a_daily(self, **kwargs: Any) -> pd.DataFrame:
-        """Return mock daily price or adjustment data."""
-        self.calls.append(("stock_zh_a_daily", kwargs))
-        return pd.DataFrame({"date": ["2024-01-02"], "close": [10.0]})
+    def stock_zh_a_hist(self, **kwargs: Any) -> pd.DataFrame:
+        """Return mock historical daily price data."""
+        self.calls.append(("stock_zh_a_hist", kwargs))
+        return pd.DataFrame({"日期": ["2024-01-02"], "收盘": [10.0], "换手率": [1.2]})
 
     def stock_a_lg_indicator(self, **kwargs: Any) -> pd.DataFrame:
         """Return mock daily basic data."""
@@ -155,21 +155,21 @@ def test_akshare_client_methods_return_dataframes() -> None:
     results = [
         client.get_stock_basic(),
         client.get_trade_calendar(),
-        client.get_daily_price("20240101", "20240131"),
-        client.get_daily_basic("20240101", "20240131"),
-        client.get_adj_factor("20240101", "20240131"),
+        client.get_daily_price("20240101", "20240131", symbols=["000001"]),
+        client.get_daily_basic("20240101", "20240131", symbols=["000001"]),
+        client.get_adj_factor("20240101", "20240131", symbols=["000001"]),
     ]
 
     assert all(isinstance(result, pd.DataFrame) for result in results)
     assert [name for name, _ in akshare.calls] == [
         "stock_info_a_code_name",
         "tool_trade_date_hist_sina",
-        "stock_zh_a_daily",
-        "stock_a_lg_indicator",
-        "stock_zh_a_daily",
+        "stock_zh_a_hist",
+        "stock_zh_a_hist",
     ]
-    assert akshare.calls[2][1] == {"start_date": "20240101", "end_date": "20240131"}
-    assert akshare.calls[4][1] == {
+    assert akshare.calls[2][1] == {
+        "symbol": "000001",
+        "period": "daily",
         "start_date": "20240101",
         "end_date": "20240131",
         "adjust": "qfq",
