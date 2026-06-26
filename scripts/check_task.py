@@ -19,6 +19,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task6": check_task6,
         "task7": check_task7,
         "task8": check_task8,
+        "task9": check_task9,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -313,6 +314,47 @@ def check_task8(root: Path) -> list[str]:
     return failures
 
 
+def check_task9(root: Path) -> list[str]:
+    """Check Task 9 backtest engine implementation."""
+    failures = check_paths(
+        root,
+        [
+            "core/backtest/engine.py",
+            "core/backtest/metrics.py",
+            "core/backtest/rules_cn_a.py",
+            "tests/test_backtest.py",
+        ],
+    )
+    expected_functions = {
+        "core/backtest/engine.py": ["run_backtest"],
+        "core/backtest/metrics.py": [
+            "calculate_annual_return",
+            "calculate_max_drawdown",
+            "calculate_sharpe_ratio",
+            "calculate_win_rate",
+            "calculate_turnover",
+            "calculate_yearly_returns",
+        ],
+        "core/backtest/rules_cn_a.py": [
+            "is_suspended",
+            "is_limit_up",
+            "is_limit_down",
+            "can_buy",
+            "can_sell",
+        ],
+    }
+    for path, function_names in expected_functions.items():
+        for function_name in function_names:
+            if not ast_name_exists(root / path, function_name):
+                failures.append(f"{path} is missing {function_name}.")
+
+    tests_source = read_source(root / "tests/test_backtest.py").lower()
+    for phrase in ["weekly", "top_n", "equal", "slippage", "suspended", "limit_up", "limit_down"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_backtest.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -343,7 +385,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run task-specific repository checks.")
     parser.add_argument(
         "task",
-        choices=["task1", "task2", "task3", "task4", "task5", "task6", "task7", "task8"],
+        choices=[
+            "task1",
+            "task2",
+            "task3",
+            "task4",
+            "task5",
+            "task6",
+            "task7",
+            "task8",
+            "task9",
+        ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
     args = parser.parse_args(argv)
