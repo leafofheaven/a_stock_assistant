@@ -48,7 +48,13 @@ python -m core.jobs.run_daily_selection
 
 ## 如何启动页面
 
-后续任务会实现 Streamlit 页面。目标命令为：
+安装前端依赖：
+
+```bash
+pip install -e .[app]
+```
+
+启动 Streamlit 前端页面：
 
 ```bash
 streamlit run web/streamlit_app.py

@@ -20,6 +20,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task7": check_task7,
         "task8": check_task8,
         "task9": check_task9,
+        "task10": check_task10,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -355,6 +356,29 @@ def check_task9(root: Path) -> list[str]:
     return failures
 
 
+def check_task10(root: Path) -> list[str]:
+    """Check Task 10 Streamlit dashboard implementation."""
+    failures = check_paths(root, ["web/streamlit_app.py", "tests/test_streamlit_app.py"])
+    source = read_source(root / "web/streamlit_app.py")
+    for function_name in [
+        "render_dashboard",
+        "filter_selection_data",
+        "dataframe_to_csv",
+        "filter_factor_ranking",
+        "summarize_update_status",
+    ]:
+        if not ast_name_exists(root / "web/streamlit_app.py", function_name):
+            failures.append(f"web/streamlit_app.py is missing {function_name}.")
+    for tab_name in ["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态"]:
+        if tab_name not in source:
+            failures.append(f"web/streamlit_app.py is missing tab {tab_name}.")
+    tests_source = read_source(root / "tests/test_streamlit_app.py").lower()
+    for phrase in ["empty", "filter", "sort", "csv"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_streamlit_app.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -395,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
             "task7",
             "task8",
             "task9",
+            "task10",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
