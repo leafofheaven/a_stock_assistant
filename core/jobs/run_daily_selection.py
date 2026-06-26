@@ -64,6 +64,9 @@ def _sample_summary(result_location: str) -> dict[str, Any]:
         "scored_stock_count": int(len(factor_scores)),
         "candidate_count": int(len(selection)),
         "top_candidates": _top_candidate_records(selection),
+        "latest_price_date": _latest_date(data.get("price", pd.DataFrame()), "trade_date"),
+        "wrote_to_database": False,
+        "fallback_to_sample": "回退 sample" in result_location,
         "result_location": result_location,
     }
 
@@ -74,9 +77,12 @@ def main() -> None:
     print("每日选股任务摘要")
     print(f"- 当前运行日期: {summary['run_date']}")
     print(f"- 数据来源: {summary['data_source']}")
+    print(f"- 最新行情日期: {summary.get('latest_price_date') or '暂无'}")
     print(f"- 股票池数量: {summary['stock_pool_count']}")
     print(f"- 评分股票数量: {summary['scored_stock_count']}")
     print(f"- 候选股票数量: {summary['candidate_count']}")
+    print(f"- 是否写入数据库: {'是' if summary.get('wrote_to_database') else '否'}")
+    print(f"- 是否回退 sample: {'是' if summary.get('fallback_to_sample') else '否'}")
     print("- 前若干只候选股票摘要:")
     if summary["top_candidates"]:
         for item in summary["top_candidates"]:
@@ -98,6 +104,9 @@ def _empty_summary(data_source: str) -> dict[str, Any]:
         "scored_stock_count": 0,
         "candidate_count": 0,
         "top_candidates": [],
+        "latest_price_date": None,
+        "wrote_to_database": False,
+        "fallback_to_sample": False,
         "result_location": "未生成结果；请导入本地数据或启用演示数据。",
     }
 
@@ -156,10 +165,13 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
         "stock_pool_count": int(len(tradeable)),
         "scored_stock_count": int(len(factor_scores)),
-        "candidate_count": int(len(selected)),
-        "top_candidates": _top_candidate_records(selected),
-        "result_location": f"基于本地 DuckDB 真实数据完成最小选股试运行，最新行情日期 {latest_trade_date}。",
-    }
+            "candidate_count": int(len(selected)),
+            "top_candidates": _top_candidate_records(selected),
+            "latest_price_date": latest_trade_date,
+            "wrote_to_database": False,
+            "fallback_to_sample": False,
+            "result_location": f"基于本地 DuckDB 真实数据完成最小选股试运行，最新行情日期 {latest_trade_date}。",
+        }
 
 
 def _calculate_minimal_real_scores(
@@ -194,6 +206,14 @@ def _latest_factor_rows(factor_df: pd.DataFrame, trade_date: str) -> pd.DataFram
     if factor_df.empty or "trade_date" not in factor_df.columns:
         return pd.DataFrame(columns=["ts_code", "trade_date"])
     return factor_df[factor_df["trade_date"].astype(str) == trade_date].copy()
+
+
+def _latest_date(df: pd.DataFrame, column: str) -> str | None:
+    """Return the latest date string from a DataFrame."""
+    if df.empty or column not in df.columns:
+        return None
+    values = df[column].dropna().astype(str)
+    return None if values.empty else str(values.max())
 
 
 def _top_candidate_records(selection: pd.DataFrame, limit: int = 5) -> list[dict[str, Any]]:

@@ -21,6 +21,14 @@ TABLE_ORDER = [
     "adj_factor",
 ]
 
+TABLE_COLUMNS = {
+    "stock_basic": ["ts_code", "symbol", "name", "area", "industry", "market", "list_date", "delist_date", "is_hs"],
+    "trade_calendar": ["exchange", "cal_date", "is_open", "pretrade_date"],
+    "daily_price": ["ts_code", "trade_date", "open", "high", "low", "close", "pre_close", "change", "pct_chg", "vol", "amount"],
+    "daily_basic": ["ts_code", "trade_date", "turnover_rate", "volume_ratio", "pe", "pb", "ps", "total_mv", "circ_mv"],
+    "adj_factor": ["ts_code", "trade_date", "adj_factor"],
+}
+
 
 def update_real_data(
     settings: Settings | None = None,
@@ -50,6 +58,9 @@ def update_real_data(
             "end_date": end_date,
             "sample_symbols": sample_symbols,
             "written_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "before_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "after_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "empty_tables": TABLE_ORDER,
             "next_steps": ["python -m core.jobs.run_daily_selection"],
         }
 
@@ -63,6 +74,9 @@ def update_real_data(
                 "end_date": end_date,
                 "sample_symbols": sample_symbols,
                 "written_rows": {table_name: 0 for table_name in TABLE_ORDER},
+                "before_rows": {table_name: 0 for table_name in TABLE_ORDER},
+                "after_rows": {table_name: 0 for table_name in TABLE_ORDER},
+                "empty_tables": TABLE_ORDER,
                 "next_steps": ["配置 TUSHARE_TOKEN 或 ENABLE_AKSHARE_FALLBACK=true 后重试。"],
             }
         return _run_provider_update(
@@ -115,6 +129,9 @@ def _run_provider_update(
             "end_date": end_date,
             "sample_symbols": [],
             "written_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "before_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "after_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "empty_tables": TABLE_ORDER,
             "next_steps": ["python -m core.jobs.run_daily_selection"],
         }
 
@@ -123,6 +140,7 @@ def _run_provider_update(
 
     try:
         resolved_store.initialize()
+        before_rows = _table_row_counts(resolved_store)
         frames = {
             "stock_basic": _filter_stock_basic(client.get_stock_basic(), sample_symbols),
             "trade_calendar": _filter_date_range(
@@ -135,10 +153,20 @@ def _run_provider_update(
             "daily_basic": client.get_daily_basic(start_date, end_date, sample_symbols),
             "adj_factor": client.get_adj_factor(start_date, end_date, sample_symbols),
         }
-        written_rows = {
-            table_name: resolved_store.upsert_dataframe(table_name, frame)
+        normalized_frames = {
+            table_name: _ensure_table_columns(table_name, frame)
             for table_name, frame in frames.items()
         }
+        empty_tables = [
+            table_name
+            for table_name, frame in normalized_frames.items()
+            if frame.empty
+        ]
+        written_rows = {
+            table_name: resolved_store.upsert_dataframe(table_name, frame)
+            for table_name, frame in normalized_frames.items()
+        }
+        after_rows = _table_row_counts(resolved_store)
     except (DataSourceError, DuckDBStoreError) as exc:
         return {
             "status": "failed",
@@ -148,6 +176,9 @@ def _run_provider_update(
             "end_date": end_date,
             "sample_symbols": sample_symbols,
             "written_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "before_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "after_rows": {table_name: 0 for table_name in TABLE_ORDER},
+            "empty_tables": TABLE_ORDER,
             "next_steps": ["检查数据源配置后重试。"],
         }
 
@@ -159,6 +190,9 @@ def _run_provider_update(
         "end_date": end_date,
         "sample_symbols": sample_symbols,
         "written_rows": written_rows,
+        "before_rows": before_rows,
+        "after_rows": after_rows,
+        "empty_tables": empty_tables,
         "next_steps": [
             "python -m core.jobs.diagnose_real_data",
             "python -m core.jobs.run_daily_selection",
@@ -177,7 +211,11 @@ def main() -> None:
     print(f"- 样本股票: {', '.join(result['sample_symbols']) or '未配置'}")
     print("- 写入行数:")
     for table_name, row_count in result["written_rows"].items():
-        print(f"  {table_name}: {row_count}")
+        before = result.get("before_rows", {}).get(table_name, 0)
+        after = result.get("after_rows", {}).get(table_name, 0)
+        print(f"  {table_name}: {row_count}（更新前 {before}，更新后 {after}）")
+    if result.get("empty_tables"):
+        print(f"- 空数据表: {', '.join(result['empty_tables'])}")
     print("- 下一步建议:")
     for step in result.get("next_steps", []):
         print(f"  {step}")
@@ -197,6 +235,29 @@ def _filter_date_range(df: pd.DataFrame, column: str, start_date: str, end_date:
         return df
     values = df[column].astype(str)
     return df[(values >= start_date) & (values <= end_date)].reset_index(drop=True)
+
+
+def _ensure_table_columns(table_name: str, df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure provider frames have project table columns before DuckDB upsert."""
+    columns = TABLE_COLUMNS[table_name]
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+    result = df.copy()
+    for column in columns:
+        if column not in result.columns:
+            result[column] = pd.NA
+    return result[columns]
+
+
+def _table_row_counts(store: DuckDBStore) -> dict[str, int]:
+    """Read current table row counts, returning zero for unavailable tables."""
+    counts: dict[str, int] = {}
+    for table_name in TABLE_ORDER:
+        try:
+            counts[table_name] = int(len(store.read_table(table_name)))
+        except DuckDBStoreError:
+            counts[table_name] = 0
+    return counts
 
 
 def _sample_symbols_for_provider(settings: Settings, provider_name: str) -> list[str]:
