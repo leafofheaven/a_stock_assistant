@@ -97,3 +97,20 @@ CREATE TABLE IF NOT EXISTS backtest_result (
     created_at TIMESTAMP,
     PRIMARY KEY (strategy_name, start_date, end_date, created_at)
 );
+
+CREATE TABLE IF NOT EXISTS review_decisions (
+    decision_id VARCHAR PRIMARY KEY,
+    ts_code VARCHAR,
+    name VARCHAR,
+    selection_date VARCHAR,
+    review_date VARCHAR,
+    decision VARCHAR,
+    review_status VARCHAR,
+    reviewer VARCHAR,
+    reason VARCHAR,
+    notes VARCHAR,
+    data_quality_note VARCHAR,
+    source_report_path VARCHAR,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);

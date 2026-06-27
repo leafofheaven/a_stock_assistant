@@ -18,6 +18,8 @@ from core.reporting.selection_review_report import (
     REVIEW_CHECKLIST,
     load_latest_selection_review_report,
 )
+from core.reporting.review_template_report import latest_review_template_path, template_metadata
+from core.reporting.watchlist_report import load_latest_watchlist_report
 from core.reporting.workflow_report import load_latest_workflow_report
 
 SELECTION_COLUMNS = [
@@ -127,6 +129,8 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     missing_count = int(tables.get("_missing_symbol_count", 0) or 0)
     latest_workflow_report = tables.get("_latest_workflow_report")
     latest_selection_review_report = tables.get("_latest_selection_review_report")
+    latest_review_template = tables.get("_latest_review_template")
+    latest_watchlist_report = tables.get("_latest_watchlist_report")
     return {
         "latest_price_date": _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
@@ -147,6 +151,8 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "last_job_status": _workflow_status_message(latest_workflow_report),
         "latest_workflow_report": latest_workflow_report,
         "latest_selection_review_report": latest_selection_review_report,
+        "latest_review_template": latest_review_template,
+        "latest_watchlist_report": latest_watchlist_report,
     }
 
 
@@ -195,6 +201,9 @@ def load_dashboard_data() -> dict[str, Any]:
         data = sample_dashboard_data()
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
+        data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
+        data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("watchlist", pd.DataFrame())
         return data
 
     store = DuckDBStore(settings.duckdb_path)
@@ -203,6 +212,9 @@ def load_dashboard_data() -> dict[str, Any]:
         data["data_source"] = "sample 数据（演示，真实 DuckDB 文件不存在）"
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
+        data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
+        data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("watchlist", pd.DataFrame())
         return data
 
     try:
@@ -219,6 +231,9 @@ def load_dashboard_data() -> dict[str, Any]:
         data["data_source"] = "sample 数据（演示，真实数据读取失败）"
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
+        data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
+        data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("watchlist", pd.DataFrame())
         return data
 
     if tables["strategy_result"].empty:
@@ -229,10 +244,16 @@ def load_dashboard_data() -> dict[str, Any]:
         data["data_source"] = "sample 数据（演示，真实选股结果不足）"
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
+        data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
+        data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("watchlist", pd.DataFrame())
         return data
 
     tables["_latest_workflow_report"] = load_latest_workflow_report()
     tables["_latest_selection_review_report"] = load_latest_selection_review_report()
+    tables["_latest_review_template"] = template_metadata(latest_review_template_path())
+    tables["_latest_watchlist_report"] = load_latest_watchlist_report()
+    watchlist = _load_watchlist_for_dashboard(store)
     return {
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
         "selection": tables["strategy_result"],
@@ -241,6 +262,7 @@ def load_dashboard_data() -> dict[str, Any]:
         "daily_basic": tables["daily_basic"],
         "factor_scores": tables["factor_scores"],
         "backtest": {},
+        "watchlist": watchlist,
         "tables": tables,
     }
 
@@ -268,6 +290,8 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_missing_symbol_count"] = len(batch_diagnostic.get("missing_symbols", []))
     real_tables["_latest_workflow_report"] = load_latest_workflow_report()
     real_tables["_latest_selection_review_report"] = load_latest_selection_review_report()
+    real_tables["_latest_review_template"] = template_metadata(latest_review_template_path())
+    real_tables["_latest_watchlist_report"] = load_latest_watchlist_report()
     backtest_result = dict(backtest_diagnostic.get("backtest_result", {}))
     backtest_result["data_quality_notes"] = backtest_diagnostic.get("data_quality_notes", [])
     return {
@@ -280,6 +304,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
         "factor_quality": diagnostic.get("factor_quality", {}),
         "data_quality_notes": diagnostic.get("data_quality_notes", []),
         "backtest": backtest_result,
+        "watchlist": _load_watchlist_for_dashboard(store),
         "backtest_diagnostic": backtest_diagnostic,
         "batch_diagnostic": batch_diagnostic,
         "tables": real_tables,
@@ -350,6 +375,48 @@ def _render_selection_tab(st: Any, selection_df: pd.DataFrame) -> None:
             for checklist_item in REVIEW_CHECKLIST:
                 st.write(f"- {checklist_item}")
     st.download_button("导出 CSV", dataframe_to_csv(filtered), file_name="selection.csv", mime="text/csv")
+
+
+def _render_review_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str, Any]) -> None:
+    st.subheader("候选复核")
+    report = tables.get("_latest_selection_review_report")
+    template = tables.get("_latest_review_template")
+    if report:
+        st.write("最近 selection_review 报告")
+        st.write(report)
+    else:
+        st.info("暂无 selection_review 报告，可运行 python -m core.jobs.export_selection_review。")
+    if template:
+        st.write("最近人工复核模板")
+        st.write(template)
+    else:
+        st.info("暂无人工复核模板，可运行 python -m core.jobs.export_review_template。")
+    if selection_df.empty:
+        st.info("暂无候选股票。")
+        return
+    st.write("候选股票")
+    st.dataframe(filter_selection_data(selection_df).head(20), use_container_width=True)
+    st.write("人工复核模板导出后，可填写 decision、reason、notes、reviewer，再用 import_review_decisions 回填本地 DuckDB。")
+
+
+def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame) -> None:
+    st.subheader("观察池")
+    if watchlist_df.empty:
+        st.info("暂无 active watch 股票。人工复核导入 watch 决策后会显示在这里。")
+        return
+    display_columns = [
+        "ts_code",
+        "name",
+        "decision",
+        "reason",
+        "notes",
+        "latest_trade_date",
+        "latest_close",
+        "total_score",
+        "data_quality_note",
+    ]
+    available = [column for column in display_columns if column in watchlist_df.columns]
+    st.dataframe(watchlist_df[available], use_container_width=True)
 
 
 def _render_stock_detail_tab(
@@ -480,7 +547,25 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
                 "报告路径": selection_review.get("path"),
             }
         )
+    review_template = status.get("latest_review_template")
+    if review_template:
+        st.write("最近 review_template")
+        st.write(review_template)
+    watchlist_report = status.get("latest_watchlist_report")
+    if watchlist_report:
+        st.write("最近 watchlist 报告")
+        st.write(watchlist_report)
     st.info(status["last_job_status"])
+
+
+def _load_watchlist_for_dashboard(store: Any) -> pd.DataFrame:
+    """Load active watchlist from local DuckDB for dashboard display."""
+    from core.review.decisions import build_watchlist_dataframe
+
+    try:
+        return build_watchlist_dataframe(store, active_only=True)
+    except Exception:
+        return pd.DataFrame()
 
 
 def _ensure_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:

@@ -435,6 +435,62 @@ reports/
 
 限制：报告不构成投资建议，不自动交易，不提供目标价，不保证收益。AKShare fallback 数据字段有限，`pe` / `pb` 可能为空；`small` / `medium` 仍为样本级真实试运行。
 
+## 人工复核结果回填与观察池管理
+
+`review_decisions` 表用于记录人工复核结论，并形成可持续跟踪的本地观察池。该功能只保存人工判断，不生成买入建议、目标价、收益承诺或交易指令。
+
+导出人工复核模板：
+
+```bash
+python -m core.jobs.export_review_template
+```
+
+导入人工复核结果：
+
+```bash
+python -m core.jobs.import_review_decisions --file reports/review_template_xxx.csv
+```
+
+dry-run 校验：
+
+```bash
+python -m core.jobs.import_review_decisions --file reports/review_template_xxx.csv --dry-run
+```
+
+诊断观察池：
+
+```bash
+python -m core.jobs.diagnose_watchlist
+```
+
+导出观察池：
+
+```bash
+python -m core.jobs.export_watchlist
+```
+
+在完整工作流中导出模板：
+
+```bash
+python -m core.jobs.run_real_workflow --skip-update --export-review-template
+```
+
+在完整工作流中导出观察池：
+
+```bash
+python -m core.jobs.run_real_workflow --skip-update --export-watchlist
+```
+
+`decision` 支持以下取值：
+
+- `watch`：加入观察；
+- `pass`：暂不关注；
+- `exclude`：排除；
+- `needs_data`：需要补充数据；
+- `pending`：待复核。
+
+限制：本功能只记录人工复核结论，不自动交易，不提供目标价，不保证收益，不构成投资建议。AKShare fallback 数据字段有限；`small` / `medium` 仍为样本级真实试运行。
+
 ## 前端启动命令
 
 请在项目根目录执行以下命令启动 Streamlit 页面：

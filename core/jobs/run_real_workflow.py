@@ -12,9 +12,13 @@ from core.jobs.diagnose_backtest import diagnose_backtest
 from core.jobs.diagnose_factors import diagnose_factors
 from core.jobs.diagnose_real_data import diagnose_real_data
 from core.jobs.diagnose_update_batch import diagnose_update_batch
+from core.jobs.export_review_template import export_review_template
 from core.jobs.export_selection_review import export_selection_review
+from core.jobs.export_watchlist import export_watchlist
 from core.jobs.run_daily_selection import run_daily_selection
 from core.jobs.update_real_data import update_real_data
+from core.review.decisions import summarize_review_decisions
+from core.storage.duckdb_store import DuckDBStore
 from core.reporting.workflow_report import (
     build_console_summary,
     build_workflow_report,
@@ -31,6 +35,8 @@ def run_real_workflow(
     report_dir: Path | str = "reports",
     report_format: str = "markdown",
     export_selection_review_report: bool = False,
+    export_review_template_report: bool = False,
+    export_watchlist_report: bool = False,
     quiet: bool = False,
     settings: Settings | None = None,
     step_overrides: dict[str, Callable[[], dict[str, Any]]] | None = None,
@@ -104,6 +110,41 @@ def run_real_workflow(
             "message": "--export-selection-review not enabled.",
             "result": {"message": "已跳过 selection_review 导出。"},
         }
+    if export_review_template_report:
+        steps["export_review_template"] = _run_step(
+            "export_review_template",
+            overrides.get(
+                "export_review_template",
+                lambda: export_review_template(output_dir=report_dir, quiet=True, settings=resolved_settings),
+            ),
+        )
+    else:
+        steps["export_review_template"] = {
+            "status": "skipped",
+            "message": "--export-review-template not enabled.",
+            "result": {"message": "已跳过 review_template 导出。"},
+        }
+    if export_watchlist_report:
+        steps["export_watchlist"] = _run_step(
+            "export_watchlist",
+            overrides.get(
+                "export_watchlist",
+                lambda: export_watchlist(output_dir=report_dir, report_format="all", quiet=True, settings=resolved_settings),
+            ),
+        )
+    else:
+        steps["export_watchlist"] = {
+            "status": "skipped",
+            "message": "--export-watchlist not enabled.",
+            "result": {"message": "已跳过 watchlist 导出。"},
+        }
+    steps["review_decisions"] = _run_step(
+        "review_decisions",
+        overrides.get(
+            "review_decisions",
+            lambda: summarize_review_decisions(DuckDBStore(resolved_settings.duckdb_path)),
+        ),
+    )
 
     finished_at = datetime.now()
     overall_status = _overall_status(steps)
@@ -138,6 +179,16 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Also export candidate stock review reports.",
     )
+    parser.add_argument(
+        "--export-review-template",
+        action="store_true",
+        help="Also export manual review template CSV.",
+    )
+    parser.add_argument(
+        "--export-watchlist",
+        action="store_true",
+        help="Also export watchlist reports.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Reduce console output.")
     args = parser.parse_args(argv)
 
@@ -147,6 +198,8 @@ def main(argv: list[str] | None = None) -> None:
         report_dir=args.report_dir,
         report_format=args.format,
         export_selection_review_report=args.export_selection_review,
+        export_review_template_report=args.export_review_template,
+        export_watchlist_report=args.export_watchlist,
         quiet=args.quiet,
     )
 
@@ -177,6 +230,12 @@ def _infer_status(name: str, result: dict[str, Any]) -> str:
         return "success" if result.get("equity_curve_rows", 0) > 0 else "partial_success"
     if name == "export_selection_review":
         return "success" if result.get("generated_files") else "partial_success"
+    if name == "export_review_template":
+        return "success" if result.get("generated_files") else "partial_success"
+    if name == "export_watchlist":
+        return "success" if result.get("generated_files") else "partial_success"
+    if name == "review_decisions":
+        return "success"
     return "success"
 
 

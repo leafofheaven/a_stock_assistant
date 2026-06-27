@@ -32,6 +32,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task19": check_task19,
         "task20": check_task20,
         "task21": check_task21,
+        "task22": check_task22,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -859,6 +860,62 @@ def check_task21(root: Path) -> list[str]:
     return failures
 
 
+def check_task22(root: Path) -> list[str]:
+    """Check Task 22 review decision and watchlist support."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/export_review_template.py",
+            "core/jobs/import_review_decisions.py",
+            "core/jobs/diagnose_watchlist.py",
+            "core/jobs/export_watchlist.py",
+            "core/reporting/watchlist_report.py",
+            "core/reporting/review_template_report.py",
+            "core/review/decisions.py",
+            "tests/test_review_decision_watchlist.py",
+            "README.md",
+        ],
+    )
+    readme = read_source(root / "README.md")
+    for phrase in [
+        "人工复核结果回填与观察池管理",
+        "review_decisions",
+        "python -m core.jobs.export_review_template",
+        "python -m core.jobs.import_review_decisions",
+        "python -m core.jobs.diagnose_watchlist",
+        "python -m core.jobs.export_watchlist",
+        "--export-review-template",
+        "--export-watchlist",
+    ]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    schema_source = read_source(root / "core/storage/schema.sql")
+    if "CREATE TABLE IF NOT EXISTS review_decisions" not in schema_source:
+        failures.append("schema.sql must create review_decisions.")
+
+    decisions_source = read_source(root / "core/review/decisions.py")
+    for phrase in ["ALLOWED_DECISIONS", "watch", "needs_data", "import_review_decisions", "build_watchlist_dataframe"]:
+        if phrase not in decisions_source:
+            failures.append(f"core/review/decisions.py is missing {phrase}.")
+
+    workflow_source = read_source(root / "core/jobs/run_real_workflow.py")
+    for phrase in ["--export-review-template", "--export-watchlist", "summarize_review_decisions"]:
+        if phrase not in workflow_source:
+            failures.append(f"run_real_workflow must include Task 22 integration: missing {phrase}.")
+
+    if "export_selection_review" not in read_source(root / "core/jobs/export_selection_review.py"):
+        failures.append("Task 21 export_selection_review must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+
+    tests_source = read_source(root / "tests/test_review_decision_watchlist.py").lower()
+    for phrase in ["temporary duckdb", "mock", "dry_run", "diagnose_watchlist", "export_watchlist", "streamlit"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_review_decision_watchlist.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -911,6 +968,7 @@ def main(argv: list[str] | None = None) -> int:
             "task19",
             "task20",
             "task21",
+            "task22",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

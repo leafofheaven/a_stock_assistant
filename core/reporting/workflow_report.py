@@ -34,6 +34,9 @@ def build_workflow_report(
     selection = _step_result(steps, "run_daily_selection")
     backtest = _step_result(steps, "diagnose_backtest")
     selection_review = _step_result(steps, "export_selection_review")
+    review_template = _step_result(steps, "export_review_template")
+    watchlist = _step_result(steps, "export_watchlist")
+    review_decisions = _step_result(steps, "review_decisions")
     sample_symbols = _configured_symbols(settings)
 
     return {
@@ -59,6 +62,9 @@ def build_workflow_report(
             "run_daily_selection": _selection_summary(selection),
             "diagnose_backtest": _backtest_summary(backtest),
             "export_selection_review": _selection_review_summary(selection_review),
+            "export_review_template": _generated_files_summary(review_template),
+            "export_watchlist": _generated_files_summary(watchlist),
+            "review_decisions": _review_decisions_summary(review_decisions),
         },
         "risk_notes": RISK_NOTES,
     }
@@ -112,6 +118,18 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "## selection_review 导出摘要",
         "",
         *_dict_lines(summaries["export_selection_review"]),
+        "",
+        "## review_template 导出摘要",
+        "",
+        *_dict_lines(summaries["export_review_template"]),
+        "",
+        "## watchlist 导出摘要",
+        "",
+        *_dict_lines(summaries["export_watchlist"]),
+        "",
+        "## review_decisions 摘要",
+        "",
+        *_dict_lines(summaries["review_decisions"]),
         "",
         "## 风险提示",
         "",
@@ -296,6 +314,25 @@ def _selection_review_summary(step: dict[str, Any]) -> dict[str, Any]:
         "status": step.get("status"),
         "candidate_count": summary.get("exported_candidate_count", 0),
         "generated_files": result.get("generated_files", {}),
+    }
+
+
+def _generated_files_summary(step: dict[str, Any]) -> dict[str, Any]:
+    result = step.get("result", {})
+    return {
+        "status": step.get("status"),
+        "row_count": result.get("row_count"),
+        "generated_files": result.get("generated_files", {}),
+    }
+
+
+def _review_decisions_summary(step: dict[str, Any]) -> dict[str, Any]:
+    result = step.get("result", {})
+    return {
+        "status": step.get("status"),
+        "total_rows": result.get("total_rows", 0),
+        "active_watch_count": result.get("active_watch_count", 0),
+        "decision_counts": result.get("decision_counts", {}),
     }
 
 
