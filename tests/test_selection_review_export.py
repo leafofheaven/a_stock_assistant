@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+import core.jobs.export_selection_review as export_module
 from core.jobs.export_selection_review import export_selection_review
 from core.jobs.run_real_workflow import run_real_workflow
 from core.reporting.selection_review_report import (
@@ -106,6 +107,120 @@ def test_missing_pe_pb_writes_data_quality_note() -> None:
     assert "pe/pb 缺失" in report["candidates"][0]["data_quality_note"]
 
 
+def test_export_selection_review_joins_stock_basic_fields(tmp_path: Path, monkeypatch: Any) -> None:
+    """Export should fill industry/market/list_date from stock_basic when scores lack them."""
+    store = DuckDBStore(tmp_path / "real.duckdb")
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "symbol": "000001",
+                    "name": "平安银行",
+                    "area": "深圳",
+                    "industry": "银行",
+                    "market": "深交所",
+                    "list_date": "19910403",
+                    "delist_date": None,
+                    "is_hs": None,
+                }
+            ]
+        ),
+    )
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": ["20240104"],
+                "open": [10.0],
+                "high": [10.5],
+                "low": [9.8],
+                "close": [10.2],
+                "pre_close": [10.0],
+                "change": [0.2],
+                "pct_chg": [2.0],
+                "vol": [1000.0],
+                "amount": [150_000_000.0],
+            }
+        ),
+    )
+    store.upsert_dataframe(
+        "daily_basic",
+        pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": ["20240104"],
+                "turnover_rate": [1.0],
+                "volume_ratio": [None],
+                "pe": [None],
+                "pb": [None],
+                "ps": [None],
+                "total_mv": [None],
+                "circ_mv": [None],
+            }
+        ),
+    )
+    factor_scores = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "trade_date": ["20240104"],
+            "name": ["平安银行"],
+            "trend_score": [80.0],
+            "momentum_score": [80.0],
+            "liquidity_score": [80.0],
+            "volatility_score": [80.0],
+            "fundamental_score": [None],
+            "total_score": [88.0],
+        }
+    )
+    monkeypatch.setattr(
+        export_module,
+        "run_daily_selection",
+        lambda settings, store: {
+            "is_real_data": True,
+            "fallback_to_sample": False,
+            "latest_price_date": "20240104",
+            "stock_pool_count": 1,
+            "scored_stock_count": 1,
+            "candidate_count": 1,
+        },
+    )
+    monkeypatch.setattr(
+        export_module,
+        "diagnose_factors",
+        lambda settings, store: {"factor_scores_df": factor_scores, "data_quality_notes": []},
+    )
+
+    result = export_module.export_selection_review(
+        top_n=1,
+        output_dir=tmp_path / "reports",
+        report_format="all",
+        quiet=True,
+        settings=SimpleNamespace(data_provider="akshare", duckdb_path=store.db_path),
+        store=store,
+    )
+
+    files = result["generated_files"]
+    payload = json.loads(Path(files["json"]).read_text(encoding="utf-8"))
+    csv_text = Path(files["csv"]).read_text(encoding="utf-8-sig")
+    markdown = Path(files["markdown"]).read_text(encoding="utf-8")
+    candidate = payload["candidates"][0]
+
+    assert candidate["industry"] == "银行"
+    assert candidate["market"] == "深交所"
+    assert candidate["list_date"] == "19910403"
+    assert "银行" in csv_text
+    assert "深交所" in csv_text
+    assert "19910403" in csv_text
+    assert "market: 深交所" in markdown
+    assert "industry 缺失" not in candidate["data_quality_note"]
+    assert "list_date 缺失" not in candidate["data_quality_note"]
+    assert "pe/pb 缺失" in candidate["data_quality_note"]
+
+
 def test_run_real_workflow_export_selection_review_generates_files(tmp_path: Path) -> None:
     """run_real_workflow --export-selection-review should generate review files."""
     result = run_real_workflow(
@@ -155,4 +270,3 @@ def test_streamlit_helper_reads_latest_selection_review_report(tmp_path: Path) -
     assert loaded is not None
     assert loaded["candidate_count"] == 2
     assert status["latest_selection_review_report"]["path"].endswith(".json")
-

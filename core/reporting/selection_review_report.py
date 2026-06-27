@@ -31,6 +31,7 @@ CSV_COLUMNS = [
     "ts_code",
     "name",
     "industry",
+    "market",
     "list_date",
     "latest_trade_date",
     "latest_close",
@@ -190,6 +191,7 @@ def candidates_to_dataframe(candidates: list[dict[str, Any]]) -> pd.DataFrame:
             "ts_code": candidate.get("ts_code"),
             "name": candidate.get("name"),
             "industry": candidate.get("industry"),
+            "market": candidate.get("market"),
             "list_date": candidate.get("list_date"),
             "latest_trade_date": candidate.get("latest_trade_date"),
             "latest_close": candidate.get("latest_close"),
@@ -272,6 +274,7 @@ def _candidate_record(
         "pe": _is_missing(latest_basic.get("pe")),
         "pb": _is_missing(latest_basic.get("pb")),
         "industry": _is_missing(row.get("industry")),
+        "market": _is_missing(row.get("market")),
         "list_date": _is_missing(row.get("list_date")),
     }
     data_quality_note = _candidate_quality_note(missing, data_quality_notes)
@@ -281,6 +284,7 @@ def _candidate_record(
         "ts_code": ts_code,
         "name": row.get("name"),
         "industry": row.get("industry"),
+        "market": row.get("market"),
         "list_date": row.get("list_date"),
         "rank": _optional_int(row.get("rank")),
         "latest_trade_date": latest_trade_date,
@@ -329,6 +333,8 @@ def _candidate_quality_note(missing: dict[str, bool], notes: list[str]) -> str:
         values.append("pe/pb 缺失，估值相关结论需人工补充核查。")
     if missing.get("industry"):
         values.append("industry 缺失，行业复核需人工补充。")
+    if missing.get("market"):
+        values.append("market 缺失，交易市场需人工补充。")
     if missing.get("list_date"):
         values.append("list_date 缺失，上市时长需结合行情历史判断。")
     return "；".join(dict.fromkeys(str(value) for value in values if value))
@@ -343,6 +349,7 @@ def _candidate_markdown(candidate: dict[str, Any]) -> list[str]:
         "",
         f"- latest_trade_date: {candidate.get('latest_trade_date') or '暂无'}",
         f"- industry: {candidate.get('industry') or '缺失'}",
+        f"- market: {candidate.get('market') or '缺失'}",
         f"- list_date: {candidate.get('list_date') or '缺失'}",
         f"- latest_close: {_display(candidate.get('latest_close'))}",
         f"- pe: {_display(candidate.get('pe'))}",
@@ -444,9 +451,11 @@ def _is_missing(value: Any) -> bool:
     if value is None:
         return True
     try:
-        return bool(pd.isna(value))
+        if pd.isna(value):
+            return True
     except (TypeError, ValueError):
-        return False
+        pass
+    return str(value).strip().lower() in {"", "nan", "none", "<na>", "null"}
 
 
 def _display(value: Any) -> str:

@@ -412,6 +412,7 @@ def test_reports_include_industry_pe_pb_or_missing_notes() -> None:
             "ts_code": ["000001.SZ"],
             "name": ["平安银行"],
             "industry": ["银行"],
+            "market": ["深交所"],
             "list_date": ["19910403"],
             "total_score": [88.0],
             "trend_score": [80.0],
@@ -433,6 +434,7 @@ def test_reports_include_industry_pe_pb_or_missing_notes() -> None:
     )
     df = candidates_to_dataframe(report["candidates"])
     assert df.loc[0, "industry"] == "银行"
+    assert df.loc[0, "market"] == "深交所"
     assert df.loc[0, "pe"] == 6.8
     assert df.loc[0, "pb"] == 0.68
 
@@ -482,9 +484,64 @@ def test_watchlist_report_contains_basic_and_valuation_fields(tmp_path: Path) ->
     exported = watchlist_to_dataframe(report["watchlist"])
 
     assert exported.loc[0, "industry"] == "银行"
+    assert exported.loc[0, "market"] == "深交所"
     assert exported.loc[0, "pe"] == 6.8
     assert exported.loc[0, "pb"] == 0.68
     assert exported.loc[0, "data_quality_note"] in ("", None) or "缺失" not in str(exported.loc[0, "data_quality_note"])
+
+
+def test_watchlist_report_does_not_misreport_basic_fields_when_valuation_missing(tmp_path: Path) -> None:
+    """watchlist should keep stock_basic fields and only note missing pe/pb."""
+    store = DuckDBStore(tmp_path / "watchlist-missing-valuation.duckdb")
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "symbol": "000001",
+                    "name": "平安银行",
+                    "area": "深圳",
+                    "industry": "银行",
+                    "market": "深交所",
+                    "list_date": "19910403",
+                    "delist_date": None,
+                    "is_hs": None,
+                }
+            ]
+        ),
+    )
+    store.upsert_dataframe("daily_price", pd.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20240104"], "open": [10.0], "high": [10.5], "low": [9.5], "close": [10.2], "pre_close": [None], "change": [0.1], "pct_chg": [1.0], "vol": [1000], "amount": [150_000_000]}))
+    store.upsert_dataframe("daily_basic", pd.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20240104"], "turnover_rate": [1.0], "volume_ratio": [None], "pe": [None], "pb": [None], "ps": [None], "total_mv": [None], "circ_mv": [None]}))
+    store.upsert_dataframe("factor_scores", pd.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20240104"], "trend_score": [80.0], "momentum_score": [80.0], "liquidity_score": [80.0], "volatility_score": [80.0], "fundamental_score": [None], "total_score": [88.0]}))
+    import_review_decisions(
+        pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "name": ["平安银行"],
+                "selection_date": ["20240104"],
+                "decision": ["watch"],
+                "reason": ["观察理由"],
+                "notes": ["复核要点"],
+                "reviewer": ["me"],
+            }
+        ),
+        store=store,
+    )
+
+    watchlist_df = build_watchlist_dataframe(store)
+    report = build_watchlist_report(metadata={"generated_at": "2026-06-27", "data_provider": "akshare"}, watchlist_df=watchlist_df)
+    exported = watchlist_to_dataframe(report["watchlist"])
+    note = str(exported.loc[0, "data_quality_note"])
+
+    assert exported.loc[0, "industry"] == "银行"
+    assert exported.loc[0, "market"] == "深交所"
+    assert exported.loc[0, "list_date"] == "19910403"
+    assert "industry 缺失" not in note
+    assert "list_date 缺失" not in note
+    assert "pe 缺失" in note
+    assert "pb 缺失" in note
 
 
 def test_streamlit_helper_summarizes_sample_and_real_data_status() -> None:

@@ -385,6 +385,7 @@ def _enrich_watch(
     return {
         **row,
         "industry": stock_info.get("industry") or latest_score.get("industry"),
+        "market": stock_info.get("market"),
         "list_date": stock_info.get("list_date"),
         "pe": _optional_float(latest_basic.get("pe")),
         "pb": _optional_float(latest_basic.get("pb")),
@@ -479,6 +480,8 @@ def _data_quality_note(
     latest_basic = latest_basic or {}
     if not _clean_text(stock_info.get("industry")):
         notes.append("industry 缺失")
+    if not _clean_text(stock_info.get("market")):
+        notes.append("market 缺失")
     if not _clean_text(stock_info.get("list_date")):
         notes.append("list_date 缺失")
     if _optional_float(latest_basic.get("pe")) is None:
