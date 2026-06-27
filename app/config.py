@@ -8,6 +8,8 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from core.data_sources.universe_presets import get_universe_preset, to_akshare_symbol
+
 
 class Settings(BaseSettings):
     """Runtime settings for the stock assistant application."""
@@ -46,6 +48,11 @@ class Settings(BaseSettings):
         validation_alias="AKSHARE_SAMPLE_SYMBOLS",
     )
     akshare_adjust: str = Field(default="qfq", validation_alias="AKSHARE_ADJUST")
+    real_universe_preset: str = Field(default="mini", validation_alias="REAL_UNIVERSE_PRESET")
+    real_batch_size: int = Field(default=10, validation_alias="REAL_BATCH_SIZE")
+    real_batch_sleep_seconds: float = Field(default=0.0, validation_alias="REAL_BATCH_SLEEP_SECONDS")
+    real_max_retries: int = Field(default=1, validation_alias="REAL_MAX_RETRIES")
+    real_request_timeout_seconds: int = Field(default=30, validation_alias="REAL_REQUEST_TIMEOUT_SECONDS")
 
     @field_validator("log_level")
     @classmethod
@@ -70,12 +77,15 @@ class Settings(BaseSettings):
 
     @property
     def akshare_symbols(self) -> list[str]:
-        """Return configured AKShare sample symbols as six-digit codes."""
-        return [
+        """Return configured AKShare symbols or preset symbols as six-digit codes."""
+        explicit = [
             symbol.strip()
             for symbol in self.akshare_sample_symbols.split(",")
             if symbol.strip()
         ]
+        if explicit:
+            return explicit
+        return [to_akshare_symbol(symbol) for symbol in get_universe_preset(self.real_universe_preset)]
 
 
 @lru_cache

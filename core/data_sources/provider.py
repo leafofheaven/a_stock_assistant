@@ -50,14 +50,21 @@ def select_data_provider(
     if provider_name == "akshare":
         return DataProviderSelection(
             provider_name="akshare",
-            primary=primary_client or AKShareClient(adjust=resolved_settings.akshare_adjust),
+            primary=primary_client
+            or AKShareClient(
+                adjust=resolved_settings.akshare_adjust,
+                request_timeout_seconds=getattr(resolved_settings, "real_request_timeout_seconds", 30),
+            ),
             message="使用 AKShare 数据源。",
         )
 
     fallback = None
     fallback_name = None
     if getattr(resolved_settings, "enable_akshare_fallback", False):
-        fallback = fallback_client or AKShareClient(adjust=resolved_settings.akshare_adjust)
+        fallback = fallback_client or AKShareClient(
+            adjust=resolved_settings.akshare_adjust,
+            request_timeout_seconds=getattr(resolved_settings, "real_request_timeout_seconds", 30),
+        )
         fallback_name = "akshare"
 
     return DataProviderSelection(

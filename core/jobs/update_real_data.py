@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+import time
 from typing import Any
 
 import pandas as pd
@@ -10,6 +11,7 @@ import pandas as pd
 from app.config import Settings, get_settings
 from core.data_sources.base import DataSourceError, StockDataSource
 from core.data_sources.provider import select_data_provider
+from core.data_sources.universe_presets import get_universe_preset, to_akshare_symbol
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 
@@ -149,9 +151,30 @@ def _run_provider_update(
                 start_date,
                 end_date,
             ),
-            "daily_price": client.get_daily_price(start_date, end_date, sample_symbols),
-            "daily_basic": client.get_daily_basic(start_date, end_date, sample_symbols),
-            "adj_factor": client.get_adj_factor(start_date, end_date, sample_symbols),
+            "daily_price": _fetch_symbol_table_in_batches(
+                client.get_daily_price,
+                client,
+                start_date,
+                end_date,
+                sample_symbols,
+                settings,
+            ),
+            "daily_basic": _fetch_symbol_table_in_batches(
+                client.get_daily_basic,
+                client,
+                start_date,
+                end_date,
+                sample_symbols,
+                settings,
+            ),
+            "adj_factor": _fetch_symbol_table_in_batches(
+                client.get_adj_factor,
+                client,
+                start_date,
+                end_date,
+                sample_symbols,
+                settings,
+            ),
         }
         normalized_frames = {
             table_name: _ensure_table_columns(table_name, frame)
@@ -162,6 +185,7 @@ def _run_provider_update(
             for table_name, frame in normalized_frames.items()
             if frame.empty
         ]
+        batch_summary = _batch_summary(provider_name, sample_symbols, normalized_frames, client)
         if provider_name == "akshare" and normalized_frames["daily_price"].empty and sample_symbols:
             return {
                 "status": "failed",
@@ -174,6 +198,7 @@ def _run_provider_update(
                 "before_rows": before_rows,
                 "after_rows": before_rows,
                 "empty_tables": empty_tables,
+                **batch_summary,
                 "next_steps": ["检查 AKShare 网络、版本或样本股票配置后重试。"],
             }
         written_rows = {
@@ -196,8 +221,10 @@ def _run_provider_update(
             "next_steps": ["检查数据源配置后重试。"],
         }
 
+    batch_summary = _batch_summary(provider_name, sample_symbols, normalized_frames, client)
+    status = _status_from_batch_summary(batch_summary)
     return {
-        "status": "success",
+        "status": status,
         "message": f"{message_prefix} 真实 {provider_name} 数据更新完成。".strip(),
         "data_source": provider_name,
         "start_date": start_date,
@@ -207,8 +234,10 @@ def _run_provider_update(
         "before_rows": before_rows,
         "after_rows": after_rows,
         "empty_tables": empty_tables,
+        **batch_summary,
         "next_steps": [
             "python -m core.jobs.diagnose_real_data",
+            "python -m core.jobs.diagnose_update_batch",
             "python -m core.jobs.run_daily_selection",
         ],
     }
@@ -223,6 +252,11 @@ def main() -> None:
     print(f"- 数据来源: {result['data_source']}")
     print(f"- 日期范围: {result['start_date']} 至 {result['end_date']}")
     print(f"- 样本股票: {', '.join(result['sample_symbols']) or '未配置'}")
+    if "total_symbols" in result:
+        print(
+            f"- 批量统计: 总股票数 {result['total_symbols']}，成功 {result['success_symbols']}，"
+            f"失败 {result['failed_symbols']}，成功率 {result['success_rate']:.2%}"
+        )
     print("- 写入行数:")
     for table_name, row_count in result["written_rows"].items():
         before = result.get("before_rows", {}).get(table_name, 0)
@@ -230,6 +264,15 @@ def main() -> None:
         print(f"  {table_name}: {row_count}（更新前 {before}，更新后 {after}）")
     if result.get("empty_tables"):
         print(f"- 空数据表: {', '.join(result['empty_tables'])}")
+    if result.get("empty_data_symbols"):
+        print(f"- 空数据股票: {', '.join(result['empty_data_symbols'])}")
+    if result.get("failure_records"):
+        print("- 失败股票列表:")
+        for item in result["failure_records"]:
+            print(
+                f"  {item['symbol']} provider={item['provider']} "
+                f"stage={item['failed_stage']} error={item['error_message']}"
+            )
     print("- 下一步建议:")
     for step in result.get("next_steps", []):
         print(f"  {step}")
@@ -274,10 +317,137 @@ def _table_row_counts(store: DuckDBStore) -> dict[str, int]:
     return counts
 
 
+def _fetch_symbol_table_in_batches(
+    fetcher: Any,
+    client: StockDataSource,
+    start_date: str,
+    end_date: str,
+    symbols: list[str],
+    settings: Settings,
+) -> pd.DataFrame:
+    """Fetch a symbol table in configured batches with simple retries."""
+    if not symbols:
+        return fetcher(start_date, end_date, symbols)
+
+    frames: list[pd.DataFrame] = []
+    batch_size = max(1, int(getattr(settings, "real_batch_size", 10) or 10))
+    max_retries = max(1, int(getattr(settings, "real_max_retries", 1) or 1))
+    sleep_seconds = max(0.0, float(getattr(settings, "real_batch_sleep_seconds", 0.0) or 0.0))
+    batches = list(_chunks(symbols, batch_size))
+    for batch_index, batch in enumerate(batches):
+        frame = pd.DataFrame()
+        for attempt in range(max_retries):
+            try:
+                frame = fetcher(start_date, end_date, batch)
+                break
+            except DataSourceError as exc:
+                _record_client_failure(client, batch, fetcher.__name__, str(exc))
+                if attempt + 1 >= max_retries:
+                    frame = pd.DataFrame()
+        if not frame.empty:
+            frames.append(frame)
+        if sleep_seconds and batch_index < len(batches) - 1:
+            time.sleep(sleep_seconds)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _chunks(symbols: list[str], size: int) -> list[list[str]]:
+    """Split symbols into fixed-size chunks."""
+    return [symbols[index : index + size] for index in range(0, len(symbols), size)]
+
+
+def _record_client_failure(client: StockDataSource, symbols: list[str], stage: str, message: str) -> None:
+    """Record fetch-level failures on clients that expose failure_records."""
+    records = getattr(client, "failure_records", None)
+    if not isinstance(records, list):
+        return
+    for symbol in symbols:
+        records.append(
+            {
+                "symbol": _to_ts_code(symbol),
+                "provider": "unknown",
+                "failed_stage": stage,
+                "error_message": message,
+            }
+        )
+
+
+def _batch_summary(
+    provider_name: str,
+    sample_symbols: list[str],
+    frames: dict[str, pd.DataFrame],
+    client: StockDataSource,
+) -> dict[str, Any]:
+    """Return batch update success and failure summary."""
+    requested_ts_codes = [_to_ts_code(symbol) for symbol in sample_symbols]
+    daily_price = frames.get("daily_price", pd.DataFrame())
+    if daily_price.empty or "ts_code" not in daily_price.columns:
+        successful = set()
+    else:
+        successful = set(daily_price["ts_code"].dropna().astype(str).unique())
+    empty_symbols = [symbol for symbol in requested_ts_codes if symbol not in successful]
+    failure_records = _dedupe_failure_records(getattr(client, "failure_records", []))
+    recorded_symbols = {item["symbol"] for item in failure_records}
+    for symbol in empty_symbols:
+        if symbol not in recorded_symbols:
+            failure_records.append(
+                {
+                    "symbol": symbol,
+                    "provider": provider_name,
+                    "failed_stage": "daily_price",
+                    "error_message": "no daily_price rows returned",
+                }
+            )
+    success_count = len(successful.intersection(requested_ts_codes))
+    total = len(requested_ts_codes)
+    failed_count = max(total - success_count, 0)
+    return {
+        "total_symbols": total,
+        "success_symbols": success_count,
+        "failed_symbols": failed_count,
+        "success_rate": (success_count / total) if total else 0.0,
+        "empty_data_symbols": empty_symbols,
+        "failure_records": failure_records,
+    }
+
+
+def _status_from_batch_summary(summary: dict[str, Any]) -> str:
+    """Return update status from symbol-level coverage."""
+    if summary["total_symbols"] and summary["success_symbols"] == 0:
+        return "failed"
+    if summary["failed_symbols"] > 0:
+        return "partial_success"
+    return "success"
+
+
+def _dedupe_failure_records(records: Any) -> list[dict[str, str]]:
+    """Return normalized unique failure records."""
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    if not isinstance(records, list):
+        return result
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        normalized = {
+            "symbol": _to_ts_code(str(item.get("symbol", ""))),
+            "provider": str(item.get("provider", "unknown")),
+            "failed_stage": str(item.get("failed_stage", "unknown")),
+            "error_message": str(item.get("error_message", "")),
+        }
+        key = (normalized["symbol"], normalized["failed_stage"])
+        if key not in seen:
+            result.append(normalized)
+            seen.add(key)
+    return result
+
+
 def _sample_symbols_for_provider(settings: Settings, provider_name: str) -> list[str]:
     """Return provider-specific sample symbols."""
     if provider_name == "akshare":
         return list(settings.akshare_symbols)
+    if not list(settings.sample_symbols):
+        return [_to_ts_code(symbol) for symbol in get_universe_preset(settings.real_universe_preset)]
     return list(settings.sample_symbols)
 
 

@@ -281,7 +281,7 @@ def test_akshare_single_symbol_failure_keeps_successful_symbols(tmp_path: Path) 
 
     result = update_real_data(settings=AkshareSettings(), store=store, client=client)
 
-    assert result["status"] == "success"
+    assert result["status"] == "partial_success"
     daily_price = store.read_table("daily_price")
     assert daily_price["ts_code"].tolist() == ["000001.SZ"]
 
@@ -363,7 +363,7 @@ def test_eastmoney_curl_partial_success_keeps_other_symbols(tmp_path: Path) -> N
 
     result = update_real_data(settings=AkshareSettings(), store=store, client=client)
 
-    assert result["status"] == "success"
+    assert result["status"] == "partial_success"
     daily_price = store.read_table("daily_price")
     assert daily_price["ts_code"].tolist() == ["000001.SZ"]
 
