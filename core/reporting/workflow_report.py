@@ -33,6 +33,7 @@ def build_workflow_report(
     factors = _step_result(steps, "diagnose_factors")
     selection = _step_result(steps, "run_daily_selection")
     backtest = _step_result(steps, "diagnose_backtest")
+    selection_review = _step_result(steps, "export_selection_review")
     sample_symbols = _configured_symbols(settings)
 
     return {
@@ -57,6 +58,7 @@ def build_workflow_report(
             "diagnose_factors": _factor_summary(factors),
             "run_daily_selection": _selection_summary(selection),
             "diagnose_backtest": _backtest_summary(backtest),
+            "export_selection_review": _selection_review_summary(selection_review),
         },
         "risk_notes": RISK_NOTES,
     }
@@ -106,6 +108,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "## diagnose_backtest 摘要",
         "",
         *_dict_lines(summaries["diagnose_backtest"]),
+        "",
+        "## selection_review 导出摘要",
+        "",
+        *_dict_lines(summaries["export_selection_review"]),
         "",
         "## 风险提示",
         "",
@@ -279,6 +285,17 @@ def _backtest_summary(step: dict[str, Any]) -> dict[str, Any]:
         "stock_count": result.get("stock_count", 0),
         "metrics": result.get("metrics", {}),
         "reasons": result.get("reasons", []),
+    }
+
+
+def _selection_review_summary(step: dict[str, Any]) -> dict[str, Any]:
+    result = step.get("result", {})
+    report = result.get("report", {})
+    summary = report.get("selection_summary", {})
+    return {
+        "status": step.get("status"),
+        "candidate_count": summary.get("exported_candidate_count", 0),
+        "generated_files": result.get("generated_files", {}),
     }
 
 

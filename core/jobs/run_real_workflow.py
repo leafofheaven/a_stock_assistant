@@ -12,6 +12,7 @@ from core.jobs.diagnose_backtest import diagnose_backtest
 from core.jobs.diagnose_factors import diagnose_factors
 from core.jobs.diagnose_real_data import diagnose_real_data
 from core.jobs.diagnose_update_batch import diagnose_update_batch
+from core.jobs.export_selection_review import export_selection_review
 from core.jobs.run_daily_selection import run_daily_selection
 from core.jobs.update_real_data import update_real_data
 from core.reporting.workflow_report import (
@@ -29,6 +30,7 @@ def run_real_workflow(
     no_backtest: bool = False,
     report_dir: Path | str = "reports",
     report_format: str = "markdown",
+    export_selection_review_report: bool = False,
     quiet: bool = False,
     settings: Settings | None = None,
     step_overrides: dict[str, Callable[[], dict[str, Any]]] | None = None,
@@ -83,6 +85,25 @@ def run_real_workflow(
             "diagnose_backtest",
             overrides.get("diagnose_backtest", lambda: diagnose_backtest(settings=resolved_settings)),
         )
+    if export_selection_review_report:
+        steps["export_selection_review"] = _run_step(
+            "export_selection_review",
+            overrides.get(
+                "export_selection_review",
+                lambda: export_selection_review(
+                    output_dir=report_dir,
+                    report_format="all",
+                    quiet=True,
+                    settings=resolved_settings,
+                ),
+            ),
+        )
+    else:
+        steps["export_selection_review"] = {
+            "status": "skipped",
+            "message": "--export-selection-review not enabled.",
+            "result": {"message": "已跳过 selection_review 导出。"},
+        }
 
     finished_at = datetime.now()
     overall_status = _overall_status(steps)
@@ -112,6 +133,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--no-backtest", action="store_true", help="Skip diagnose_backtest.")
     parser.add_argument("--report-dir", default="reports", help="Report output directory.")
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format.")
+    parser.add_argument(
+        "--export-selection-review",
+        action="store_true",
+        help="Also export candidate stock review reports.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Reduce console output.")
     args = parser.parse_args(argv)
 
@@ -120,6 +146,7 @@ def main(argv: list[str] | None = None) -> None:
         no_backtest=args.no_backtest,
         report_dir=args.report_dir,
         report_format=args.format,
+        export_selection_review_report=args.export_selection_review,
         quiet=args.quiet,
     )
 
@@ -148,6 +175,8 @@ def _infer_status(name: str, result: dict[str, Any]) -> str:
         return "success" if result.get("candidate_count", 0) > 0 else "partial_success"
     if name == "diagnose_backtest":
         return "success" if result.get("equity_curve_rows", 0) > 0 else "partial_success"
+    if name == "export_selection_review":
+        return "success" if result.get("generated_files") else "partial_success"
     return "success"
 
 

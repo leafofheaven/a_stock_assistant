@@ -31,6 +31,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task18": check_task18,
         "task19": check_task19,
         "task20": check_task20,
+        "task21": check_task21,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -806,6 +807,58 @@ def check_task20(root: Path) -> list[str]:
     return failures
 
 
+def check_task21(root: Path) -> list[str]:
+    """Check Task 21 selection review export support."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/export_selection_review.py",
+            "core/reporting/selection_review_report.py",
+            "tests/test_selection_review_export.py",
+            "core/jobs/run_real_workflow.py",
+            "core/reporting/workflow_report.py",
+            "README.md",
+        ],
+    )
+    readme = read_source(root / "README.md")
+    for phrase in [
+        "候选股票人工复核清单与结果导出",
+        "python -m core.jobs.export_selection_review",
+        "python -m core.jobs.export_selection_review --top-n 10",
+        "python -m core.jobs.export_selection_review --format all",
+        "--export-selection-review",
+        "reports/",
+    ]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    export_source = read_source(root / "core/jobs/export_selection_review.py")
+    for phrase in ["--top-n", "--output-dir", "--format", "--use-existing", "--quiet", "save_selection_review_report"]:
+        if phrase not in export_source:
+            failures.append(f"core/jobs/export_selection_review.py is missing {phrase}.")
+
+    report_source = read_source(root / "core/reporting/selection_review_report.py")
+    for phrase in ["render_markdown_report", "save_selection_review_report", "load_latest_selection_review_report", "人工复核要点", "不构成投资建议"]:
+        if phrase not in report_source:
+            failures.append(f"core/reporting/selection_review_report.py is missing {phrase}.")
+
+    workflow_source = read_source(root / "core/jobs/run_real_workflow.py")
+    for phrase in ["--export-selection-review", "export_selection_review", "export_selection_review_report"]:
+        if phrase not in workflow_source:
+            failures.append(f"run_real_workflow must support selection review export: missing {phrase}.")
+
+    if "run_real_workflow" not in workflow_source:
+        failures.append("Task 20 workflow command must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+
+    tests_source = read_source(root / "tests/test_selection_review_export.py").lower()
+    for phrase in ["mock", "temporary duckdb", "markdown", "json", "csv", "pe/pb", "export_selection_review", "streamlit"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_selection_review_export.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -857,6 +910,7 @@ def main(argv: list[str] | None = None) -> int:
             "task18",
             "task19",
             "task20",
+            "task21",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
