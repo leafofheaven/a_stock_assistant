@@ -36,6 +36,8 @@ def build_workflow_report(
     selection_review = _step_result(steps, "export_selection_review")
     review_template = _step_result(steps, "export_review_template")
     watchlist = _step_result(steps, "export_watchlist")
+    watchlist_tracking = _step_result(steps, "track_watchlist")
+    watchlist_tracking_export = _step_result(steps, "export_watchlist_tracking")
     review_decisions = _step_result(steps, "review_decisions")
     sample_symbols = _configured_symbols(settings)
 
@@ -64,6 +66,8 @@ def build_workflow_report(
             "export_selection_review": _selection_review_summary(selection_review),
             "export_review_template": _generated_files_summary(review_template),
             "export_watchlist": _generated_files_summary(watchlist),
+            "track_watchlist": _watchlist_tracking_summary(watchlist_tracking),
+            "export_watchlist_tracking": _generated_files_summary(watchlist_tracking_export),
             "review_decisions": _review_decisions_summary(review_decisions),
         },
         "risk_notes": RISK_NOTES,
@@ -126,6 +130,14 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "## watchlist 导出摘要",
         "",
         *_dict_lines(summaries["export_watchlist"]),
+        "",
+        "## watchlist_snapshots 摘要",
+        "",
+        *_dict_lines(summaries["track_watchlist"]),
+        "",
+        "## watchlist_tracking 导出摘要",
+        "",
+        *_dict_lines(summaries["export_watchlist_tracking"]),
         "",
         "## review_decisions 摘要",
         "",
@@ -322,6 +334,19 @@ def _generated_files_summary(step: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": step.get("status"),
         "row_count": result.get("row_count"),
+        "generated_files": result.get("generated_files", {}),
+    }
+
+
+def _watchlist_tracking_summary(step: dict[str, Any]) -> dict[str, Any]:
+    result = step.get("result", {})
+    return {
+        "status": step.get("status"),
+        "active_watch_count": result.get("active_watch_count", 0),
+        "snapshot_count": result.get("snapshot_count", 0),
+        "missing_price_count": result.get("missing_price_count", 0),
+        "missing_score_count": result.get("missing_score_count", 0),
+        "snapshot_date": result.get("snapshot_date"),
         "generated_files": result.get("generated_files", {}),
     }
 
