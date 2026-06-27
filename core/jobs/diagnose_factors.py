@@ -164,6 +164,7 @@ def _diagnose_real_tables(
         )
 
     factor_scores = _calculate_minimal_real_scores(daily_price, daily_basic, tradeable, latest_trade_date)
+    data_quality_notes.extend(_fundamental_missing_notes(daily_basic, factor_scores))
     selected = select_top_stocks(factor_scores, top_n=10)
     return _build_result(
         settings=settings,
@@ -290,6 +291,17 @@ def _find_anomalies(factor_scores: pd.DataFrame) -> list[str]:
 def _data_quality_notes(data_provider: str, daily_basic: pd.DataFrame, adj_factor: pd.DataFrame) -> list[str]:
     """Return provider-specific data quality notes."""
     notes: list[str] = []
+    if daily_basic.empty:
+        notes.append("daily_basic 缺失，fundamental_score 可能为空。")
+    else:
+        if "pe" not in daily_basic.columns:
+            notes.append("daily_basic 缺少 pe 字段，pe_score 与 fundamental_score 可能为空。")
+        elif _column_all_missing(daily_basic, "pe"):
+            notes.append("pe 全部缺失，pe_score 与 fundamental_score 可能为空。")
+        if "pb" not in daily_basic.columns:
+            notes.append("daily_basic 缺少 pb 字段，估值相关复核信息不完整。")
+        elif _column_all_missing(daily_basic, "pb"):
+            notes.append("pb 全部缺失，估值相关复核信息不完整。")
     if data_provider == "akshare":
         notes.append("AKShare fallback 当前只用于少量股票真实数据试运行。")
         if _column_all_missing(daily_basic, "pe") or _column_all_missing(daily_basic, "pb"):
@@ -299,6 +311,25 @@ def _data_quality_notes(data_provider: str, daily_basic: pd.DataFrame, adj_facto
             if not values.empty and bool((values == 1.0).all()):
                 notes.append("AKShare fallback 的 adj_factor 当前简化为 1.0。")
     return notes
+
+
+def _fundamental_missing_notes(daily_basic: pd.DataFrame, factor_scores: pd.DataFrame) -> list[str]:
+    """Explain empty fundamental_score when valuation inputs are incomplete."""
+    if factor_scores.empty or "fundamental_score" not in factor_scores.columns:
+        return []
+    values = pd.to_numeric(factor_scores["fundamental_score"], errors="coerce")
+    if values.notna().any():
+        return []
+    reasons: list[str] = []
+    if daily_basic.empty:
+        reasons.append("fundamental_score 为空原因：daily_basic 无数据。")
+    elif _column_all_missing(daily_basic, "pe") and _column_all_missing(daily_basic, "pb"):
+        reasons.append("fundamental_score 为空原因：pe/pb 均缺失。")
+    elif _column_all_missing(daily_basic, "pe"):
+        reasons.append("fundamental_score 为空原因：pe 缺失。")
+    elif _column_all_missing(daily_basic, "pb"):
+        reasons.append("fundamental_score 为空原因：pb 缺失。")
+    return reasons
 
 
 def _missing_table_reasons(tables: dict[str, pd.DataFrame]) -> list[str]:

@@ -123,11 +123,16 @@ def build_watchlist_dataframe(store: DuckDBStore, active_only: bool = True) -> p
     if "decision" in df.columns:
         df = df[df["decision"] == "watch"]
     price = _safe_read_table(store, "daily_price")
+    stock_basic = _safe_read_table(store, "stock_basic")
+    daily_basic = _safe_read_table(store, "daily_basic")
     scores = _safe_read_table(store, "factor_scores")
     strategy = _safe_read_table(store, "strategy_result")
     score_source = scores if not scores.empty else strategy
     history = read_review_decision_history(store)
-    enriched = [_enrich_watch(row, price, score_source) for row in df.to_dict("records")]
+    enriched = [
+        _enrich_watch(row, price, score_source, stock_basic, daily_basic)
+        for row in df.to_dict("records")
+    ]
     result = pd.DataFrame(enriched)
     return _attach_history_summary(result, history)
 
@@ -357,15 +362,32 @@ def _latest_local_trade_date(store: DuckDBStore) -> str:
     return datetime.now().strftime("%Y%m%d") if values.empty else str(values.max())
 
 
-def _enrich_watch(row: dict[str, Any], price: pd.DataFrame, scores: pd.DataFrame) -> dict[str, Any]:
+def _enrich_watch(
+    row: dict[str, Any],
+    price: pd.DataFrame,
+    scores: pd.DataFrame,
+    stock_basic: pd.DataFrame,
+    daily_basic: pd.DataFrame,
+) -> dict[str, Any]:
     ts_code = str(row.get("ts_code", ""))
     selection_date = str(row.get("selection_date", ""))
     latest_price = _latest_row(price, ts_code, "trade_date")
     latest_score = _latest_row(scores, ts_code, "trade_date")
+    latest_basic = _latest_row(daily_basic, ts_code, "trade_date")
+    stock_info = _latest_row(stock_basic, ts_code, "ts_code")
     total_score = _optional_float(latest_score.get("total_score"))
-    data_quality_note = _data_quality_note(row.get("data_quality_note"), total_score)
+    data_quality_note = _data_quality_note(
+        row.get("data_quality_note"),
+        total_score,
+        stock_info,
+        latest_basic,
+    )
     return {
         **row,
+        "industry": stock_info.get("industry") or latest_score.get("industry"),
+        "list_date": stock_info.get("list_date"),
+        "pe": _optional_float(latest_basic.get("pe")),
+        "pb": _optional_float(latest_basic.get("pb")),
         "latest_trade_date": latest_price.get("trade_date") or latest_score.get("trade_date") or selection_date,
         "latest_close": _optional_float(latest_price.get("close")),
         "total_score": total_score,
@@ -443,12 +465,27 @@ def _preserve_existing_text_fields(rows: list[dict[str, Any]], existing: pd.Data
     return rows
 
 
-def _data_quality_note(value: Any, total_score: float | None) -> str:
+def _data_quality_note(
+    value: Any,
+    total_score: float | None,
+    stock_info: dict[str, Any] | None = None,
+    latest_basic: dict[str, Any] | None = None,
+) -> str:
     note = _clean_text(value)
+    notes = [note] if note else []
     if total_score is None:
-        missing_score = "当前无可用综合评分"
-        return f"{note}；{missing_score}" if note else missing_score
-    return note
+        notes.append("当前无可用综合评分")
+    stock_info = stock_info or {}
+    latest_basic = latest_basic or {}
+    if not _clean_text(stock_info.get("industry")):
+        notes.append("industry 缺失")
+    if not _clean_text(stock_info.get("list_date")):
+        notes.append("list_date 缺失")
+    if _optional_float(latest_basic.get("pe")) is None:
+        notes.append("pe 缺失")
+    if _optional_float(latest_basic.get("pb")) is None:
+        notes.append("pb 缺失")
+    return "；".join(dict.fromkeys(notes))
 
 
 def _clean_text(value: Any) -> str:

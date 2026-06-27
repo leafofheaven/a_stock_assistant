@@ -24,6 +24,8 @@ class AKShareClient(StockDataSource):
         adjust: str = "qfq",
         curl_runner: Any | None = None,
         request_timeout_seconds: int = 30,
+        enable_basic_enrichment: bool = True,
+        enable_valuation_enrichment: bool = True,
     ) -> None:
         """Create an AKShare client.
 
@@ -32,11 +34,15 @@ class AKShareClient(StockDataSource):
             adjust: Adjustment mode for daily price calls that support it.
             curl_runner: Optional ``subprocess.run`` compatible callable for tests.
             request_timeout_seconds: Timeout for the system curl fallback.
+            enable_basic_enrichment: Whether to try optional basic-info enrichment.
+            enable_valuation_enrichment: Whether to try optional valuation enrichment.
         """
         self._akshare = akshare_module
         self.adjust = adjust
         self._curl_runner = curl_runner or subprocess.run
         self.request_timeout_seconds = request_timeout_seconds
+        self.enable_basic_enrichment = enable_basic_enrichment
+        self.enable_valuation_enrichment = enable_valuation_enrichment
         self.failure_records: list[dict[str, str]] = []
 
     def get_stock_basic(self) -> pd.DataFrame:
@@ -77,6 +83,8 @@ class AKShareClient(StockDataSource):
         result = hist[["ts_code", "trade_date", "turnover_rate"]].copy()
         for column in ["volume_ratio", "pe", "pb", "ps", "total_mv", "circ_mv"]:
             result[column] = pd.NA
+        if self.enable_valuation_enrichment and symbols:
+            result = self._merge_valuation_enrichment(result, symbols, start_date, end_date)
         return result[
             ["ts_code", "trade_date", "turnover_rate", "volume_ratio", "pe", "pb", "ps", "total_mv", "circ_mv"]
         ]
@@ -106,6 +114,41 @@ class AKShareClient(StockDataSource):
         """Return daily price data from AKShare for all or selected symbols."""
         return self._call_market_data("stock_zh_a_hist", start_date, end_date, symbols)
 
+    def enrich_stock_basic(self, stock_basic: pd.DataFrame, symbols: list[str] | None = None) -> pd.DataFrame:
+        """Fill optional stock_basic fields from AKShare when stable endpoints are available.
+
+        The enrichment is best-effort. If an AKShare endpoint is unavailable or
+        fails for one symbol, that symbol keeps the original basic information
+        and the failure is recorded for diagnostics.
+        """
+        if not self.enable_basic_enrichment or stock_basic.empty:
+            return stock_basic
+        result = stock_basic.copy()
+        if "ts_code" not in result.columns:
+            return result
+        symbol_list = symbols or result["ts_code"].dropna().astype(str).tolist()
+        for symbol in symbol_list:
+            ts_code = _to_ts_code(symbol)
+            try:
+                info = self._call_raw("stock_individual_info_em", symbol=_normalize_symbol(symbol))
+            except DataSourceError as exc:
+                self._record_failure(ts_code, "stock_basic_enrichment", str(exc))
+                logger.warning("AKShare basic enrichment failed for %s: %s", symbol, exc)
+                continue
+            values = _parse_individual_info(info)
+            if not values:
+                continue
+            mask = result["ts_code"].astype(str) == ts_code
+            if not mask.any():
+                continue
+            for column in ["area", "industry", "market", "list_date", "delist_date", "is_hs"]:
+                value = values.get(column)
+                if value not in {None, ""}:
+                    result.loc[mask, column] = value
+            if (result.loc[mask, "market"].isna() | (result.loc[mask, "market"].astype(str).str.strip() == "")).any():
+                result.loc[mask, "market"] = _market_from_ts_code(ts_code)
+        return result
+
     def _module(self) -> Any:
         """Return the underlying AKShare module."""
         if self._akshare is not None:
@@ -121,6 +164,12 @@ class AKShareClient(StockDataSource):
 
     def _call(self, function_name: str, **kwargs: Any) -> pd.DataFrame:
         """Call an AKShare function and validate that it returns a DataFrame."""
+        result = self._call_raw(function_name, **kwargs)
+        logger.info("Fetched %s rows from AKShare function %s.", len(result), function_name)
+        return _standardize_fields(function_name, result)
+
+    def _call_raw(self, function_name: str, **kwargs: Any) -> pd.DataFrame:
+        """Call an AKShare function and return the raw DataFrame."""
         try:
             function = getattr(self._module(), function_name)
             result = function(**kwargs)
@@ -136,8 +185,68 @@ class AKShareClient(StockDataSource):
         if not isinstance(result, pd.DataFrame):
             raise DataSourceError(f"AKShare call did not return a DataFrame: {function_name}")
 
-        logger.info("Fetched %s rows from AKShare function %s.", len(result), function_name)
-        return _standardize_fields(function_name, result)
+        return result
+
+    def _merge_valuation_enrichment(
+        self,
+        daily_basic: pd.DataFrame,
+        symbols: list[str],
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
+        """Merge optional PE/PB and market-cap data into derived daily_basic rows."""
+        if daily_basic.empty:
+            return daily_basic
+        frames: list[pd.DataFrame] = []
+        for symbol in symbols:
+            ts_code = _to_ts_code(symbol)
+            try:
+                raw = self._call("stock_a_lg_indicator", symbol=_normalize_symbol(symbol))
+            except DataSourceError as exc:
+                self._record_failure(ts_code, "daily_basic_valuation_enrichment", str(exc))
+                logger.warning("AKShare valuation enrichment failed for %s: %s", symbol, exc)
+                continue
+            if raw.empty:
+                continue
+            if "trade_date" in raw.columns:
+                raw = raw[
+                    (raw["trade_date"].astype(str) >= start_date)
+                    & (raw["trade_date"].astype(str) <= end_date)
+                ].copy()
+            else:
+                raw["trade_date"] = end_date
+            raw["ts_code"] = ts_code
+            frames.append(raw)
+        if not frames:
+            return daily_basic
+        valuation = pd.concat(frames, ignore_index=True)
+        merge_columns = ["ts_code", "trade_date", "pe", "pb", "ps", "total_mv", "circ_mv", "volume_ratio"]
+        for column in merge_columns:
+            if column not in valuation.columns:
+                valuation[column] = pd.NA
+        merged = daily_basic.merge(
+            valuation[merge_columns],
+            on=["ts_code", "trade_date"],
+            how="left",
+            suffixes=("", "_enriched"),
+        )
+        for column in ["pe", "pb", "ps", "total_mv", "circ_mv", "volume_ratio"]:
+            enriched = f"{column}_enriched"
+            if enriched in merged.columns:
+                merged[column] = merged[enriched].combine_first(merged[column])
+                merged = merged.drop(columns=[enriched])
+        return merged
+
+    def _record_failure(self, symbol: str, stage: str, message: str) -> None:
+        """Record one symbol-level failure for batch diagnostics."""
+        self.failure_records.append(
+            {
+                "symbol": _to_ts_code(symbol),
+                "provider": "akshare",
+                "failed_stage": stage,
+                "error_message": message,
+            }
+        )
 
     def _call_market_data(
         self,
@@ -295,6 +404,7 @@ def _standardize_fields(function_name: str, df: pd.DataFrame) -> pd.DataFrame:
         for column in ["area", "industry", "market", "list_date", "delist_date", "is_hs"]:
             if column not in result.columns:
                 result[column] = pd.NA
+        result["market"] = result["market"].combine_first(result["ts_code"].map(_market_from_ts_code))
         return result[
             ["ts_code", "symbol", "name", "area", "industry", "market", "list_date", "delist_date", "is_hs"]
         ]
@@ -369,7 +479,26 @@ def _standardize_fields(function_name: str, df: pd.DataFrame) -> pd.DataFrame:
         ]
 
     if function_name == "stock_a_lg_indicator":
-        result = result.rename(columns={"date": "trade_date", "code": "symbol"})
+        result = result.rename(
+            columns={
+                "date": "trade_date",
+                "日期": "trade_date",
+                "code": "symbol",
+                "股票代码": "symbol",
+                "pe": "pe",
+                "市盈率": "pe",
+                "pb": "pb",
+                "市净率": "pb",
+                "ps": "ps",
+                "市销率": "ps",
+                "total_mv": "total_mv",
+                "总市值": "total_mv",
+                "circ_mv": "circ_mv",
+                "流通市值": "circ_mv",
+                "volume_ratio": "volume_ratio",
+                "量比": "volume_ratio",
+            }
+        )
         if "ts_code" not in result.columns and "symbol" in result.columns:
             result["ts_code"] = result["symbol"].map(_to_ts_code)
         if "trade_date" in result.columns:
@@ -406,6 +535,66 @@ def _to_eastmoney_secid(symbol: str) -> str:
 def _to_eastmoney_adjust(adjust: str) -> str:
     """Map AKShare adjustment names to Eastmoney fqt values."""
     return {"qfq": "1", "hfq": "2"}.get(adjust, "0")
+
+
+def _market_from_ts_code(ts_code: str) -> str:
+    """Return a compact market label inferred from ts_code."""
+    code = str(ts_code)
+    return "上交所" if code.endswith(".SH") else "深交所"
+
+
+def _parse_individual_info(df: pd.DataFrame) -> dict[str, Any]:
+    """Parse AKShare stock_individual_info_em rows into stock_basic fields."""
+    if df.empty:
+        return {}
+    item_col = _first_existing(df, ["item", "项目", "指标"])
+    value_col = _first_existing(df, ["value", "值", "数值"])
+    if not item_col or not value_col:
+        return {}
+    raw = {
+        str(row.get(item_col, "")).strip(): row.get(value_col)
+        for row in df.to_dict("records")
+    }
+    industry = _first_value(raw, ["行业", "所属行业", "行业分类"])
+    area = _first_value(raw, ["地区", "地域", "省份"])
+    market = _first_value(raw, ["市场", "交易所", "上市地点"])
+    list_date = _clean_date(_first_value(raw, ["上市时间", "上市日期", "上市日"]))
+    return {
+        "area": area,
+        "industry": industry,
+        "market": market,
+        "list_date": list_date,
+        "delist_date": _clean_date(_first_value(raw, ["退市日期", "摘牌日期"])),
+        "is_hs": _first_value(raw, ["是否沪深港通", "沪深港通"]),
+    }
+
+
+def _first_existing(df: pd.DataFrame, columns: list[str]) -> str | None:
+    """Return the first existing column name."""
+    for column in columns:
+        if column in df.columns:
+            return column
+    return None
+
+
+def _first_value(mapping: dict[str, Any], keys: list[str]) -> Any:
+    """Return the first non-empty value for candidate keys."""
+    for key in keys:
+        value = mapping.get(key)
+        if value not in {None, ""} and not pd.isna(value):
+            return value
+    return pd.NA
+
+
+def _clean_date(value: Any) -> Any:
+    """Normalize provider dates to YYYYMMDD strings when possible."""
+    if value is None or pd.isna(value):
+        return pd.NA
+    text = str(value).strip()
+    if not text:
+        return pd.NA
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits[:8] if len(digits) >= 8 else text
 
 
 def _to_number(value: Any) -> float | None:

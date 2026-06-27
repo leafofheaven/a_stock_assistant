@@ -37,6 +37,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task24": check_task24,
         "task25": check_task25,
         "task26": check_task26,
+        "task27": check_task27,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1146,6 +1147,57 @@ def check_task26(root: Path) -> list[str]:
     return failures
 
 
+def check_task27(root: Path) -> list[str]:
+    """Check Task 27 real basic and fundamental data enrichment."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/diagnose_data_quality.py",
+            "tests/test_real_basic_fundamental_data.py",
+            "README.md",
+            "docs/usage_guide.md",
+            "docs/commands_reference.md",
+            "docs/troubleshooting.md",
+        ],
+    )
+    config_source = read_source(root / "app/config.py")
+    env_example = read_source(root / ".env.example")
+    for phrase in ["ENABLE_REAL_BASIC_ENRICHMENT", "ENABLE_REAL_VALUATION_ENRICHMENT"]:
+        if phrase not in config_source:
+            failures.append(f"app/config.py is missing {phrase}.")
+        if phrase not in env_example:
+            failures.append(f".env.example is missing {phrase}.")
+
+    akshare_source = read_source(root / "core/data_sources/akshare_client.py")
+    for phrase in ["enrich_stock_basic", "stock_individual_info_em", "stock_a_lg_indicator", "push2his.eastmoney.com"]:
+        if phrase not in akshare_source:
+            failures.append(f"AKShare enrichment/fallback is missing {phrase}.")
+
+    diagnose_source = read_source(root / "core/jobs/diagnose_data_quality.py")
+    for phrase in ["stock_basic_completeness", "daily_basic_completeness", "fundamental_score", "pe", "pb"]:
+        if phrase not in diagnose_source:
+            failures.append(f"diagnose_data_quality.py is missing {phrase}.")
+
+    readme = read_source(root / "README.md")
+    for phrase in ["diagnose_data_quality", "ENABLE_REAL_BASIC_ENRICHMENT", "ENABLE_REAL_VALUATION_ENRICHMENT"]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+    commands = read_source(root / "docs/commands_reference.md")
+    if "python -m core.jobs.diagnose_data_quality" not in commands:
+        failures.append("docs/commands_reference.md is missing diagnose_data_quality command.")
+
+    if "docs/usage_guide.md" not in readme:
+        failures.append("Task 26 documentation links must remain in README.md.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+
+    tests_source = read_source(root / "tests/test_real_basic_fundamental_data.py").lower()
+    for phrase in ["temporary duckdb", "mock", "industry", "list_date", "pe", "pb", "diagnose_data_quality", "streamlit"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_real_basic_fundamental_data.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1203,6 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
             "task24",
             "task25",
             "task26",
+            "task27",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

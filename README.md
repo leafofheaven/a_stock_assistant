@@ -31,6 +31,7 @@ python -m pytest
 python scripts/check_project.py
 python scripts/check_task.py task11
 python scripts/check_task.py task26
+python scripts/check_task.py task27
 ```
 
 ## 常用命令
@@ -40,6 +41,7 @@ python -m core.jobs.diagnose_local_state
 python -m core.jobs.update_real_data
 python -m core.jobs.diagnose_real_data
 python -m core.jobs.diagnose_update_batch
+python -m core.jobs.diagnose_data_quality
 python -m core.jobs.diagnose_factors
 python -m core.jobs.run_daily_selection
 python -m core.jobs.diagnose_backtest
@@ -73,6 +75,7 @@ python -m core.jobs.run_real_workflow --skip-update
 - 真实因子结果校验：`python -m core.jobs.diagnose_factors`
 - 真实回测结果校验：`python -m core.jobs.diagnose_backtest`
 - 真实股票样本扩容与批量更新：`REAL_UNIVERSE_PRESET=small`，`python -m core.jobs.diagnose_update_batch`
+- 基础信息与估值字段补全：`ENABLE_REAL_BASIC_ENRICHMENT=true`，`ENABLE_REAL_VALUATION_ENRICHMENT=true`，`python -m core.jobs.diagnose_data_quality`
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
@@ -99,6 +102,8 @@ streamlit run web/streamlit_app.py
 ## 当前限制
 
 - 默认只做小范围真实数据试运行，不做全市场长周期下载。
-- AKShare fallback 的字段完整性可能弱于 Tushare，`pe` / `pb` 可能为空，`adj_factor` 可能简化为 `1.0`。
+- AKShare fallback 的字段完整性可能弱于 Tushare。默认会尝试补全 `stock_basic` 的行业、上市日期，以及 `daily_basic` 的 `pe` / `pb` / 市值字段；获取不到时允许为空，可用 `python -m core.jobs.diagnose_data_quality` 查看完整率。
+- 可在 `.env` 中用 `ENABLE_REAL_BASIC_ENRICHMENT=false` 或 `ENABLE_REAL_VALUATION_ENRICHMENT=false` 关闭补全；关闭后会保持简化逻辑。
+- `pe` / `pb` 仍可能为空，`adj_factor` 可能简化为 `1.0`；`fundamental_score` 为空时先看 `diagnose_data_quality` 和 `diagnose_factors` 的数据质量提示。
 - 本项目不接券商，不自动交易。
 - `.env`、`data/`、`reports/`、`backups/` 为本地个人数据，不应提交到 Git。

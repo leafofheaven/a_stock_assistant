@@ -300,7 +300,11 @@ def test_akshare_all_symbol_failures_return_clear_failure(tmp_path: Path) -> Non
 
 def test_eastmoney_curl_fallback_builds_daily_price_when_akshare_fails() -> None:
     """Curl fallback should parse Eastmoney klines after AKShare history fails."""
-    client = AKShareClient(akshare_module=FullyFailingAKShareModule(), curl_runner=successful_eastmoney_curl)
+    client = AKShareClient(
+        akshare_module=FullyFailingAKShareModule(),
+        curl_runner=successful_eastmoney_curl,
+        enable_valuation_enrichment=False,
+    )
 
     daily_price = client.get_daily_price("20240101", "20240105", ["000001"])
 
@@ -338,7 +342,11 @@ def test_eastmoney_curl_fallback_uses_expected_secids() -> None:
 
 def test_eastmoney_curl_fallback_builds_daily_basic() -> None:
     """Daily basic should derive turnover_rate from Eastmoney klines."""
-    client = AKShareClient(akshare_module=FullyFailingAKShareModule(), curl_runner=successful_eastmoney_curl)
+    client = AKShareClient(
+        akshare_module=FullyFailingAKShareModule(),
+        curl_runner=successful_eastmoney_curl,
+        enable_valuation_enrichment=False,
+    )
 
     daily_basic = client.get_daily_basic("20240101", "20240105", ["000001"])
 

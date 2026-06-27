@@ -142,6 +142,7 @@ python -m core.jobs.update_real_data
 ```bash
 python -m core.jobs.diagnose_real_data
 python -m core.jobs.diagnose_factors
+python -m core.jobs.diagnose_data_quality
 ```
 
 处理命令：先补真实数据，再运行：
@@ -174,15 +175,42 @@ REAL_UNIVERSE_PRESET=small
 
 现象：基本面分项为空或偏低。
 
-原因：AKShare fallback 不保证 PE/PB 字段完整。
+原因：AKShare fallback 不保证 PE/PB 字段完整；补全接口失败或样本股票缺少估值记录时也会为空。
 
 检查命令：
 
 ```bash
+python -m core.jobs.diagnose_data_quality
 python -m core.jobs.diagnose_factors
 ```
 
-处理命令：这是当前 AKShare 小范围验证的已知限制。
+处理命令：确认 `.env` 中开启补全后重新更新数据：
+
+```env
+ENABLE_REAL_BASIC_ENRICHMENT=true
+ENABLE_REAL_VALUATION_ENRICHMENT=true
+```
+
+```bash
+python -m core.jobs.update_real_data
+```
+
+如果仍为空，这是当前 AKShare 小范围验证的已知限制，流程不会因此崩溃。
+
+## fundamental_score 为空
+
+现象：因子诊断中 `fundamental_score` 非空率为 0。
+
+原因：通常是 `daily_basic` 缺失，或 `pe` / `pb` 缺失。
+
+检查命令：
+
+```bash
+python -m core.jobs.diagnose_data_quality
+python -m core.jobs.diagnose_factors
+```
+
+处理命令：先补数据；仍缺失时按数据质量提示人工复核，不影响其他分项和总流程。
 
 ## total_score=None
 

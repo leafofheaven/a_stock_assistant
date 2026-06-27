@@ -143,8 +143,18 @@ def _run_provider_update(
     try:
         resolved_store.initialize()
         before_rows = _table_row_counts(resolved_store)
+        stock_basic = _filter_stock_basic(client.get_stock_basic(), sample_symbols)
+        if (
+            provider_name == "akshare"
+            and getattr(settings, "enable_real_basic_enrichment", True)
+            and hasattr(client, "enrich_stock_basic")
+        ):
+            try:
+                stock_basic = client.enrich_stock_basic(stock_basic, sample_symbols)  # type: ignore[attr-defined]
+            except Exception:
+                pass
         frames = {
-            "stock_basic": _filter_stock_basic(client.get_stock_basic(), sample_symbols),
+            "stock_basic": stock_basic,
             "trade_calendar": _filter_date_range(
                 client.get_trade_calendar(),
                 "cal_date",

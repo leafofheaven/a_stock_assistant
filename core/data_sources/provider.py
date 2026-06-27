@@ -54,6 +54,8 @@ def select_data_provider(
             or AKShareClient(
                 adjust=resolved_settings.akshare_adjust,
                 request_timeout_seconds=getattr(resolved_settings, "real_request_timeout_seconds", 30),
+                enable_basic_enrichment=getattr(resolved_settings, "enable_real_basic_enrichment", True),
+                enable_valuation_enrichment=getattr(resolved_settings, "enable_real_valuation_enrichment", True),
             ),
             message="使用 AKShare 数据源。",
         )
@@ -64,6 +66,8 @@ def select_data_provider(
         fallback = fallback_client or AKShareClient(
             adjust=resolved_settings.akshare_adjust,
             request_timeout_seconds=getattr(resolved_settings, "real_request_timeout_seconds", 30),
+            enable_basic_enrichment=getattr(resolved_settings, "enable_real_basic_enrichment", True),
+            enable_valuation_enrichment=getattr(resolved_settings, "enable_real_valuation_enrichment", True),
         )
         fallback_name = "akshare"
 

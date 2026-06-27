@@ -29,6 +29,9 @@ SELECTION_COLUMNS = [
     "ts_code",
     "name",
     "industry",
+    "list_date",
+    "pe",
+    "pb",
     "total_score",
     "trend_score",
     "momentum_score",
@@ -125,6 +128,10 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     strategy_result = tables.get("strategy_result", pd.DataFrame())
     data_source = str(tables.get("_data_source", ""))
     factor_missing = summarize_factor_missing(factor_scores)
+    basic_quality = summarize_basic_data_quality(
+        tables.get("stock_basic", pd.DataFrame()),
+        tables.get("daily_basic", pd.DataFrame()),
+    )
     configured_count = int(tables.get("_configured_symbol_count", 0) or 0)
     priced_count = int(tables.get("_priced_symbol_count", 0) or 0)
     coverage_rate = float(tables.get("_coverage_rate", 0.0) or 0.0)
@@ -147,6 +154,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
             if stats["nan_count"] > 0
         },
         "factor_missing": factor_missing,
+        "basic_quality": basic_quality,
         "configured_symbol_count": configured_count,
         "priced_symbol_count": priced_count,
         "coverage_rate": coverage_rate,
@@ -174,6 +182,33 @@ def summarize_factor_missing(factor_df: pd.DataFrame) -> dict[str, dict[str, flo
         result[column] = {
             "non_null_rate": float(non_null / row_count) if row_count else 0.0,
             "nan_count": int(row_count - non_null),
+        }
+    return result
+
+
+def summarize_basic_data_quality(
+    stock_basic: pd.DataFrame,
+    daily_basic: pd.DataFrame,
+) -> dict[str, dict[str, float | int]]:
+    """Summarize basic-info and valuation field completeness for dashboard display."""
+    return {
+        "stock_basic": _field_quality(stock_basic, ["name", "industry", "market", "list_date"]),
+        "daily_basic": _field_quality(daily_basic, ["turnover_rate", "pe", "pb", "total_mv", "circ_mv"]),
+    }
+
+
+def _field_quality(df: pd.DataFrame, fields: list[str]) -> dict[str, dict[str, float | int]]:
+    """Return non-null rate and missing count for dashboard fields."""
+    result: dict[str, dict[str, float | int]] = {}
+    row_count = len(df)
+    for field in fields:
+        if df.empty or field not in df.columns:
+            result[field] = {"non_null_rate": 0.0, "missing_count": row_count}
+            continue
+        non_null = int(df[field].apply(lambda value: not _is_missing(value)).sum())
+        result[field] = {
+            "non_null_rate": float(non_null / row_count) if row_count else 0.0,
+            "missing_count": int(row_count - non_null),
         }
     return result
 
@@ -365,7 +400,11 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
             dashboard_data.get("factor_scores", pd.DataFrame()),
         )
     with tabs[2]:
-        _render_factor_ranking_tab(st, dashboard_data.get("factor_scores", pd.DataFrame()))
+        _render_factor_ranking_tab(
+            st,
+            dashboard_data.get("factor_scores", pd.DataFrame()),
+            dashboard_data.get("daily_basic", pd.DataFrame()),
+        )
     with tabs[3]:
         _render_backtest_tab(st, dashboard_data.get("backtest", {}))
     with tabs[4]:
@@ -398,6 +437,10 @@ def _render_selection_tab(st: Any, selection_df: pd.DataFrame) -> None:
                     "fundamental_score": item.get("fundamental_score"),
                     "volatility_score": item.get("volatility_score"),
                     "total_score": item.get("total_score"),
+                    "industry": item.get("industry"),
+                    "list_date": item.get("list_date"),
+                    "pe": item.get("pe"),
+                    "pb": item.get("pb"),
                     "select_reason": item.get("select_reason"),
                     "risk_note": item.get("risk_note"),
                     "data_quality_note": item.get("risk_note") or "需结合数据来源与字段完整性人工复核。",
@@ -444,6 +487,10 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame) -> None:
         "notes",
         "latest_trade_date",
         "latest_close",
+        "industry",
+        "list_date",
+        "pe",
+        "pb",
         "total_score",
         "data_quality_note",
     ]
@@ -484,11 +531,27 @@ def _render_stock_detail_tab(
         st.dataframe(factors[[column for column in FACTOR_SCORE_COLUMNS if column in factors.columns]], use_container_width=True)
 
 
-def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame) -> None:
+def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame, daily_basic: pd.DataFrame | None = None) -> None:
     st.subheader("因子排名")
     if factor_df.empty:
         st.info("暂无因子评分数据。")
         return
+    basic_quality = summarize_basic_data_quality(
+        pd.DataFrame(),
+        daily_basic if isinstance(daily_basic, pd.DataFrame) else pd.DataFrame(),
+    )
+    valuation_quality = basic_quality.get("daily_basic", {})
+    if valuation_quality:
+        st.write("估值字段完整率")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {"field": field, "non_null_rate": stats["non_null_rate"], "missing_count": stats["missing_count"]}
+                    for field, stats in valuation_quality.items()
+                ]
+            ),
+            use_container_width=True,
+        )
     missing = summarize_factor_missing(factor_df)
     if missing:
         st.write("因子非空率")
@@ -547,6 +610,21 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.metric("缺数据股票数量", status["missing_symbol_count"])
     st.write({"覆盖率": f"{status['coverage_rate']:.2%}"})
     st.write({"是否 sample 数据": status["is_sample_data"], "是否真实数据": status["is_real_data"]})
+    basic_quality = status.get("basic_quality", {})
+    if basic_quality:
+        st.write("基础信息 / 估值字段完整率")
+        quality_rows = []
+        for group_name, group in basic_quality.items():
+            for field, stats in group.items():
+                quality_rows.append(
+                    {
+                        "table": group_name,
+                        "field": field,
+                        "non_null_rate": stats["non_null_rate"],
+                        "missing_count": stats["missing_count"],
+                    }
+                )
+        st.dataframe(pd.DataFrame(quality_rows), use_container_width=True)
     local_state = status.get("local_state")
     if isinstance(local_state, dict) and local_state:
         st.write("本地状态 / 备份")
@@ -615,6 +693,9 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             "review_status",
             "reason",
             "notes",
+            "industry",
+            "pe",
+            "pb",
             "latest_action_at",
             "history_count",
         ]
@@ -701,7 +782,7 @@ def _watchlist_from_tables(tables: dict[str, Any]) -> pd.DataFrame:
     if not isinstance(history, pd.DataFrame) or history.empty:
         watchlist["latest_action_at"] = pd.NA
         watchlist["history_count"] = 0
-        return watchlist
+        return _attach_basic_fields_for_dashboard(watchlist, tables)
     rows = []
     grouped = {str(code): df.sort_values("created_at") for code, df in history.groupby("ts_code")}
     for item in watchlist.to_dict("records"):
@@ -715,7 +796,24 @@ def _watchlist_from_tables(tables: dict[str, Any]) -> pd.DataFrame:
                 "history_count": int(len(current)),
             }
         )
-    return pd.DataFrame(rows)
+    return _attach_basic_fields_for_dashboard(pd.DataFrame(rows), tables)
+
+
+def _attach_basic_fields_for_dashboard(watchlist: pd.DataFrame, tables: dict[str, Any]) -> pd.DataFrame:
+    """Attach stock_basic and latest daily_basic fields for status display."""
+    if watchlist.empty or "ts_code" not in watchlist.columns:
+        return watchlist
+    result = watchlist.copy()
+    stock_basic = tables.get("stock_basic", pd.DataFrame())
+    if isinstance(stock_basic, pd.DataFrame) and not stock_basic.empty and "ts_code" in stock_basic.columns:
+        basic_cols = [column for column in ["ts_code", "industry", "list_date"] if column in stock_basic.columns]
+        result = result.merge(stock_basic[basic_cols].drop_duplicates("ts_code"), on="ts_code", how="left")
+    daily_basic = tables.get("daily_basic", pd.DataFrame())
+    if isinstance(daily_basic, pd.DataFrame) and not daily_basic.empty and {"ts_code", "trade_date"}.issubset(daily_basic.columns):
+        latest = daily_basic.sort_values("trade_date").groupby("ts_code").tail(1)
+        basic_cols = [column for column in ["ts_code", "pe", "pb"] if column in latest.columns]
+        result = result.merge(latest[basic_cols], on="ts_code", how="left")
+    return result
 
 
 def _load_tracking_snapshot_for_dashboard(store: Any) -> pd.DataFrame:
@@ -768,6 +866,18 @@ def _format_optional_rate(value: Any) -> str:
     if value is None or pd.isna(value):
         return "暂无"
     return f"{float(value):.2%}"
+
+
+def _is_missing(value: Any) -> bool:
+    """Return whether a dashboard value should be treated as missing."""
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip() == ""
 
 
 def _workflow_status_message(report: Any) -> str:
