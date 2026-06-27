@@ -14,6 +14,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.sample_data import get_sample_dashboard_data
+from core.reporting.selection_review_report import (
+    REVIEW_CHECKLIST,
+    load_latest_selection_review_report,
+)
 from core.reporting.workflow_report import load_latest_workflow_report
 
 SELECTION_COLUMNS = [
@@ -122,6 +126,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     coverage_rate = float(tables.get("_coverage_rate", 0.0) or 0.0)
     missing_count = int(tables.get("_missing_symbol_count", 0) or 0)
     latest_workflow_report = tables.get("_latest_workflow_report")
+    latest_selection_review_report = tables.get("_latest_selection_review_report")
     return {
         "latest_price_date": _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
@@ -141,6 +146,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "table_rows": {name: len(df) for name, df in tables.items() if isinstance(df, pd.DataFrame)},
         "last_job_status": _workflow_status_message(latest_workflow_report),
         "latest_workflow_report": latest_workflow_report,
+        "latest_selection_review_report": latest_selection_review_report,
     }
 
 
@@ -188,6 +194,7 @@ def load_dashboard_data() -> dict[str, Any]:
     if settings.data_provider == "sample":
         data = sample_dashboard_data()
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         return data
 
     store = DuckDBStore(settings.duckdb_path)
@@ -195,6 +202,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实 DuckDB 文件不存在）"
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         return data
 
     try:
@@ -210,6 +218,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实数据读取失败）"
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         return data
 
     if tables["strategy_result"].empty:
@@ -219,9 +228,11 @@ def load_dashboard_data() -> dict[str, Any]:
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实选股结果不足）"
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         return data
 
     tables["_latest_workflow_report"] = load_latest_workflow_report()
+    tables["_latest_selection_review_report"] = load_latest_selection_review_report()
     return {
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
         "selection": tables["strategy_result"],
@@ -256,6 +267,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_coverage_rate"] = batch_diagnostic.get("coverage_rate", 0.0)
     real_tables["_missing_symbol_count"] = len(batch_diagnostic.get("missing_symbols", []))
     real_tables["_latest_workflow_report"] = load_latest_workflow_report()
+    real_tables["_latest_selection_review_report"] = load_latest_selection_review_report()
     backtest_result = dict(backtest_diagnostic.get("backtest_result", {}))
     backtest_result["data_quality_notes"] = backtest_diagnostic.get("data_quality_notes", [])
     return {
@@ -317,6 +329,26 @@ def _render_selection_tab(st: Any, selection_df: pd.DataFrame) -> None:
     sort_descending = st.checkbox("按综合分从高到低排序", value=True)
     filtered = filter_selection_data(selection_df, industry, sort_descending)
     st.dataframe(filtered, use_container_width=True)
+    st.write("候选股票详情")
+    for item in filtered.head(10).to_dict("records"):
+        title = f"{item.get('rank')}. {item.get('ts_code')} {item.get('name')}"
+        with st.expander(title):
+            st.write(
+                {
+                    "trend_score": item.get("trend_score"),
+                    "momentum_score": item.get("momentum_score"),
+                    "liquidity_score": item.get("liquidity_score"),
+                    "fundamental_score": item.get("fundamental_score"),
+                    "volatility_score": item.get("volatility_score"),
+                    "total_score": item.get("total_score"),
+                    "select_reason": item.get("select_reason"),
+                    "risk_note": item.get("risk_note"),
+                    "data_quality_note": item.get("risk_note") or "需结合数据来源与字段完整性人工复核。",
+                }
+            )
+            st.write("人工复核要点")
+            for checklist_item in REVIEW_CHECKLIST:
+                st.write(f"- {checklist_item}")
     st.download_button("导出 CSV", dataframe_to_csv(filtered), file_name="selection.csv", mime="text/csv")
 
 
@@ -433,6 +465,19 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
                 "候选股票数量": report.get("candidate_count", 0),
                 "是否回退 sample": bool(report.get("fallback_to_sample")),
                 "报告路径": report.get("path"),
+            }
+        )
+    selection_review = status.get("latest_selection_review_report")
+    if selection_review:
+        st.write("最近 selection_review 报告")
+        st.write(
+            {
+                "最近运行时间": selection_review.get("generated_at") or "暂无",
+                "数据来源": selection_review.get("data_source") or "暂无",
+                "最新行情日期": selection_review.get("latest_price_date") or "暂无",
+                "候选股票数量": selection_review.get("candidate_count", 0),
+                "是否回退 sample": bool(selection_review.get("fallback_to_sample")),
+                "报告路径": selection_review.get("path"),
             }
         )
     st.info(status["last_job_status"])

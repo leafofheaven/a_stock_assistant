@@ -385,6 +385,56 @@ reports/
 
 限制：该工作流只封装已有本地命令，不新增选股策略、不新增因子、不接雪球、不接券商、不自动交易。AKShare fallback 数据字段有限，`pe` / `pb` 可能为空，`adj_factor` 可能简化为 `1.0`；`small` / `medium` 仍为样本级真实试运行，不是全市场生产级数据系统，不构成投资建议。
 
+## 候选股票人工复核清单与结果导出
+
+可以将当前候选股票导出为人工复核清单，帮助理解候选结果中的综合评分、因子分、原始因子和数据质量提示。该报告只用于研究和复核，不构成投资建议。
+
+单独导出候选复核报告：
+
+```bash
+python -m core.jobs.export_selection_review
+```
+
+导出前 10 只：
+
+```bash
+python -m core.jobs.export_selection_review --top-n 10
+```
+
+指定格式：
+
+```bash
+python -m core.jobs.export_selection_review --format markdown
+python -m core.jobs.export_selection_review --format json
+python -m core.jobs.export_selection_review --format csv
+python -m core.jobs.export_selection_review --format all
+```
+
+在完整工作流中导出：
+
+```bash
+python -m core.jobs.run_real_workflow --skip-update --export-selection-review
+```
+
+报告输出位置：
+
+```text
+reports/
+```
+
+`selection_review` 报告包含：
+
+- 候选股票；
+- 综合评分；
+- 因子分；
+- 原始因子；
+- 数据质量提示；
+- 入选原因摘要；
+- 人工复核要点；
+- 风险提示。
+
+限制：报告不构成投资建议，不自动交易，不提供目标价，不保证收益。AKShare fallback 数据字段有限，`pe` / `pb` 可能为空；`small` / `medium` 仍为样本级真实试运行。
+
 ## 前端启动命令
 
 请在项目根目录执行以下命令启动 Streamlit 页面：
