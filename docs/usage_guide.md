@@ -1,0 +1,192 @@
+# 完整使用说明
+
+本文档说明如何在本地使用 `a_stock_assistant`。所有命令默认从项目目录执行：
+
+```bash
+cd /Users/wanghao/Documents/股票
+source .venv/bin/activate
+```
+
+本项目是个人本地 A 股选股辅助工具，用于数据整理、因子观察、候选复核、观察池跟踪和本地复盘，不包含自动交易功能。
+
+## 项目目录
+
+- `app/`：配置模块。
+- `core/`：数据源、存储、因子、选股、回测、任务命令。
+- `web/`：Streamlit 页面。
+- `tests/`：自动测试。
+- `scripts/`：项目检查脚本。
+- `docs/`：使用文档。
+- `data/`：本地 DuckDB 数据库，默认不提交。
+- `reports/`：运行生成报告，默认不提交。
+- `backups/`：本地备份，默认不提交。
+
+## Python 虚拟环境
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+如需启动页面：
+
+```bash
+pip install -e .[app]
+```
+
+## .env 配置
+
+```bash
+cp .env.example .env
+```
+
+常用配置：
+
+```env
+DATA_PROVIDER=sample
+TUSHARE_TOKEN=
+DUCKDB_PATH=./data/a_stock_assistant.duckdb
+REAL_DATA_START_DATE=20240101
+REAL_DATA_END_DATE=
+REAL_UNIVERSE_PRESET=mini
+AKSHARE_SAMPLE_SYMBOLS=000001,600000,000002
+AKSHARE_ADJUST=qfq
+```
+
+`.env` 不应提交到 Git。`TUSHARE_TOKEN` 可以为空。
+
+## sample 数据模式
+
+sample 模式用于无真实数据时验证流程：
+
+```env
+DATA_PROVIDER=sample
+```
+
+运行：
+
+```bash
+python -m core.jobs.run_daily_selection
+streamlit run web/streamlit_app.py
+```
+
+## AKShare 真实数据模式
+
+```env
+DATA_PROVIDER=akshare
+REAL_DATA_START_DATE=20240101
+REAL_DATA_END_DATE=20240630
+AKSHARE_SAMPLE_SYMBOLS=000001,600000,000002
+AKSHARE_ADJUST=qfq
+```
+
+更新真实数据：
+
+```bash
+python -m core.jobs.update_real_data
+```
+
+AKShare 获取日线失败时，项目会在小范围样本上尝试系统 curl 请求东方财富 kline fallback。
+
+## REAL_UNIVERSE_PRESET
+
+当 `AKSHARE_SAMPLE_SYMBOLS` 为空时，可用预设样本：
+
+```env
+AKSHARE_SAMPLE_SYMBOLS=
+REAL_UNIVERSE_PRESET=mini
+```
+
+- `mini`：约 3 只。
+- `small`：约 30 只。
+- `medium`：约 100 只。
+
+如果 `AKSHARE_SAMPLE_SYMBOLS` 显式设置，则优先使用它。
+
+## 数据更新
+
+```bash
+python -m core.jobs.update_real_data
+python -m core.jobs.diagnose_real_data
+python -m core.jobs.diagnose_update_batch
+```
+
+`diagnose_real_data` 用于判断本地 DuckDB 是否足够运行选股。`diagnose_update_batch` 用于查看样本股票覆盖率。
+
+## 诊断、选股、因子和回测
+
+```bash
+python -m core.jobs.diagnose_factors
+python -m core.jobs.run_daily_selection
+python -m core.jobs.diagnose_backtest
+```
+
+`run_daily_selection` 会优先使用本地真实数据；真实数据不足时会清楚说明是否回退 sample。
+
+## 候选复核
+
+导出候选复核报告：
+
+```bash
+python -m core.jobs.export_selection_review --top-n 10 --format all
+```
+
+导出人工复核模板：
+
+```bash
+python -m core.jobs.export_review_template --top-n 10
+```
+
+导入复核结果：
+
+```bash
+python -m core.jobs.import_review_decisions --file reports/review_template_xxx.csv
+```
+
+## 观察池
+
+```bash
+python -m core.jobs.diagnose_watchlist
+python -m core.jobs.export_watchlist --format all
+python -m core.jobs.track_watchlist --export-report --format all
+python -m core.jobs.export_watchlist_tracking_report --format all
+```
+
+手动调整复核状态：
+
+```bash
+python -m core.jobs.update_review_decision --ts-code 002475.SZ --decision watch --reason "继续观察"
+python -m core.jobs.update_review_decision --ts-code 002475.SZ --archive --reason "归档观察"
+python -m core.jobs.diagnose_review_history --ts-code 002475.SZ
+```
+
+## 备份恢复
+
+```bash
+python -m core.jobs.diagnose_local_state
+python -m core.jobs.backup_local_data --label before_change
+python -m core.jobs.list_backups
+python -m core.jobs.restore_local_data --backup-dir backups/a_stock_backup_xxx --dry-run
+python -m core.jobs.restore_local_data --backup-dir backups/a_stock_backup_xxx --force
+python -m core.jobs.clean_generated_reports --dry-run
+```
+
+恢复默认 dry-run；只有加 `--force` 才会覆盖当前 DuckDB。
+
+## Streamlit 页面
+
+```bash
+streamlit run web/streamlit_app.py
+```
+
+页面用途：
+
+- 数据状态；
+- 今日选股；
+- 因子排名；
+- 回测诊断；
+- 候选复核；
+- 观察池；
+- 观察池跟踪；
+- 本地状态 / 备份提示。

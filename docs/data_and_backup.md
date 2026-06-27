@@ -1,0 +1,93 @@
+# 数据与备份
+
+所有命令默认先执行：
+
+```bash
+cd /Users/wanghao/Documents/股票
+source .venv/bin/activate
+```
+
+## 本地数据文件
+
+- `data/a_stock_assistant.duckdb`：核心本地数据库，包含行情、因子、选股结果、复核结果、观察池和历史记录。
+- `reports/`：运行生成报告，可重新生成。
+- `backups/`：本地备份目录。
+- `.env`：本地配置文件，可能包含 token，不应提交。
+
+`data/`、`reports/`、`backups/`、`.env` 都不应提交到 Git。
+
+## 诊断本地状态
+
+```bash
+python -m core.jobs.diagnose_local_state
+```
+
+重点看：
+
+- DuckDB 是否存在；
+- DuckDB 文件大小；
+- 核心表行数；
+- reports 文件数量；
+- backups 数量；
+- 是否发现本地数据路径被 Git 跟踪。
+
+## 创建备份
+
+```bash
+python -m core.jobs.backup_local_data --label before_change
+```
+
+包含 reports：
+
+```bash
+python -m core.jobs.backup_local_data --include-reports --label before_cleanup
+```
+
+备份不会保存 `.env` 原文或 token。
+
+## 查看备份
+
+```bash
+python -m core.jobs.list_backups
+```
+
+## 恢复 dry-run
+
+```bash
+python -m core.jobs.restore_local_data --backup-dir backups/a_stock_backup_xxx --dry-run
+```
+
+dry-run 会展示当前库和备份库表行数对比，不覆盖当前数据库。
+
+## 强制恢复
+
+```bash
+python -m core.jobs.restore_local_data --backup-dir backups/a_stock_backup_xxx --force
+```
+
+强制恢复前会自动创建 safety backup。
+
+## 清理报告
+
+先 dry-run：
+
+```bash
+python -m core.jobs.clean_generated_reports --dry-run
+```
+
+确认后删除系统生成报告：
+
+```bash
+python -m core.jobs.clean_generated_reports --force
+```
+
+清理命令只匹配系统生成报告，不删除用户自定义文件。
+
+## 确认没有误提交
+
+```bash
+git status
+git status --ignored --short reports data backups .env
+```
+
+如果看到 `!! data/`、`!! reports/`、`!! backups/`、`!! .env`，表示这些路径被忽略，没有进入提交。

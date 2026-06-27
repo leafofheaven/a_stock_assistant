@@ -36,6 +36,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task23": check_task23,
         "task24": check_task24,
         "task25": check_task25,
+        "task26": check_task26,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1079,6 +1080,72 @@ def check_task25(root: Path) -> list[str]:
     return failures
 
 
+def check_task26(root: Path) -> list[str]:
+    """Check Task 26 project documentation and usage guide."""
+    failures = check_paths(
+        root,
+        [
+            "docs/usage_guide.md",
+            "docs/commands_reference.md",
+            "docs/daily_workflow.md",
+            "docs/troubleshooting.md",
+            "docs/data_and_backup.md",
+            "tests/test_docs_and_usage_guide.py",
+            "README.md",
+        ],
+    )
+    readme = read_source(root / "README.md")
+    for phrase in [
+        "个人本地 A 股选股辅助工具",
+        "docs/usage_guide.md",
+        "docs/commands_reference.md",
+        "docs/daily_workflow.md",
+        "python -m core.jobs.run_real_workflow",
+        "streamlit run web/streamlit_app.py",
+    ]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    commands = read_source(root / "docs/commands_reference.md")
+    for phrase in [
+        "python -m core.jobs.update_real_data",
+        "python -m core.jobs.diagnose_real_data",
+        "python -m core.jobs.diagnose_update_batch",
+        "python -m core.jobs.diagnose_factors",
+        "python -m core.jobs.run_daily_selection",
+        "python -m core.jobs.diagnose_backtest",
+        "python -m core.jobs.run_real_workflow",
+        "python -m core.jobs.export_selection_review",
+        "python -m core.jobs.export_review_template",
+        "python -m core.jobs.import_review_decisions",
+        "python -m core.jobs.diagnose_watchlist",
+        "python -m core.jobs.export_watchlist",
+        "python -m core.jobs.track_watchlist",
+        "python -m core.jobs.export_watchlist_tracking_report",
+        "python -m core.jobs.update_review_decision",
+        "python -m core.jobs.diagnose_review_history",
+        "python -m core.jobs.diagnose_local_state",
+        "python -m core.jobs.backup_local_data",
+        "python -m core.jobs.list_backups",
+        "python -m core.jobs.restore_local_data",
+        "python -m core.jobs.clean_generated_reports",
+        "streamlit run web/streamlit_app.py",
+    ]:
+        if phrase not in commands:
+            failures.append(f"docs/commands_reference.md is missing {phrase}.")
+
+    troubleshooting = read_source(root / "docs/troubleshooting.md")
+    for phrase in ["AKShare 请求失败", "Clash Verge", "run_daily_selection 回退 sample", "restore_local_data 没有 --force 不会恢复"]:
+        if phrase not in troubleshooting:
+            failures.append(f"docs/troubleshooting.md is missing {phrase}.")
+
+    if "backup_local_data" not in read_source(root / "core/jobs/backup_local_data.py"):
+        failures.append("Task 25 backup_local_data must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1135,6 +1202,7 @@ def main(argv: list[str] | None = None) -> int:
             "task23",
             "task24",
             "task25",
+            "task26",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
