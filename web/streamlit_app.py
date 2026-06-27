@@ -232,6 +232,8 @@ def load_dashboard_data() -> dict[str, Any]:
             "factor_scores": store.read_table("factor_scores"),
             "strategy_result": store.read_table("strategy_result"),
             "backtest_result": store.read_table("backtest_result"),
+            "review_decisions": _safe_read_store_table(store, "review_decisions"),
+            "review_decision_history": _safe_read_store_table(store, "review_decision_history"),
         }
     except DuckDBStoreError:
         data = sample_dashboard_data()
@@ -308,6 +310,8 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_latest_review_template"] = template_metadata(latest_review_template_path())
     real_tables["_latest_watchlist_report"] = load_latest_watchlist_report()
     real_tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+    real_tables["review_decisions"] = _safe_read_store_table(store, "review_decisions")
+    real_tables["review_decision_history"] = _safe_read_store_table(store, "review_decision_history")
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
     real_tables["_watchlist_snapshot"] = watchlist_snapshot
     backtest_result = dict(backtest_diagnostic.get("backtest_result", {}))
@@ -574,6 +578,38 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     if watchlist_report:
         st.write("最近 watchlist 报告")
         st.write(watchlist_report)
+    watchlist_df = _watchlist_from_tables(tables)
+    if not watchlist_df.empty:
+        st.write("观察池当前状态")
+        watchlist_columns = [
+            "ts_code",
+            "name",
+            "decision",
+            "review_status",
+            "reason",
+            "notes",
+            "latest_action_at",
+            "history_count",
+        ]
+        available = [column for column in watchlist_columns if column in watchlist_df.columns]
+        st.dataframe(watchlist_df[available], use_container_width=True)
+    history_df = tables.get("review_decision_history", pd.DataFrame())
+    if isinstance(history_df, pd.DataFrame) and not history_df.empty:
+        st.write("最近复核历史")
+        history_display = history_df.sort_values("created_at", ascending=False).head(10)
+        history_columns = [
+            "created_at",
+            "ts_code",
+            "name",
+            "action_type",
+            "old_decision",
+            "new_decision",
+            "old_review_status",
+            "new_review_status",
+            "reason",
+        ]
+        available = [column for column in history_columns if column in history_display.columns]
+        st.dataframe(history_display[available], use_container_width=True)
     tracking_report = status.get("latest_watchlist_tracking_report")
     if tracking_report:
         st.write("最近 watchlist_tracking 报告")
@@ -607,6 +643,44 @@ def _load_watchlist_for_dashboard(store: Any) -> pd.DataFrame:
         return build_watchlist_dataframe(store, active_only=True)
     except Exception:
         return pd.DataFrame()
+
+
+def _safe_read_store_table(store: Any, table_name: str) -> pd.DataFrame:
+    """Read optional local DuckDB tables for the dashboard."""
+    try:
+        return store.read_table(table_name)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _watchlist_from_tables(tables: dict[str, Any]) -> pd.DataFrame:
+    """Return active watchlist rows enriched with local history metadata."""
+    reviews = tables.get("review_decisions", pd.DataFrame())
+    if not isinstance(reviews, pd.DataFrame) or reviews.empty:
+        return pd.DataFrame()
+    watchlist = reviews[
+        (reviews["decision"].astype(str) == "watch")
+        & (reviews["review_status"].fillna("active").astype(str) == "active")
+    ].copy()
+    history = tables.get("review_decision_history", pd.DataFrame())
+    if not isinstance(history, pd.DataFrame) or history.empty:
+        watchlist["latest_action_at"] = pd.NA
+        watchlist["history_count"] = 0
+        return watchlist
+    rows = []
+    grouped = {str(code): df.sort_values("created_at") for code, df in history.groupby("ts_code")}
+    for item in watchlist.to_dict("records"):
+        current = grouped.get(str(item.get("ts_code")), pd.DataFrame())
+        latest = current.iloc[-1].to_dict() if not current.empty else {}
+        rows.append(
+            {
+                **item,
+                "latest_action_at": latest.get("created_at"),
+                "latest_action_type": latest.get("action_type"),
+                "history_count": int(len(current)),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _load_tracking_snapshot_for_dashboard(store: Any) -> pd.DataFrame:

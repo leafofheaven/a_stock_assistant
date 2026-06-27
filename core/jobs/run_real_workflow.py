@@ -11,6 +11,7 @@ from app.config import Settings, get_settings
 from core.jobs.diagnose_backtest import diagnose_backtest
 from core.jobs.diagnose_factors import diagnose_factors
 from core.jobs.diagnose_real_data import diagnose_real_data
+from core.jobs.diagnose_review_history import diagnose_review_history
 from core.jobs.diagnose_update_batch import diagnose_update_batch
 from core.jobs.export_review_template import export_review_template
 from core.jobs.export_selection_review import export_selection_review
@@ -41,6 +42,7 @@ def run_real_workflow(
     export_watchlist_report: bool = False,
     track_watchlist_enabled: bool = False,
     export_watchlist_tracking_report_enabled: bool = False,
+    diagnose_review_history_enabled: bool = False,
     quiet: bool = False,
     settings: Settings | None = None,
     step_overrides: dict[str, Callable[[], dict[str, Any]]] | None = None,
@@ -187,6 +189,20 @@ def run_real_workflow(
             lambda: summarize_review_decisions(DuckDBStore(resolved_settings.duckdb_path)),
         ),
     )
+    if diagnose_review_history_enabled:
+        steps["diagnose_review_history"] = _run_step(
+            "diagnose_review_history",
+            overrides.get(
+                "diagnose_review_history",
+                lambda: diagnose_review_history(settings=resolved_settings, limit=10),
+            ),
+        )
+    else:
+        steps["diagnose_review_history"] = {
+            "status": "skipped",
+            "message": "--diagnose-review-history not enabled.",
+            "result": {"message": "已跳过复核历史诊断。"},
+        }
 
     finished_at = datetime.now()
     overall_status = _overall_status(steps)
@@ -241,6 +257,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Also export watchlist tracking change reports.",
     )
+    parser.add_argument(
+        "--diagnose-review-history",
+        action="store_true",
+        help="Also diagnose review decision history.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Reduce console output.")
     args = parser.parse_args(argv)
 
@@ -254,6 +275,7 @@ def main(argv: list[str] | None = None) -> None:
         export_watchlist_report=args.export_watchlist,
         track_watchlist_enabled=args.track_watchlist,
         export_watchlist_tracking_report_enabled=args.export_watchlist_tracking,
+        diagnose_review_history_enabled=args.diagnose_review_history,
         quiet=args.quiet,
     )
 
@@ -293,6 +315,8 @@ def _infer_status(name: str, result: dict[str, Any]) -> str:
     if name == "export_watchlist_tracking":
         return "success" if result.get("generated_files") else "partial_success"
     if name == "review_decisions":
+        return "success"
+    if name == "diagnose_review_history":
         return "success"
     return "success"
 

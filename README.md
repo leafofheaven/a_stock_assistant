@@ -528,6 +528,49 @@ python -m core.jobs.run_real_workflow --skip-update --track-watchlist --export-w
 
 限制：观察池变化报告仅用于人工复核和数据质量检查，不构成投资建议，不提供价格预期，不作收益承诺，不包含交易执行指令。AKShare fallback 数据字段有限，`pe` / `pb` 可能为空；`adj_factor` 可能简化为 1.0。
 
+## 观察池状态调整与复核记录管理
+
+`review_decision_history` 表用于保存观察池状态调整历史。每次通过命令修改 `review_decisions` 当前状态时，会追加一条历史记录，便于后续复盘。
+
+修改观察状态：
+
+```bash
+python -m core.jobs.update_review_decision --ts-code 002475.SZ --decision watch --reason "继续观察"
+```
+
+排除：
+
+```bash
+python -m core.jobs.update_review_decision --ts-code 002475.SZ --decision exclude --reason "人工排除"
+```
+
+归档：
+
+```bash
+python -m core.jobs.update_review_decision --ts-code 002475.SZ --archive --reason "归档观察"
+```
+
+重新激活：
+
+```bash
+python -m core.jobs.update_review_decision --ts-code 002475.SZ --reactivate --reason "重新观察"
+```
+
+查看复核历史：
+
+```bash
+python -m core.jobs.diagnose_review_history
+python -m core.jobs.diagnose_review_history --ts-code 002475.SZ
+```
+
+在完整工作流中查看复核历史：
+
+```bash
+python -m core.jobs.run_real_workflow --skip-update --diagnose-review-history
+```
+
+说明：本项目为个人本地 A 股选股辅助工具，用于数据整理、因子观察、候选复核和观察池跟踪，不包含自动交易功能。
+
 `decision` 支持以下取值：
 
 - `watch`：加入观察；

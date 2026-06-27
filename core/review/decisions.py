@@ -13,6 +13,7 @@ from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 ALLOWED_DECISIONS = {"watch", "pass", "exclude", "needs_data", "pending"}
 ALLOWED_REVIEW_STATUS = {"active", "archived"}
+ALLOWED_ACTION_TYPES = {"create", "update", "archive", "reactivate"}
 REQUIRED_IMPORT_COLUMNS = ["ts_code", "name", "selection_date", "decision", "reason", "notes", "reviewer"]
 REVIEW_COLUMNS = [
     "decision_id",
@@ -29,6 +30,21 @@ REVIEW_COLUMNS = [
     "source_report_path",
     "created_at",
     "updated_at",
+]
+HISTORY_COLUMNS = [
+    "history_id",
+    "ts_code",
+    "name",
+    "selection_date",
+    "old_decision",
+    "new_decision",
+    "old_review_status",
+    "new_review_status",
+    "reason",
+    "notes",
+    "reviewer",
+    "action_type",
+    "created_at",
 ]
 
 
@@ -110,8 +126,10 @@ def build_watchlist_dataframe(store: DuckDBStore, active_only: bool = True) -> p
     scores = _safe_read_table(store, "factor_scores")
     strategy = _safe_read_table(store, "strategy_result")
     score_source = scores if not scores.empty else strategy
+    history = read_review_decision_history(store)
     enriched = [_enrich_watch(row, price, score_source) for row in df.to_dict("records")]
-    return pd.DataFrame(enriched)
+    result = pd.DataFrame(enriched)
+    return _attach_history_summary(result, history)
 
 
 def summarize_review_decisions(store: DuckDBStore) -> dict[str, Any]:
@@ -130,6 +148,132 @@ def summarize_review_decisions(store: DuckDBStore) -> dict[str, Any]:
         "total_rows": int(len(decisions)),
         "active_watch_count": active_watch,
         "decision_counts": counts,
+    }
+
+
+def update_review_decision(
+    *,
+    store: DuckDBStore,
+    ts_code: str,
+    decision: str | None = None,
+    reason: str = "",
+    notes: str = "",
+    reviewer: str = "",
+    archive: bool = False,
+    reactivate: bool = False,
+    selection_date: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Create or update one review decision and append a local history row."""
+    ensure_review_decisions_table(store)
+    code = _clean_text(ts_code).upper()
+    if not code:
+        return {"status": "failed", "message": "ts_code 不能为空。", "history_written": False}
+    if archive and reactivate:
+        return {"status": "failed", "message": "--archive 与 --reactivate 不能同时使用。", "history_written": False}
+    requested_decision = _clean_text(decision)
+    if requested_decision and requested_decision not in ALLOWED_DECISIONS:
+        return {"status": "failed", "message": f"非法 decision: {requested_decision}", "history_written": False}
+
+    existing = _find_existing_decision(store, code, selection_date)
+    stock_info = _resolve_stock_info(store, code)
+    if not existing and not stock_info:
+        return {
+            "status": "failed",
+            "message": f"{code} 不存在于 review_decisions、stock_basic 或当前选股结果中。",
+            "history_written": False,
+        }
+
+    now = datetime.now().isoformat(timespec="seconds")
+    old_decision = _clean_text(existing.get("decision"))
+    old_status = _clean_text(existing.get("review_status")) or None
+    resolved_selection_date = (
+        _clean_text(selection_date)
+        or _clean_text(existing.get("selection_date"))
+        or _latest_local_trade_date(store)
+    )
+    new_decision = requested_decision or old_decision or "pending"
+    new_status = _clean_text(existing.get("review_status")) or "active"
+    action_type = "create" if not existing else "update"
+    if archive:
+        new_status = "archived"
+        action_type = "archive"
+    elif reactivate:
+        new_status = "active"
+        action_type = "reactivate"
+
+    row = {
+        "decision_id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{code}:{resolved_selection_date}")),
+        "ts_code": code,
+        "name": _clean_text(existing.get("name")) or _clean_text(stock_info.get("name")),
+        "selection_date": resolved_selection_date,
+        "review_date": now[:10],
+        "decision": new_decision,
+        "review_status": new_status,
+        "reviewer": _clean_text(reviewer) or _clean_text(existing.get("reviewer")),
+        "reason": _clean_text(reason) or _clean_text(existing.get("reason")),
+        "notes": _clean_text(notes) or _clean_text(existing.get("notes")),
+        "data_quality_note": _clean_text(existing.get("data_quality_note")),
+        "source_report_path": _clean_text(existing.get("source_report_path")),
+        "created_at": existing.get("created_at") or now,
+        "updated_at": now,
+    }
+    history_row = {
+        "history_id": str(uuid.uuid4()),
+        "ts_code": code,
+        "name": row["name"],
+        "selection_date": resolved_selection_date,
+        "old_decision": old_decision or None,
+        "new_decision": new_decision,
+        "old_review_status": old_status,
+        "new_review_status": new_status,
+        "reason": _clean_text(reason) or row["reason"],
+        "notes": _clean_text(notes) or row["notes"],
+        "reviewer": _clean_text(reviewer) or row["reviewer"],
+        "action_type": action_type,
+        "created_at": now,
+    }
+    if not dry_run:
+        store.upsert_dataframe("review_decisions", pd.DataFrame([row], columns=REVIEW_COLUMNS))
+        store.write_dataframe("review_decision_history", pd.DataFrame([history_row], columns=HISTORY_COLUMNS))
+
+    return {
+        "status": "dry_run" if dry_run else "success",
+        "ts_code": code,
+        "name": row["name"],
+        "selection_date": resolved_selection_date,
+        "old_decision": old_decision or None,
+        "new_decision": new_decision,
+        "old_review_status": old_status,
+        "new_review_status": new_status,
+        "reason": history_row["reason"],
+        "notes": history_row["notes"],
+        "reviewer": history_row["reviewer"],
+        "action_type": action_type,
+        "history_written": not dry_run,
+        "dry_run": dry_run,
+        "message": "dry-run 未写入。" if dry_run else "复核状态已更新。",
+    }
+
+
+def read_review_decision_history(store: DuckDBStore, ts_code: str | None = None) -> pd.DataFrame:
+    """Read review decision history, optionally filtered by ts_code."""
+    ensure_review_decisions_table(store)
+    history = _safe_read_history(store)
+    if ts_code and not history.empty and "ts_code" in history.columns:
+        history = history[history["ts_code"].astype(str) == _clean_text(ts_code).upper()]
+    if not history.empty and "created_at" in history.columns:
+        history = history.sort_values("created_at", ascending=False).reset_index(drop=True)
+    return history
+
+
+def summarize_review_history(store: DuckDBStore, ts_code: str | None = None, limit: int = 50) -> dict[str, Any]:
+    """Return compact review history diagnostics."""
+    history = read_review_decision_history(store, ts_code=ts_code)
+    limited = history.head(limit).reset_index(drop=True)
+    return {
+        "history_rows": int(len(history)),
+        "records": limited.to_dict("records"),
     }
 
 
@@ -198,6 +342,13 @@ def _safe_read_table(store: DuckDBStore, table_name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _safe_read_history(store: DuckDBStore) -> pd.DataFrame:
+    try:
+        return store.read_table("review_decision_history")
+    except DuckDBStoreError:
+        return pd.DataFrame(columns=HISTORY_COLUMNS)
+
+
 def _latest_local_trade_date(store: DuckDBStore) -> str:
     daily_price = _safe_read_table(store, "daily_price")
     if daily_price.empty or "trade_date" not in daily_price.columns:
@@ -220,6 +371,58 @@ def _enrich_watch(row: dict[str, Any], price: pd.DataFrame, scores: pd.DataFrame
         "total_score": total_score,
         "data_quality_note": data_quality_note,
     }
+
+
+def _attach_history_summary(watchlist: pd.DataFrame, history: pd.DataFrame) -> pd.DataFrame:
+    if watchlist.empty:
+        for column in ["latest_action_type", "latest_action_at", "history_count"]:
+            watchlist[column] = pd.NA
+        return watchlist
+    if history.empty:
+        watchlist["latest_action_type"] = pd.NA
+        watchlist["latest_action_at"] = pd.NA
+        watchlist["history_count"] = 0
+        return watchlist
+    rows: list[dict[str, Any]] = []
+    grouped = {str(code): df for code, df in history.sort_values("created_at").groupby("ts_code")}
+    for item in watchlist.to_dict("records"):
+        current = grouped.get(str(item.get("ts_code")), pd.DataFrame())
+        latest = current.iloc[-1].to_dict() if not current.empty else {}
+        rows.append(
+            {
+                **item,
+                "latest_action_type": latest.get("action_type"),
+                "latest_action_at": latest.get("created_at"),
+                "history_count": int(len(current)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _find_existing_decision(store: DuckDBStore, ts_code: str, selection_date: str | None) -> dict[str, Any]:
+    decisions = read_review_decisions(store)
+    if decisions.empty or "ts_code" not in decisions.columns:
+        return {}
+    rows = decisions[decisions["ts_code"].astype(str) == ts_code].copy()
+    if selection_date:
+        rows = rows[rows["selection_date"].astype(str) == str(selection_date)]
+    if rows.empty:
+        return {}
+    return rows.sort_values("selection_date").iloc[-1].to_dict()
+
+
+def _resolve_stock_info(store: DuckDBStore, ts_code: str) -> dict[str, Any]:
+    for table_name in ["stock_basic", "strategy_result"]:
+        df = _safe_read_table(store, table_name)
+        if df.empty or "ts_code" not in df.columns:
+            continue
+        rows = df[df["ts_code"].astype(str) == ts_code].copy()
+        if rows.empty:
+            continue
+        if "trade_date" in rows.columns:
+            rows = rows.sort_values("trade_date")
+        return rows.iloc[-1].to_dict()
+    return {}
 
 
 def _preserve_existing_text_fields(rows: list[dict[str, Any]], existing: pd.DataFrame) -> list[dict[str, Any]]:
