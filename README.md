@@ -330,6 +330,61 @@ python -m core.jobs.diagnose_backtest
 
 限制：当前仅用于少量真实股票试运行，不做全市场下载；AKShare fallback 的 `pe` / `pb` 可能为空，`adj_factor` 当前可能简化为 `1.0`；不构成投资建议，不自动交易。
 
+## 真实运行工作流与报告导出
+
+完成真实数据配置后，可以用统一工作流串联更新、诊断、因子校验、选股试运行和回测诊断，并在 `reports/` 下生成可留档报告。
+
+完整真实运行：
+
+```bash
+python -m core.jobs.run_real_workflow
+```
+
+跳过数据更新，仅基于本地 DuckDB 运行：
+
+```bash
+python -m core.jobs.run_real_workflow --skip-update
+```
+
+不运行回测诊断：
+
+```bash
+python -m core.jobs.run_real_workflow --no-backtest
+```
+
+指定报告目录：
+
+```bash
+python -m core.jobs.run_real_workflow --report-dir reports
+```
+
+生成 JSON 报告：
+
+```bash
+python -m core.jobs.run_real_workflow --format json
+```
+
+报告输出位置：
+
+```text
+reports/
+```
+
+报告内容包括：
+
+- 数据更新摘要；
+- 批量覆盖诊断；
+- 真实数据诊断；
+- 因子诊断；
+- 选股结果；
+- 回测诊断；
+- 数据质量提示；
+- 风险提示。
+
+工作流中的每一步都会标记为 `success`、`partial_success`、`skipped` 或 `failed`。某一步失败时，后续可执行的诊断步骤仍会继续运行，并在最终报告中记录原因。Streamlit 的“数据更新状态”页面会读取最近一份 workflow 报告并展示整体状态、数据来源、最新行情日期、覆盖率、候选股票数量、是否回退 sample 和报告路径；页面不会触发外部数据更新。
+
+限制：该工作流只封装已有本地命令，不新增选股策略、不新增因子、不接雪球、不接券商、不自动交易。AKShare fallback 数据字段有限，`pe` / `pb` 可能为空，`adj_factor` 可能简化为 `1.0`；`small` / `medium` 仍为样本级真实试运行，不是全市场生产级数据系统，不构成投资建议。
+
 ## 前端启动命令
 
 请在项目根目录执行以下命令启动 Streamlit 页面：
