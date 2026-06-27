@@ -65,6 +65,8 @@ def _sample_summary(result_location: str) -> dict[str, Any]:
         "scored_stock_count": int(len(factor_scores)),
         "factor_calculable_count": int(len(factor_scores)),
         "total_score_non_null_count": _non_null_count(factor_scores, "total_score"),
+        "backtest_ready": int(len(selection)) > 0,
+        "backtest_note": "sample 演示数据可用于页面 smoke test，不代表真实回测。",
         "candidate_count": int(len(selection)),
         "top_candidates": _top_candidate_records(selection),
         "latest_price_date": _latest_date(data.get("price", pd.DataFrame()), "trade_date"),
@@ -86,6 +88,7 @@ def main() -> None:
     print(f"- 股票池数量: {summary['stock_pool_count']}")
     print(f"- 因子可计算股票数量: {summary.get('factor_calculable_count', summary['scored_stock_count'])}")
     print(f"- 综合评分非空股票数量: {summary.get('total_score_non_null_count', 0)}")
+    print(f"- 是否支持当前数据进行回测: {'是' if summary.get('backtest_ready') else '否'}")
     print(f"- 评分股票数量: {summary['scored_stock_count']}")
     print(f"- 候选股票数量: {summary['candidate_count']}")
     print(f"- 是否写入数据库: {'是' if summary.get('wrote_to_database') else '否'}")
@@ -129,6 +132,8 @@ def _empty_summary(data_source: str) -> dict[str, Any]:
         "scored_stock_count": 0,
         "factor_calculable_count": 0,
         "total_score_non_null_count": 0,
+        "backtest_ready": False,
+        "backtest_note": "无可用评分结果，暂不能回测。",
         "candidate_count": 0,
         "top_candidates": [],
         "latest_price_date": None,
@@ -205,6 +210,8 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
         summary["scored_stock_count"] = int(len(factor_scores))
         summary["factor_calculable_count"] = int(len(factor_scores))
         summary["total_score_non_null_count"] = _non_null_count(factor_scores, "total_score")
+        summary["backtest_ready"] = False
+        summary["backtest_note"] = "真实评分未生成候选股票，暂不能回测。"
         summary["result_location"] = "真实数据已计算，但未生成候选股票；可回退 sample 数据。"
         return summary
 
@@ -218,6 +225,8 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
         "scored_stock_count": int(len(factor_scores)),
         "factor_calculable_count": int(len(factor_scores)),
         "total_score_non_null_count": total_score_non_null,
+        "backtest_ready": total_score_non_null > 0 and int(len(selected)) > 0,
+        "backtest_note": "可运行 python -m core.jobs.diagnose_backtest 进行少量样本真实数据回测诊断。",
         "candidate_count": int(len(selected)),
         "top_candidates": _top_candidate_records(selected),
         "latest_price_date": latest_trade_date,

@@ -246,6 +246,23 @@ AKShare fallback 限制：
 
 本项目仅用于研究与辅助决策，不构成投资建议，不自动交易。
 
+## 真实回测结果校验
+
+完成真实数据与因子诊断后，可以运行最小真实回测诊断：
+
+```bash
+python -m core.jobs.update_real_data
+python -m core.jobs.diagnose_real_data
+python -m core.jobs.diagnose_factors
+python -m core.jobs.run_daily_selection
+python -m core.jobs.diagnose_backtest
+streamlit run web/streamlit_app.py
+```
+
+`diagnose_backtest` 会读取本地 DuckDB 中的真实 `daily_price`，使用现有因子与综合评分逻辑生成少量样本股票评分结果，构建等权组合，并调用已有回测引擎输出 annual_return、max_drawdown、sharpe_ratio、win_rate、turnover、equity_curve 行数、交易记录行数和持仓记录行数。
+
+当前回测只基于少量样本股票真实数据试运行；AKShare fallback 字段有限，`pe` / `pb` 可能为空，`adj_factor` 可能简化为 `1.0`。回测结果仅用于验证本地数据链路和代码流程，不代表正式投资策略表现，不构成投资建议，不自动交易。
+
 ## 前端启动命令
 
 请在项目根目录执行以下命令启动 Streamlit 页面：
