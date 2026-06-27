@@ -137,6 +137,11 @@ class NoValuationAKShareModule(MockAKShareModule):
         return super().__getattribute__(name)
 
 
+def empty_valuation_curl(*args: Any, **kwargs: Any) -> SimpleNamespace:
+    """Return empty Eastmoney valuation rows without network access."""
+    return SimpleNamespace(returncode=0, stdout='{"data":{"diff":[]}}', stderr="")
+
+
 def test_stock_basic_enrichment_writes_industry_and_list_date(tmp_path: Path) -> None:
     """AKShare stock_basic enrichment should write industry/list_date to temporary duckdb."""
     store = DuckDBStore(tmp_path / "temporary.duckdb")
@@ -213,7 +218,7 @@ def test_stock_individual_info_value_error_keeps_main_update_success(tmp_path: P
 def test_missing_stock_a_lg_indicator_gracefully_skips_valuation(tmp_path: Path) -> None:
     """Missing stock_a_lg_indicator should skip valuation enrichment without main failures."""
     store = DuckDBStore(tmp_path / "no-valuation.duckdb")
-    client = AKShareClient(akshare_module=NoValuationAKShareModule())
+    client = AKShareClient(akshare_module=NoValuationAKShareModule(), curl_runner=empty_valuation_curl)
 
     result = update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
 
@@ -334,7 +339,7 @@ def test_diagnose_data_quality_outputs_completeness(tmp_path: Path) -> None:
 def test_diagnose_data_quality_reports_pe_pb_missing_reasons(tmp_path: Path) -> None:
     """diagnose_data_quality should explain pe/pb missing reasons."""
     store = DuckDBStore(tmp_path / "missing-reasons.duckdb")
-    client = AKShareClient(akshare_module=NoValuationAKShareModule())
+    client = AKShareClient(akshare_module=NoValuationAKShareModule(), curl_runner=empty_valuation_curl)
     update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
 
     result = diagnose_data_quality(settings=Task27Settings(duckdb_path=store.db_path), store=store)

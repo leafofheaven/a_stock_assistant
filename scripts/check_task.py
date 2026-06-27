@@ -38,6 +38,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task25": check_task25,
         "task26": check_task26,
         "task27": check_task27,
+        "task28": check_task28,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1203,6 +1204,59 @@ def check_task27(root: Path) -> list[str]:
     return failures
 
 
+def check_task28(root: Path) -> list[str]:
+    """Check Task 28 PE/PB valuation enrichment."""
+    failures = check_paths(
+        root,
+        [
+            "core/data_sources/valuation_enrichment.py",
+            "tests/test_valuation_enrichment.py",
+            "core/data_sources/basic_info_presets.py",
+            "core/jobs/diagnose_data_quality.py",
+            "README.md",
+            "docs/usage_guide.md",
+            "docs/commands_reference.md",
+            "docs/troubleshooting.md",
+        ],
+    )
+    valuation_source = read_source(root / "core/data_sources/valuation_enrichment.py")
+    for phrase in ["ValuationEnricher", "parse_akshare_snapshot", "parse_eastmoney_quote", "merge_latest_valuation", "push2.eastmoney.com"]:
+        if phrase not in valuation_source:
+            failures.append(f"valuation_enrichment.py is missing {phrase}.")
+
+    update_source = read_source(root / "core/jobs/update_real_data.py")
+    for phrase in ["enrich_daily_basic_valuation", "valuation_status", "valuation_success_symbols"]:
+        if phrase not in update_source:
+            failures.append(f"update_real_data.py is missing {phrase}.")
+
+    diagnose_source = read_source(root / "core/jobs/diagnose_data_quality.py")
+    for phrase in ["valuation_summary", "pe_non_null_rate", "pb_non_null_rate", "valuation_updated_count"]:
+        if phrase not in diagnose_source:
+            failures.append(f"diagnose_data_quality.py is missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_valuation_enrichment.py").lower()
+    for phrase in ["mock", "temporary duckdb", "eastmoney", "pe", "pb", "fundamental_score", "export_selection_review", "watchlist"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_valuation_enrichment.py should cover {phrase}.")
+
+    readme = read_source(root / "README.md")
+    docs = "\n".join(
+        read_source(root / path)
+        for path in ["docs/usage_guide.md", "docs/commands_reference.md", "docs/troubleshooting.md"]
+    )
+    for phrase in ["ENABLE_REAL_VALUATION_ENRICHMENT", "PE/PB", "diagnose_data_quality"]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+        if phrase not in docs:
+            failures.append(f"docs are missing {phrase}.")
+
+    if "enrich_with_basic_info_presets" not in read_source(root / "core/data_sources/basic_info_presets.py"):
+        failures.append("Task 27 basic info preset fallback must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1261,6 +1315,7 @@ def main(argv: list[str] | None = None) -> int:
             "task25",
             "task26",
             "task27",
+            "task28",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

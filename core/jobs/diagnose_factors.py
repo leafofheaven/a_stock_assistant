@@ -298,10 +298,14 @@ def _data_quality_notes(data_provider: str, daily_basic: pd.DataFrame, adj_facto
             notes.append("daily_basic 缺少 pe 字段，pe_score 与 fundamental_score 可能为空。")
         elif _column_all_missing(daily_basic, "pe"):
             notes.append("pe 全部缺失，pe_score 与 fundamental_score 可能为空。")
+        elif _column_has_missing(daily_basic, "pe"):
+            notes.append("部分股票 pe 缺失，缺失股票的 pe_score 与 fundamental_score 可能为空。")
         if "pb" not in daily_basic.columns:
             notes.append("daily_basic 缺少 pb 字段，估值相关复核信息不完整。")
         elif _column_all_missing(daily_basic, "pb"):
             notes.append("pb 全部缺失，估值相关复核信息不完整。")
+        elif _column_has_missing(daily_basic, "pb"):
+            notes.append("部分股票 pb 缺失，缺失股票的估值相关复核信息不完整。")
     if data_provider == "akshare":
         notes.append("AKShare fallback 当前只用于少量股票真实数据试运行。")
         if _column_all_missing(daily_basic, "pe") or _column_all_missing(daily_basic, "pb"):
@@ -330,6 +334,14 @@ def _fundamental_missing_notes(daily_basic: pd.DataFrame, factor_scores: pd.Data
     elif _column_all_missing(daily_basic, "pb"):
         reasons.append("fundamental_score 为空原因：pb 缺失。")
     return reasons
+
+
+def _column_has_missing(df: pd.DataFrame, column: str) -> bool:
+    """Return whether some but not all values in a column are missing."""
+    if df.empty or column not in df.columns:
+        return False
+    values = pd.to_numeric(df[column], errors="coerce")
+    return bool(values.isna().any() and values.notna().any())
 
 
 def _missing_table_reasons(tables: dict[str, pd.DataFrame]) -> list[str]:

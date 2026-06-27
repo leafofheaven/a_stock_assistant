@@ -195,7 +195,7 @@ ENABLE_REAL_VALUATION_ENRICHMENT=true
 python -m core.jobs.update_real_data
 ```
 
-如果仍为空，这是当前 AKShare 小范围验证的已知限制，流程不会因此崩溃。
+如果仍为空，说明当前 AKShare 快照接口或东方财富 quote curl fallback 未取得估值字段。流程不会因此崩溃，候选复核和观察池报告会保留 PE/PB 缺失提示。
 
 ## fundamental_score 为空
 
@@ -210,7 +210,7 @@ python -m core.jobs.diagnose_data_quality
 python -m core.jobs.diagnose_factors
 ```
 
-处理命令：先补数据；仍缺失时按数据质量提示人工复核，不影响其他分项和总流程。
+处理命令：先补数据；再查看 `diagnose_data_quality` 的 `pe_non_null_rate`、`pb_non_null_rate` 和 `valuation_updated_count`。如果 PE/PB 已补全，`diagnose_factors` 中 `pe_score` / `fundamental_score` 应恢复非空；仍缺失时按数据质量提示人工复核，不影响其他分项和总流程。
 
 ## total_score=None
 

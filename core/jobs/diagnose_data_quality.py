@@ -49,6 +49,7 @@ def diagnose_data_quality(
     basic_rates = _completeness(daily_basic, DAILY_BASIC_FIELDS)
     symbol_quality = _symbol_quality(stock_basic, daily_price, daily_basic)
     missing_reasons = _missing_reasons(stock_rates, basic_rates, daily_basic)
+    valuation_summary = _valuation_summary(daily_basic)
     affects_fundamental = (
         daily_basic.empty
         or basic_rates.get("pe", 0.0) == 0.0
@@ -65,6 +66,8 @@ def diagnose_data_quality(
         "daily_basic_completeness": basic_rates,
         "missing_reasons": missing_reasons,
         "symbol_quality": symbol_quality,
+        "valuation_summary": valuation_summary,
+        **valuation_summary,
         "affects_fundamental_score": affects_fundamental,
         "next_steps": _next_steps(affects_fundamental),
     }
@@ -85,6 +88,15 @@ def main() -> None:
     print("- daily_basic 字段完整率:")
     for field, rate in result["daily_basic_completeness"].items():
         print(f"  {field}: {rate:.2%}")
+    valuation = result.get("valuation_summary", {})
+    if valuation:
+        print("- 估值字段摘要:")
+        print(f"  valuation_source: {valuation.get('valuation_source')}")
+        print(f"  valuation_as_of: {valuation.get('valuation_as_of') or '暂无'}")
+        print(f"  valuation_updated_count: {valuation.get('valuation_updated_count', 0)}")
+        print(f"  valuation_missing_count: {valuation.get('valuation_missing_count', 0)}")
+        print(f"  pe_non_null_rate: {valuation.get('pe_non_null_rate', 0.0):.2%}")
+        print(f"  pb_non_null_rate: {valuation.get('pb_non_null_rate', 0.0):.2%}")
     if result.get("missing_reasons"):
         print("- 缺失原因:")
         for reason in result["missing_reasons"]:
@@ -185,6 +197,39 @@ def _missing_reasons(
         if daily_basic_rates.get("pb", 0.0) == 0.0:
             reasons.append("pb 完整率为 0，估值补全接口当前不可用或未成功。")
     return reasons
+
+
+def _valuation_summary(daily_basic: pd.DataFrame) -> dict[str, Any]:
+    """Return compact valuation coverage metadata."""
+    if daily_basic.empty:
+        return {
+            "valuation_source": "none",
+            "valuation_as_of": None,
+            "valuation_updated_count": 0,
+            "valuation_missing_count": 0,
+            "pe_non_null_rate": 0.0,
+            "pb_non_null_rate": 0.0,
+        }
+    latest = _latest_date(daily_basic, "trade_date")
+    latest_rows = daily_basic[daily_basic["trade_date"].astype(str) == latest].copy() if latest else daily_basic.copy()
+    pe_present = _present_mask(latest_rows, "pe")
+    pb_present = _present_mask(latest_rows, "pb")
+    updated = int((pe_present | pb_present).sum()) if not latest_rows.empty else 0
+    total = int(len(latest_rows))
+    return {
+        "valuation_source": "local_daily_basic" if updated else "unavailable",
+        "valuation_as_of": latest,
+        "valuation_updated_count": updated,
+        "valuation_missing_count": max(total - updated, 0),
+        "pe_non_null_rate": float(_present_mask(daily_basic, "pe").sum() / len(daily_basic)) if len(daily_basic) else 0.0,
+        "pb_non_null_rate": float(_present_mask(daily_basic, "pb").sum() / len(daily_basic)) if len(daily_basic) else 0.0,
+    }
+
+
+def _present_mask(df: pd.DataFrame, column: str) -> pd.Series:
+    if df.empty or column not in df.columns:
+        return pd.Series([False] * len(df), index=df.index)
+    return df[column].map(lambda value: not _is_missing(value))
 
 
 def _rows_for(df: pd.DataFrame, ts_code: str) -> pd.DataFrame:

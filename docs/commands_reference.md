@@ -52,6 +52,8 @@ ENABLE_REAL_VALUATION_ENRICHMENT=true
 
 关闭补全后会保持简化逻辑；补全失败不影响主行情更新。
 
+PE/PB 估值补全开启后，更新任务会优先尝试 AKShare 快照接口；不可用时尝试东方财富 quote curl fallback。诊断输出中的 `pe_non_null_rate`、`pb_non_null_rate`、`valuation_updated_count` 可用于判断补全是否生效。
+
 ## 批量更新
 
 命令：
@@ -70,7 +72,7 @@ python -m core.jobs.diagnose_update_batch
 python -m core.jobs.diagnose_factors
 ```
 
-作用：查看股票池数量、可计算因子股票数量、各因子非空率、NaN 数量和 Top 10 综合评分股票。`fundamental_score` 为空时，先结合 `diagnose_data_quality` 查看 `pe` / `pb` 是否缺失。
+作用：查看股票池数量、可计算因子股票数量、各因子非空率、NaN 数量和 Top 10 综合评分股票。`fundamental_score` 为空时，先结合 `diagnose_data_quality` 查看 PE/PB 是否缺失；PE/PB 补全后，`pe_score` 和 `fundamental_score` 应出现非空率。
 
 ## 选股
 

@@ -94,9 +94,11 @@ AKShare 获取日线失败时，项目会在小范围样本上尝试系统 curl 
 默认还会尝试补全基础信息和估值字段：
 
 - `ENABLE_REAL_BASIC_ENRICHMENT=true`：尽量补全行业、市场、上市日期等 `stock_basic` 字段。
-- `ENABLE_REAL_VALUATION_ENRICHMENT=true`：尽量补全 `pe`、`pb`、`total_mv`、`circ_mv` 等 `daily_basic` 字段。
+- `ENABLE_REAL_VALUATION_ENRICHMENT=true`：尽量补全 PE/PB、`total_mv`、`circ_mv` 等 `daily_basic` 字段。当前会优先使用 AKShare 可用的快照类接口；接口不可用时，尝试东方财富 quote curl fallback。
 
 这两个补全失败时不会影响日线行情写入；如需保持旧的简化逻辑，可在 `.env` 中设为 `false`。
+
+估值补全通常写入每只股票最新交易日对应的 `daily_basic`。运行 `python -m core.jobs.diagnose_data_quality` 查看 PE/PB 完整率；再运行 `python -m core.jobs.diagnose_factors` 判断 `fundamental_score` 是否恢复。PE/PB 缺失时，候选复核和观察池报告会保留缺失提示，已有值时不再提示缺失。
 
 ## REAL_UNIVERSE_PRESET
 
