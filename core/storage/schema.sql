@@ -138,3 +138,19 @@ CREATE TABLE IF NOT EXISTS watchlist_snapshots (
     data_quality_note VARCHAR,
     created_at TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS review_decision_history (
+    history_id VARCHAR PRIMARY KEY,
+    ts_code VARCHAR,
+    name VARCHAR,
+    selection_date VARCHAR,
+    old_decision VARCHAR,
+    new_decision VARCHAR,
+    old_review_status VARCHAR,
+    new_review_status VARCHAR,
+    reason VARCHAR,
+    notes VARCHAR,
+    reviewer VARCHAR,
+    action_type VARCHAR,
+    created_at TIMESTAMP
+);

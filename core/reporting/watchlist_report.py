@@ -10,8 +10,7 @@ from typing import Any
 import pandas as pd
 
 RISK_DISCLAIMER = (
-    "观察池仅记录人工复核结论，不构成投资建议，不提供目标价，"
-    "不保证收益，不包含自动交易建议。"
+    "个人研究工具，结果需自行复核，不自动交易。"
 )
 
 WATCHLIST_COLUMNS = [
@@ -20,9 +19,13 @@ WATCHLIST_COLUMNS = [
     "selection_date",
     "review_date",
     "decision",
+    "review_status",
     "reviewer",
     "reason",
     "notes",
+    "latest_action_type",
+    "latest_action_at",
+    "history_count",
     "latest_trade_date",
     "latest_close",
     "total_score",
@@ -61,10 +64,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "",
         "## 观察池总表",
         "",
-        "| ts_code | name | decision | reviewer | latest_trade_date | latest_close | total_score | reason |",
-        "| --- | --- | --- | --- | --- | ---: | ---: | --- |",
+        "| ts_code | name | decision | review_status | history_count | latest_action_type | latest_action_at | latest_close | total_score | reason |",
+        "| --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | --- |",
         *[
-            "| {ts_code} | {name} | {decision} | {reviewer} | {latest_trade_date} | {latest_close} | {total_score} | {reason} |".format(
+            "| {ts_code} | {name} | {decision} | {review_status} | {history_count} | {latest_action_type} | {latest_action_at} | {latest_close} | {total_score} | {reason} |".format(
                 **_markdown_row(item)
             )
             for item in report["watchlist"]
@@ -81,9 +84,13 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- selection_date: {item.get('selection_date') or '暂无'}",
                 f"- review_date: {item.get('review_date') or '暂无'}",
                 f"- decision: {item.get('decision') or '暂无'}",
+                f"- review_status: {item.get('review_status') or '暂无'}",
                 f"- reviewer: {item.get('reviewer') or '暂无'}",
                 f"- reason: {item.get('reason') or '暂无'}",
                 f"- notes: {item.get('notes') or '暂无'}",
+                f"- latest_action_type: {item.get('latest_action_type') or '暂无'}",
+                f"- latest_action_at: {item.get('latest_action_at') or '暂无'}",
+                f"- history_count: {item.get('history_count', 0)}",
                 f"- 最新行情日期: {item.get('latest_trade_date') or '暂无'}",
                 f"- 最新收盘价: {_display(item.get('latest_close'))}",
                 f"- 当前评分: {_display(item.get('total_score'))}",
@@ -173,8 +180,11 @@ def _markdown_row(item: dict[str, Any]) -> dict[str, Any]:
         "ts_code": item.get("ts_code", ""),
         "name": item.get("name", ""),
         "decision": item.get("decision", ""),
+        "review_status": item.get("review_status", ""),
         "reviewer": item.get("reviewer", ""),
-        "latest_trade_date": item.get("latest_trade_date", ""),
+        "latest_action_type": item.get("latest_action_type", ""),
+        "latest_action_at": item.get("latest_action_at", ""),
+        "history_count": item.get("history_count", 0),
         "latest_close": _display(item.get("latest_close")),
         "total_score": _display(item.get("total_score")),
         "reason": str(item.get("reason", "")).replace("|", "/"),

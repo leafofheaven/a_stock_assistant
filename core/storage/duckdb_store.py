@@ -32,6 +32,7 @@ class DuckDBStore:
         "backtest_result": "start_date",
         "review_decisions": "selection_date",
         "watchlist_snapshots": "snapshot_date",
+        "review_decision_history": "created_at",
     }
 
     KEY_COLUMNS: ClassVar[dict[str, tuple[str, ...]]] = {
@@ -46,6 +47,7 @@ class DuckDBStore:
         "backtest_result": ("strategy_name", "start_date", "end_date", "created_at"),
         "review_decisions": ("ts_code", "selection_date"),
         "watchlist_snapshots": ("ts_code", "snapshot_date"),
+        "review_decision_history": ("history_id",),
     }
 
     def __init__(self, db_path: str | Path | None = None) -> None:

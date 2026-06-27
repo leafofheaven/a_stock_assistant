@@ -50,8 +50,12 @@ def main() -> None:
             print(
                 f"  {item.get('ts_code')} {item.get('name')} selection_date={item.get('selection_date')} "
                 f"review_date={item.get('review_date')} decision={item.get('decision')} "
+                f"review_status={item.get('review_status') or '暂无'} "
                 f"reviewer={item.get('reviewer') or '暂无'} "
                 f"reason={item.get('reason') or '暂无'} notes={item.get('notes') or '暂无'} "
+                f"latest_action_type={item.get('latest_action_type') or '暂无'} "
+                f"latest_action_at={item.get('latest_action_at') or '暂无'} "
+                f"history_count={item.get('history_count', 0)} "
                 f"latest_trade_date={item.get('latest_trade_date') or '暂无'} "
                 f"latest_close={item.get('latest_close')} total_score={item.get('total_score')} "
                 f"data_quality_note={item.get('data_quality_note') or '暂无'}"

@@ -39,6 +39,7 @@ def build_workflow_report(
     watchlist_tracking = _step_result(steps, "track_watchlist")
     watchlist_tracking_export = _step_result(steps, "export_watchlist_tracking")
     review_decisions = _step_result(steps, "review_decisions")
+    review_history = _step_result(steps, "diagnose_review_history")
     sample_symbols = _configured_symbols(settings)
 
     return {
@@ -69,6 +70,7 @@ def build_workflow_report(
             "track_watchlist": _watchlist_tracking_summary(watchlist_tracking),
             "export_watchlist_tracking": _generated_files_summary(watchlist_tracking_export),
             "review_decisions": _review_decisions_summary(review_decisions),
+            "diagnose_review_history": _review_history_summary(review_history),
         },
         "risk_notes": RISK_NOTES,
     }
@@ -142,6 +144,14 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "## review_decisions 摘要",
         "",
         *_dict_lines(summaries["review_decisions"]),
+        "",
+        "## review_decision_history 摘要",
+        "",
+        *_dict_lines(summaries["diagnose_review_history"], skip_keys={"recent_records"}),
+        "",
+        "### 最近复核状态变更",
+        "",
+        *_review_history_lines(summaries["diagnose_review_history"].get("recent_records", [])),
         "",
         "## 风险提示",
         "",
@@ -361,6 +371,16 @@ def _review_decisions_summary(step: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _review_history_summary(step: dict[str, Any]) -> dict[str, Any]:
+    result = step.get("result", {})
+    records = result.get("records", [])
+    return {
+        "status": step.get("status"),
+        "history_rows": result.get("history_rows", 0),
+        "recent_records": records[:5],
+    }
+
+
 def _dict_lines(values: dict[str, Any], skip_keys: set[str] | None = None) -> list[str]:
     skip = skip_keys or set()
     lines: list[str] = []
@@ -384,6 +404,26 @@ def _records_lines(records: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _review_history_lines(records: list[dict[str, Any]]) -> list[str]:
+    if not records:
+        return ["- 暂无。"]
+    lines = []
+    for item in records:
+        lines.append(
+            "- {created_at} {ts_code} {name} action={action_type} {old_decision}->{new_decision} status={old_status}->{new_status}".format(
+                created_at=item.get("created_at", ""),
+                ts_code=item.get("ts_code", ""),
+                name=item.get("name", ""),
+                action_type=item.get("action_type", ""),
+                old_decision=item.get("old_decision") or "暂无",
+                new_decision=item.get("new_decision") or "暂无",
+                old_status=item.get("old_review_status") or "暂无",
+                new_status=item.get("new_review_status") or "暂无",
+            )
+        )
+    return lines
+
+
 def _format_value(value: Any) -> str:
     if isinstance(value, dict | list):
         return json.dumps(_jsonable(value), ensure_ascii=False)
@@ -399,6 +439,8 @@ def _jsonable(value: Any) -> Any:
         return value.to_list()
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items() if not str(key).endswith("_df")}
     if isinstance(value, list | tuple):
