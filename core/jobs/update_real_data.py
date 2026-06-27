@@ -10,6 +10,7 @@ import pandas as pd
 
 from app.config import Settings, get_settings
 from core.data_sources.base import DataSourceError, StockDataSource
+from core.data_sources.basic_info_presets import enrich_with_basic_info_presets
 from core.data_sources.provider import select_data_provider
 from core.data_sources.universe_presets import get_universe_preset, to_akshare_symbol
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
@@ -144,6 +145,8 @@ def _run_provider_update(
         resolved_store.initialize()
         before_rows = _table_row_counts(resolved_store)
         stock_basic = _filter_stock_basic(client.get_stock_basic(), sample_symbols)
+        if provider_name == "akshare":
+            stock_basic = _merge_existing_stock_basic(stock_basic, resolved_store)
         if (
             provider_name == "akshare"
             and getattr(settings, "enable_real_basic_enrichment", True)
@@ -158,6 +161,8 @@ def _run_provider_update(
                     "stock_basic_enrichment",
                     f"{type(exc).__name__}: {exc}",
                 )
+        if provider_name == "akshare" and getattr(settings, "enable_real_basic_enrichment", True):
+            stock_basic = _apply_local_basic_info_presets(client, stock_basic)
         frames = {
             "stock_basic": stock_basic,
             "trade_calendar": _filter_date_range(
@@ -283,6 +288,8 @@ def main() -> None:
             f"- 基础信息补全: {enrichment.get('basic_status')}，"
             f"成功 {enrichment.get('basic_success_symbols', 0)}，失败 {enrichment.get('basic_failed_symbols', 0)}"
         )
+        if enrichment.get("basic_preset_success_symbols", 0):
+            print(f"- 本地基础信息 preset fallback 成功: {enrichment.get('basic_preset_success_symbols', 0)}")
         print(
             f"- 估值字段补全: {enrichment.get('valuation_status')}，"
             f"成功 {enrichment.get('valuation_success_symbols', 0)}，失败 {enrichment.get('valuation_failed_symbols', 0)}"
@@ -322,6 +329,60 @@ def _filter_stock_basic(df: pd.DataFrame, symbols: list[str]) -> pd.DataFrame:
         return df
     ts_codes = {_to_ts_code(symbol) for symbol in symbols}
     return df[df["ts_code"].isin(ts_codes)].reset_index(drop=True)
+
+
+def _merge_existing_stock_basic(stock_basic: pd.DataFrame, store: DuckDBStore) -> pd.DataFrame:
+    """Include existing stock_basic rows so preset fallback can repair prior samples."""
+    try:
+        existing = store.read_table("stock_basic")
+    except DuckDBStoreError:
+        existing = pd.DataFrame()
+    frames = [frame for frame in [existing, stock_basic] if not frame.empty]
+    if not frames:
+        return stock_basic
+    combined = pd.concat(frames, ignore_index=True)
+    if "ts_code" not in combined.columns:
+        return combined
+    return combined.drop_duplicates("ts_code", keep="last").reset_index(drop=True)
+
+
+def _apply_local_basic_info_presets(client: StockDataSource, stock_basic: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing stock_basic fields from local presets and record fallback events."""
+    before = stock_basic.copy()
+    enriched, missing_records = enrich_with_basic_info_presets(stock_basic)
+    records = getattr(client, "enrichment_records", None)
+    if isinstance(records, list):
+        for symbol in _preset_filled_symbols(before, enriched):
+            records.append(
+                {
+                    "symbol": symbol,
+                    "provider": "local_preset",
+                    "failed_stage": "stock_basic_preset_fallback_success",
+                    "error_message": "local basic info preset filled missing fields",
+                }
+            )
+        records.extend(missing_records)
+    return enriched
+
+
+def _preset_filled_symbols(before: pd.DataFrame, after: pd.DataFrame) -> list[str]:
+    """Return symbols whose key basic fields were filled by preset fallback."""
+    if before.empty or after.empty or "ts_code" not in before.columns or "ts_code" not in after.columns:
+        return []
+    key_fields = ["industry", "market", "list_date"]
+    before_indexed = before.set_index("ts_code")
+    after_indexed = after.set_index("ts_code")
+    symbols: list[str] = []
+    for symbol in after_indexed.index.astype(str):
+        if symbol not in before_indexed.index:
+            continue
+        for field in key_fields:
+            before_value = before_indexed.at[symbol, field] if field in before_indexed.columns else pd.NA
+            after_value = after_indexed.at[symbol, field] if field in after_indexed.columns else pd.NA
+            if _is_missing(before_value) and not _is_missing(after_value):
+                symbols.append(symbol)
+                break
+    return symbols
 
 
 def _filter_date_range(df: pd.DataFrame, column: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -476,13 +537,15 @@ def _enrichment_summary(
     settings: Settings,
 ) -> dict[str, Any]:
     """Return optional enrichment status without affecting main update status."""
-    warnings = _dedupe_failure_records(getattr(client, "enrichment_records", []))
+    events = _dedupe_failure_records(getattr(client, "enrichment_records", []))
+    warnings = [item for item in events if not item.get("failed_stage", "").endswith("_success")]
     requested_ts_codes = [_to_ts_code(symbol) for symbol in sample_symbols]
     stock_basic = frames.get("stock_basic", pd.DataFrame())
     daily_basic = frames.get("daily_basic", pd.DataFrame())
     basic_success = _symbols_with_any_value(stock_basic, ["industry", "list_date"])
     valuation_success = _symbols_with_any_value(daily_basic, ["pe", "pb", "total_mv", "circ_mv"])
-    basic_warning_symbols = _warning_symbols(warnings, "stock_basic")
+    basic_missing_symbols = set(requested_ts_codes) - basic_success
+    basic_warning_symbols = _warning_symbols(warnings, "stock_basic_preset_fallback_missing").union(basic_missing_symbols)
     valuation_warning_symbols = _warning_symbols(warnings, "daily_basic")
     if not getattr(settings, "enable_real_basic_enrichment", True):
         basic_status = "skipped"
@@ -507,12 +570,15 @@ def _enrichment_summary(
             "basic_status": basic_status,
             "basic_success_symbols": len(basic_success.intersection(requested_ts_codes)),
             "basic_failed_symbols": len(basic_warning_symbols.intersection(requested_ts_codes)),
+            "basic_preset_success_symbols": len(_warning_symbols(events, "stock_basic_preset_fallback_success").intersection(requested_ts_codes)),
             "valuation_status": valuation_status,
             "valuation_success_symbols": len(valuation_success.intersection(requested_ts_codes)),
             "valuation_failed_symbols": len(valuation_warning_symbols.intersection(requested_ts_codes)),
             "warnings": warnings,
+            "events": events,
         },
         "enrichment_warnings": warnings,
+        "enrichment_events": events,
     }
 
 

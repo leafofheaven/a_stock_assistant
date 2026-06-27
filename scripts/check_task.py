@@ -1153,6 +1153,7 @@ def check_task27(root: Path) -> list[str]:
         root,
         [
             "core/jobs/diagnose_data_quality.py",
+            "core/data_sources/basic_info_presets.py",
             "tests/test_real_basic_fundamental_data.py",
             "README.md",
             "docs/usage_guide.md",
@@ -1172,6 +1173,10 @@ def check_task27(root: Path) -> list[str]:
     for phrase in ["enrich_stock_basic", "stock_individual_info_em", "stock_a_lg_indicator", "push2his.eastmoney.com"]:
         if phrase not in akshare_source:
             failures.append(f"AKShare enrichment/fallback is missing {phrase}.")
+    preset_source = read_source(root / "core/data_sources/basic_info_presets.py")
+    for phrase in ["BASIC_INFO_PRESETS", "000001", "600000", "688981", "enrich_with_basic_info_presets"]:
+        if phrase not in preset_source:
+            failures.append(f"basic_info_presets.py is missing {phrase}.")
 
     diagnose_source = read_source(root / "core/jobs/diagnose_data_quality.py")
     for phrase in ["stock_basic_completeness", "daily_basic_completeness", "fundamental_score", "pe", "pb"]:

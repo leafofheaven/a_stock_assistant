@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 
 from core.data_sources.akshare_client import AKShareClient
+from core.data_sources.universe_presets import get_universe_preset, to_ts_code
 from core.jobs.diagnose_data_quality import diagnose_data_quality
 from core.jobs.diagnose_factors import diagnose_factors
 from core.jobs.update_real_data import update_real_data
@@ -172,7 +173,8 @@ def test_enrichment_single_symbol_failure_does_not_block_others(tmp_path: Path) 
     assert result["status"] == "success"
     assert "stock_basic_enrichment" not in {item["failed_stage"] for item in result["failure_records"]}
     assert "stock_basic_enrichment" in {item["failed_stage"] for item in result["enrichment_warnings"]}
-    assert result["enrichment_summary"]["basic_status"] == "partial_success"
+    assert result["enrichment_summary"]["basic_status"] == "success"
+    assert result["enrichment_summary"]["basic_preset_success_symbols"] == 1
     daily_basic = store.read_table("daily_basic")
     assert daily_basic[daily_basic["ts_code"] == "000001.SZ"]["pe"].notna().any()
     assert daily_basic[daily_basic["ts_code"] == "600000.SH"]["pe"].isna().all()
@@ -188,7 +190,8 @@ def test_weird_stock_individual_info_shape_does_not_crash_update(tmp_path: Path)
     assert result["status"] == "success"
     assert result["success_symbols"] == 2
     assert result["failure_records"] == []
-    assert result["enrichment_summary"]["basic_status"] == "failed"
+    assert result["enrichment_summary"]["basic_status"] == "success"
+    assert result["enrichment_summary"]["basic_preset_success_symbols"] == 2
     assert result["enrichment_warnings"]
 
 
@@ -202,7 +205,8 @@ def test_stock_individual_info_value_error_keeps_main_update_success(tmp_path: P
     assert result["status"] == "success"
     assert result["failed_symbols"] == 0
     assert result["failure_records"] == []
-    assert result["enrichment_summary"]["basic_status"] == "failed"
+    assert result["enrichment_summary"]["basic_status"] == "success"
+    assert result["enrichment_summary"]["basic_preset_success_symbols"] == 2
     assert all(item["failed_stage"] == "stock_basic_enrichment" for item in result["enrichment_warnings"] if item["symbol"] != "ALL")
 
 
@@ -220,6 +224,76 @@ def test_missing_stock_a_lg_indicator_gracefully_skips_valuation(tmp_path: Path)
     assert any(item["failed_stage"] == "daily_basic_valuation_enrichment_unavailable" for item in result["enrichment_warnings"])
     assert daily_basic["pe"].isna().all()
     assert daily_basic["pb"].isna().all()
+
+
+def test_preset_fallback_repairs_existing_small_stock_basic_rows(tmp_path: Path) -> None:
+    """Existing 30-row stock_basic can be repaired even when AKSHARE_SAMPLE_SYMBOLS has 3 symbols."""
+    store = DuckDBStore(tmp_path / "existing-small.duckdb")
+    store.initialize()
+    existing = pd.DataFrame(
+        [
+            {
+                "ts_code": to_ts_code(symbol),
+                "symbol": symbol,
+                "name": f"样本{symbol}",
+                "area": None,
+                "industry": None,
+                "market": None,
+                "list_date": None,
+                "delist_date": None,
+                "is_hs": None,
+            }
+            for symbol in get_universe_preset("small")
+        ]
+    )
+    store.upsert_dataframe("stock_basic", existing)
+    settings = Task27Settings(duckdb_path=store.db_path, akshare_sample_symbols="000001,600000,000002")
+    client = AKShareClient(akshare_module=MockAKShareModule(fail_basic={"000001", "600000", "000002"}))
+
+    update_real_data(settings=settings, store=store, client=client)
+    result = diagnose_data_quality(settings=settings, store=store)
+
+    assert result["stock_basic_rows"] == 30
+    assert result["stock_basic_completeness"]["industry"] == 1.0
+    assert result["stock_basic_completeness"]["list_date"] == 1.0
+    assert result["stock_basic_completeness"]["market"] == 1.0
+
+
+def test_preset_missing_symbol_does_not_crash_and_reports_note(tmp_path: Path) -> None:
+    """Symbols outside local presets should remain missing with clear notes."""
+    store = DuckDBStore(tmp_path / "unknown.duckdb")
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": "999999.SZ",
+                    "symbol": "999999",
+                    "name": "未知股票",
+                    "area": None,
+                    "industry": None,
+                    "market": None,
+                    "list_date": None,
+                    "delist_date": None,
+                    "is_hs": None,
+                }
+            ]
+        ),
+    )
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame({"ts_code": ["999999.SZ"], "trade_date": ["20240104"], "open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "pre_close": [None], "change": [0.0], "pct_chg": [0.0], "vol": [1.0], "amount": [1.0]}),
+    )
+    store.upsert_dataframe(
+        "daily_basic",
+        pd.DataFrame({"ts_code": ["999999.SZ"], "trade_date": ["20240104"], "turnover_rate": [1.0], "volume_ratio": [None], "pe": [None], "pb": [None], "ps": [None], "total_mv": [None], "circ_mv": [None]}),
+    )
+
+    result = diagnose_data_quality(settings=Task27Settings(duckdb_path=store.db_path), store=store)
+
+    assert result["stock_basic_completeness"]["industry"] == 0.0
+    assert "industry 缺失" in result["symbol_quality"][0]["data_quality_note"]
 
 
 def test_enrichment_switches_keep_simplified_logic(tmp_path: Path) -> None:
