@@ -52,6 +52,8 @@ REAL_DATA_END_DATE=
 REAL_UNIVERSE_PRESET=mini
 AKSHARE_SAMPLE_SYMBOLS=000001,600000,000002
 AKSHARE_ADJUST=qfq
+ENABLE_REAL_BASIC_ENRICHMENT=true
+ENABLE_REAL_VALUATION_ENRICHMENT=true
 ```
 
 `.env` 不应提交到 Git。`TUSHARE_TOKEN` 可以为空。
@@ -89,6 +91,13 @@ python -m core.jobs.update_real_data
 
 AKShare 获取日线失败时，项目会在小范围样本上尝试系统 curl 请求东方财富 kline fallback。
 
+默认还会尝试补全基础信息和估值字段：
+
+- `ENABLE_REAL_BASIC_ENRICHMENT=true`：尽量补全行业、市场、上市日期等 `stock_basic` 字段。
+- `ENABLE_REAL_VALUATION_ENRICHMENT=true`：尽量补全 `pe`、`pb`、`total_mv`、`circ_mv` 等 `daily_basic` 字段。
+
+这两个补全失败时不会影响日线行情写入；如需保持旧的简化逻辑，可在 `.env` 中设为 `false`。
+
 ## REAL_UNIVERSE_PRESET
 
 当 `AKSHARE_SAMPLE_SYMBOLS` 为空时，可用预设样本：
@@ -110,9 +119,10 @@ REAL_UNIVERSE_PRESET=mini
 python -m core.jobs.update_real_data
 python -m core.jobs.diagnose_real_data
 python -m core.jobs.diagnose_update_batch
+python -m core.jobs.diagnose_data_quality
 ```
 
-`diagnose_real_data` 用于判断本地 DuckDB 是否足够运行选股。`diagnose_update_batch` 用于查看样本股票覆盖率。
+`diagnose_real_data` 用于判断本地 DuckDB 是否足够运行选股。`diagnose_update_batch` 用于查看样本股票覆盖率。`diagnose_data_quality` 用于查看基础信息和估值字段完整率。
 
 ## 诊断、选股、因子和回测
 
@@ -123,6 +133,15 @@ python -m core.jobs.diagnose_backtest
 ```
 
 `run_daily_selection` 会优先使用本地真实数据；真实数据不足时会清楚说明是否回退 sample。
+
+如果 `fundamental_score` 为空或偏低，先运行：
+
+```bash
+python -m core.jobs.diagnose_data_quality
+python -m core.jobs.diagnose_factors
+```
+
+AKShare 小范围验证下，`pe` / `pb` 仍可能为空；报告和页面会显示字段缺失提示。
 
 ## 候选复核
 

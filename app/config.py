@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     real_batch_sleep_seconds: float = Field(default=0.0, validation_alias="REAL_BATCH_SLEEP_SECONDS")
     real_max_retries: int = Field(default=1, validation_alias="REAL_MAX_RETRIES")
     real_request_timeout_seconds: int = Field(default=30, validation_alias="REAL_REQUEST_TIMEOUT_SECONDS")
+    enable_real_basic_enrichment: bool = Field(
+        default=True,
+        validation_alias="ENABLE_REAL_BASIC_ENRICHMENT",
+    )
+    enable_real_valuation_enrichment: bool = Field(
+        default=True,
+        validation_alias="ENABLE_REAL_VALUATION_ENRICHMENT",
+    )
 
     @field_validator("log_level")
     @classmethod

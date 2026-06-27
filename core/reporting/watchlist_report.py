@@ -16,6 +16,9 @@ RISK_DISCLAIMER = (
 WATCHLIST_COLUMNS = [
     "ts_code",
     "name",
+    "industry",
+    "market",
+    "list_date",
     "selection_date",
     "review_date",
     "decision",
@@ -28,6 +31,8 @@ WATCHLIST_COLUMNS = [
     "history_count",
     "latest_trade_date",
     "latest_close",
+    "pe",
+    "pb",
     "total_score",
     "data_quality_note",
 ]
@@ -64,10 +69,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "",
         "## 观察池总表",
         "",
-        "| ts_code | name | decision | review_status | history_count | latest_action_type | latest_action_at | latest_close | total_score | reason |",
-        "| --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | --- |",
+        "| ts_code | name | industry | market | list_date | pe | pb | decision | review_status | history_count | latest_action_type | latest_action_at | latest_close | total_score | reason |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | --- | --- | ---: | --- | --- | ---: | ---: | --- |",
         *[
-            "| {ts_code} | {name} | {decision} | {review_status} | {history_count} | {latest_action_type} | {latest_action_at} | {latest_close} | {total_score} | {reason} |".format(
+            "| {ts_code} | {name} | {industry} | {market} | {list_date} | {pe} | {pb} | {decision} | {review_status} | {history_count} | {latest_action_type} | {latest_action_at} | {latest_close} | {total_score} | {reason} |".format(
                 **_markdown_row(item)
             )
             for item in report["watchlist"]
@@ -86,6 +91,11 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- decision: {item.get('decision') or '暂无'}",
                 f"- review_status: {item.get('review_status') or '暂无'}",
                 f"- reviewer: {item.get('reviewer') or '暂无'}",
+                f"- industry: {item.get('industry') or '缺失'}",
+                f"- market: {item.get('market') or '缺失'}",
+                f"- list_date: {item.get('list_date') or '缺失'}",
+                f"- pe: {_display(item.get('pe'))}",
+                f"- pb: {_display(item.get('pb'))}",
                 f"- reason: {item.get('reason') or '暂无'}",
                 f"- notes: {item.get('notes') or '暂无'}",
                 f"- latest_action_type: {item.get('latest_action_type') or '暂无'}",
@@ -182,6 +192,11 @@ def _markdown_row(item: dict[str, Any]) -> dict[str, Any]:
         "decision": item.get("decision", ""),
         "review_status": item.get("review_status", ""),
         "reviewer": item.get("reviewer", ""),
+        "industry": str(item.get("industry") or "").replace("|", "/"),
+        "market": str(item.get("market") or "").replace("|", "/"),
+        "list_date": str(item.get("list_date") or "").replace("|", "/"),
+        "pe": _display(item.get("pe")),
+        "pb": _display(item.get("pb")),
         "latest_action_type": item.get("latest_action_type", ""),
         "latest_action_at": item.get("latest_action_at", ""),
         "history_count": item.get("history_count", 0),

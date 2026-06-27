@@ -197,7 +197,7 @@ def test_diagnose_watchlist_outputs_active_watch(tmp_path: Path) -> None:
     assert result["watchlist"][0]["notes"] == "temporary duckdb mock note"
     assert result["watchlist"][0]["reviewer"] == "tester"
     assert result["watchlist"][0]["total_score"] is None
-    assert result["watchlist"][0]["data_quality_note"] == "当前无可用综合评分"
+    assert "当前无可用综合评分" in result["watchlist"][0]["data_quality_note"]
 
 
 def test_export_watchlist_generates_markdown_json_csv(tmp_path: Path) -> None:

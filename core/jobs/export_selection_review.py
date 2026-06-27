@@ -107,13 +107,15 @@ def _load_selection_payload(
         selection_df = select_top_stocks(factor_df, top_n=top_n)
         price_df = _safe_read_table(store, "daily_price")
         daily_basic_df = _safe_read_table(store, "daily_basic")
+        stock_basic_df = _safe_read_table(store, "stock_basic")
         if summary.get("fallback_to_sample") or not summary.get("is_real_data"):
             sample = get_sample_dashboard_data()
             price_df = sample["price"]
             daily_basic_df = sample["daily_basic"]
+            stock_basic_df = sample.get("stock_basic", pd.DataFrame())
         return {
             "selection_summary": summary,
-            "selection_df": selection_df,
+            "selection_df": _attach_stock_basic_fields(selection_df, stock_basic_df),
             "factor_df": factor_df,
             "price_df": price_df,
             "daily_basic_df": daily_basic_df,
@@ -141,8 +143,9 @@ def _load_existing_tables(store: DuckDBStore, top_n: int) -> dict[str, Any] | No
         selection = selection.sort_values(["trade_date", "rank"]).head(top_n)
     else:
         selection = selection.head(top_n)
+    stock_basic = _safe_read_table(store, "stock_basic")
     return {
-        "selection_df": selection,
+        "selection_df": _attach_stock_basic_fields(selection, stock_basic),
         "factor_df": factor_scores,
         "price_df": _safe_read_table(store, "daily_price"),
         "daily_basic_df": _safe_read_table(store, "daily_basic"),
@@ -156,6 +159,40 @@ def _safe_read_table(store: DuckDBStore, table_name: str) -> pd.DataFrame:
         return store.read_table(table_name)
     except DuckDBStoreError:
         return pd.DataFrame()
+
+
+def _attach_stock_basic_fields(selection_df: pd.DataFrame, stock_basic_df: pd.DataFrame) -> pd.DataFrame:
+    """Fill descriptive fields from stock_basic without changing strategy output."""
+    if selection_df.empty or stock_basic_df.empty or "ts_code" not in selection_df.columns or "ts_code" not in stock_basic_df.columns:
+        return selection_df.copy()
+    fields = ["industry", "market", "list_date"]
+    basic_columns = ["ts_code", *[column for column in fields if column in stock_basic_df.columns]]
+    if len(basic_columns) == 1:
+        return selection_df.copy()
+
+    result = selection_df.copy()
+    basic = stock_basic_df[basic_columns].drop_duplicates(subset=["ts_code"], keep="last").copy()
+    merged = result.merge(basic, on="ts_code", how="left", suffixes=("", "_stock_basic"))
+    for field in fields:
+        stock_field = f"{field}_stock_basic"
+        if field not in merged.columns:
+            merged[field] = pd.NA
+        if stock_field in merged.columns:
+            merged[field] = merged[field].where(~merged[field].map(_is_missing), merged[stock_field])
+            merged = merged.drop(columns=[stock_field])
+    return merged
+
+
+def _is_missing(value: Any) -> bool:
+    """Return True for missing or empty report cells."""
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip().lower() in {"", "nan", "none", "<na>", "null"}
 
 
 if __name__ == "__main__":

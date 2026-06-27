@@ -12,9 +12,14 @@ import pandas as pd
 TRACKING_COLUMNS = [
     "ts_code",
     "name",
+    "industry",
+    "market",
+    "list_date",
     "snapshot_date",
     "latest_trade_date",
     "latest_close",
+    "pe",
+    "pb",
     "total_score",
     "close_change_pct",
     "total_score_change",
@@ -68,10 +73,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "",
         "## 当前状态与变化",
         "",
-        "| ts_code | name | latest_close | total_score | close_change_pct | total_score_change | data_quality_note |",
-        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+        "| ts_code | name | industry | market | list_date | latest_close | total_score | close_change_pct | total_score_change | data_quality_note |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
         *[
-            "| {ts_code} | {name} | {latest_close} | {total_score} | {close_change_pct} | {total_score_change} | {data_quality_note} |".format(
+            "| {ts_code} | {name} | {industry} | {market} | {list_date} | {latest_close} | {total_score} | {close_change_pct} | {total_score_change} | {data_quality_note} |".format(
                 **_markdown_row(item)
             )
             for item in report["items"]
@@ -85,6 +90,11 @@ def render_markdown_report(report: dict[str, Any]) -> str:
             [
                 f"### {item.get('ts_code')} {item.get('name')}",
                 "",
+                f"- industry: {item.get('industry') or '缺失'}",
+                f"- market: {item.get('market') or '缺失'}",
+                f"- list_date: {item.get('list_date') or '缺失'}",
+                f"- pe: {_display(item.get('pe'))}",
+                f"- pb: {_display(item.get('pb'))}",
                 f"- 加入观察后价格变化: {_display(item.get('close_change_pct'))}",
                 f"- 综合评分变化: {_display(item.get('total_score_change'))}",
                 f"- 趋势分变化: {_display(item.get('trend_score_change'))}",
@@ -260,6 +270,9 @@ def _markdown_row(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "ts_code": item.get("ts_code", ""),
         "name": item.get("name", ""),
+        "industry": str(item.get("industry") or "").replace("|", "/"),
+        "market": str(item.get("market") or "").replace("|", "/"),
+        "list_date": str(item.get("list_date") or "").replace("|", "/"),
         "latest_close": _display(item.get("latest_close")),
         "total_score": _display(item.get("total_score")),
         "close_change_pct": _display_percent(item.get("close_change_pct")),

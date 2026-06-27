@@ -166,6 +166,7 @@ def test_akshare_client_methods_return_dataframes() -> None:
         "tool_trade_date_hist_sina",
         "stock_zh_a_hist",
         "stock_zh_a_hist",
+        "stock_a_lg_indicator",
     ]
     assert akshare.calls[2][1] == {
         "symbol": "000001",

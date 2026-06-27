@@ -14,7 +14,7 @@ source .venv/bin/activate
 ```bash
 python -m pytest
 python scripts/check_project.py
-python scripts/check_task.py task26
+python scripts/check_task.py task27
 ```
 
 作用：运行测试、项目检查和当前 Task 检查。输出 `passed` 或 `checks passed` 表示通过。
@@ -26,11 +26,31 @@ python scripts/check_task.py task26
 ```bash
 python -m core.jobs.update_real_data
 python -m core.jobs.diagnose_real_data
+python -m core.jobs.diagnose_data_quality
 ```
 
 作用：更新少量真实数据并诊断 DuckDB 是否可用于选股。重点看 `daily_price 行数`、`最新行情日期`、`是否足够运行 run_daily_selection`。
 
 常用参数：真实数据范围由 `.env` 中 `REAL_DATA_START_DATE`、`REAL_DATA_END_DATE`、`AKSHARE_SAMPLE_SYMBOLS` 或 `REAL_UNIVERSE_PRESET` 控制。
+
+## 基础信息与估值字段
+
+命令：
+
+```bash
+python -m core.jobs.diagnose_data_quality
+```
+
+作用：查看 `stock_basic` 中 `name`、`industry`、`market`、`list_date` 完整率，以及 `daily_basic` 中 `turnover_rate`、`pe`、`pb`、`total_mv`、`circ_mv` 完整率。
+
+相关配置：
+
+```env
+ENABLE_REAL_BASIC_ENRICHMENT=true
+ENABLE_REAL_VALUATION_ENRICHMENT=true
+```
+
+关闭补全后会保持简化逻辑；补全失败不影响主行情更新。
 
 ## 批量更新
 
@@ -50,7 +70,7 @@ python -m core.jobs.diagnose_update_batch
 python -m core.jobs.diagnose_factors
 ```
 
-作用：查看股票池数量、可计算因子股票数量、各因子非空率、NaN 数量和 Top 10 综合评分股票。
+作用：查看股票池数量、可计算因子股票数量、各因子非空率、NaN 数量和 Top 10 综合评分股票。`fundamental_score` 为空时，先结合 `diagnose_data_quality` 查看 `pe` / `pb` 是否缺失。
 
 ## 选股
 
@@ -169,7 +189,7 @@ streamlit run web/streamlit_app.py
 ```bash
 python -m pytest
 python scripts/check_project.py
-python scripts/check_task.py task26
+python scripts/check_task.py task27
 ```
 
 输出 `passed` 表示通过。

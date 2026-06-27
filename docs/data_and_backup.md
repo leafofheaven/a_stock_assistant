@@ -20,6 +20,7 @@ source .venv/bin/activate
 
 ```bash
 python -m core.jobs.diagnose_local_state
+python -m core.jobs.diagnose_data_quality
 ```
 
 重点看：
@@ -30,6 +31,8 @@ python -m core.jobs.diagnose_local_state
 - reports 文件数量；
 - backups 数量；
 - 是否发现本地数据路径被 Git 跟踪。
+- `stock_basic` 的行业、市场、上市日期完整率；
+- `daily_basic` 的 `pe`、`pb`、市值字段完整率。
 
 ## 创建备份
 
