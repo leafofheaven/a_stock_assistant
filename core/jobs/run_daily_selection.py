@@ -60,13 +60,17 @@ def _sample_summary(result_location: str) -> dict[str, Any]:
     return {
         "run_date": date.today().isoformat(),
         "data_source": DEMO_DATA_SOURCE,
+        "is_real_data": False,
         "stock_pool_count": int(len(stock_basic)),
         "scored_stock_count": int(len(factor_scores)),
+        "factor_calculable_count": int(len(factor_scores)),
+        "total_score_non_null_count": _non_null_count(factor_scores, "total_score"),
         "candidate_count": int(len(selection)),
         "top_candidates": _top_candidate_records(selection),
         "latest_price_date": _latest_date(data.get("price", pd.DataFrame()), "trade_date"),
         "wrote_to_database": False,
         "fallback_to_sample": "回退 sample" in result_location,
+        "data_quality_note": "sample 演示数据，仅用于流程验证。",
         "result_location": result_location,
     }
 
@@ -77,8 +81,11 @@ def main() -> None:
     print("每日选股任务摘要")
     print(f"- 当前运行日期: {summary['run_date']}")
     print(f"- 数据来源: {summary['data_source']}")
+    print(f"- 是否使用真实数据: {'是' if summary.get('is_real_data') else '否'}")
     print(f"- 最新行情日期: {summary.get('latest_price_date') or '暂无'}")
     print(f"- 股票池数量: {summary['stock_pool_count']}")
+    print(f"- 因子可计算股票数量: {summary.get('factor_calculable_count', summary['scored_stock_count'])}")
+    print(f"- 综合评分非空股票数量: {summary.get('total_score_non_null_count', 0)}")
     print(f"- 评分股票数量: {summary['scored_stock_count']}")
     print(f"- 候选股票数量: {summary['candidate_count']}")
     print(f"- 是否写入数据库: {'是' if summary.get('wrote_to_database') else '否'}")
@@ -93,6 +100,8 @@ def main() -> None:
     else:
         print("  暂无候选股票。")
     print(f"- 结果保存位置或说明: {summary['result_location']}")
+    if summary.get("data_quality_note"):
+        print(f"- 数据质量提示: {summary['data_quality_note']}")
     diagnostics = summary.get("universe_diagnostics") or []
     if diagnostics:
         print("- 股票池过滤诊断:")
@@ -115,13 +124,17 @@ def _empty_summary(data_source: str) -> dict[str, Any]:
     return {
         "run_date": date.today().isoformat(),
         "data_source": data_source,
+        "is_real_data": False,
         "stock_pool_count": 0,
         "scored_stock_count": 0,
+        "factor_calculable_count": 0,
+        "total_score_non_null_count": 0,
         "candidate_count": 0,
         "top_candidates": [],
         "latest_price_date": None,
         "wrote_to_database": False,
         "fallback_to_sample": False,
+        "data_quality_note": "",
         "result_location": "未生成结果；请导入本地数据或启用演示数据。",
     }
 
@@ -190,20 +203,27 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
         summary = _empty_summary("无数据")
         summary["stock_pool_count"] = int(len(tradeable))
         summary["scored_stock_count"] = int(len(factor_scores))
+        summary["factor_calculable_count"] = int(len(factor_scores))
+        summary["total_score_non_null_count"] = _non_null_count(factor_scores, "total_score")
         summary["result_location"] = "真实数据已计算，但未生成候选股票；可回退 sample 数据。"
         return summary
 
+    total_score_non_null = _non_null_count(factor_scores, "total_score")
     return {
         "run_date": date.today().isoformat(),
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
+        "is_real_data": True,
         "selection_date": latest_trade_date,
         "stock_pool_count": int(len(tradeable)),
         "scored_stock_count": int(len(factor_scores)),
+        "factor_calculable_count": int(len(factor_scores)),
+        "total_score_non_null_count": total_score_non_null,
         "candidate_count": int(len(selected)),
         "top_candidates": _top_candidate_records(selected),
         "latest_price_date": latest_trade_date,
         "wrote_to_database": False,
         "fallback_to_sample": False,
+        "data_quality_note": _real_data_quality_note(settings.data_provider, daily_basic),
         "result_location": f"基于本地 DuckDB 真实数据完成最小选股试运行，最新行情日期 {latest_trade_date}。",
     }
 
@@ -304,7 +324,23 @@ def _column_all_missing(df: pd.DataFrame, column: str) -> bool:
     return bool(pd.to_numeric(df[column], errors="coerce").dropna().empty)
 
 
-def _top_candidate_records(selection: pd.DataFrame, limit: int = 5) -> list[dict[str, Any]]:
+def _real_data_quality_note(data_provider: str, daily_basic: pd.DataFrame) -> str:
+    """Return concise real-data quality notes for command output."""
+    if data_provider == "akshare" and (
+        _column_all_missing(daily_basic, "pe") or _column_all_missing(daily_basic, "pb")
+    ):
+        return "AKShare fallback 的 pe/pb 可能为空，基本面分项可能偏低或为空；adj_factor 当前可能简化为 1.0。"
+    return ""
+
+
+def _non_null_count(df: pd.DataFrame, column: str) -> int:
+    """Return non-null numeric count for one column."""
+    if df.empty or column not in df.columns:
+        return 0
+    return int(pd.to_numeric(df[column], errors="coerce").notna().sum())
+
+
+def _top_candidate_records(selection: pd.DataFrame, limit: int = 10) -> list[dict[str, Any]]:
     """Return compact candidate records for command-line output."""
     if selection.empty:
         return []
