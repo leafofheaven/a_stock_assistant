@@ -30,6 +30,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task17": check_task17,
         "task18": check_task18,
         "task19": check_task19,
+        "task20": check_task20,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -755,6 +756,56 @@ def check_task19(root: Path) -> list[str]:
     return failures
 
 
+def check_task20(root: Path) -> list[str]:
+    """Check Task 20 real workflow reporting support."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/run_real_workflow.py",
+            "core/reporting/workflow_report.py",
+            "tests/test_real_workflow_reporting.py",
+            "reports/.gitkeep",
+            "README.md",
+        ],
+    )
+    readme = read_source(root / "README.md")
+    for phrase in [
+        "真实运行工作流与报告导出",
+        "python -m core.jobs.run_real_workflow",
+        "python -m core.jobs.run_real_workflow --skip-update",
+        "python -m core.jobs.run_real_workflow --no-backtest",
+        "python -m core.jobs.run_real_workflow --format json",
+        "reports/",
+    ]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    workflow_source = read_source(root / "core/jobs/run_real_workflow.py")
+    for phrase in ["--skip-update", "--no-backtest", "--report-dir", "--format", "--quiet", "save_workflow_report"]:
+        if phrase not in workflow_source:
+            failures.append(f"core/jobs/run_real_workflow.py is missing {phrase}.")
+
+    report_source = read_source(root / "core/reporting/workflow_report.py")
+    for phrase in ["render_markdown_report", "save_workflow_report", "load_latest_workflow_report", "不构成投资建议"]:
+        if phrase not in report_source:
+            failures.append(f"core/reporting/workflow_report.py is missing {phrase}.")
+
+    if not (root / "core/jobs/diagnose_update_batch.py").exists():
+        failures.append("Task 19 batch diagnostics must remain available.")
+    akshare_source = read_source(root / "core/data_sources/akshare_client.py")
+    for phrase in ["subprocess.run", "curl", "push2his.eastmoney.com"]:
+        if phrase not in akshare_source:
+            failures.append(f"AKShare curl fallback must remain available: missing {phrase}.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+
+    tests_source = read_source(root / "tests/test_real_workflow_reporting.py").lower()
+    for phrase in ["mock", "temporary duckdb", "skip-update", "markdown", "json", "failed", "partial_success", "no_backtest", "streamlit"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_real_workflow_reporting.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -805,6 +856,7 @@ def main(argv: list[str] | None = None) -> int:
             "task17",
             "task18",
             "task19",
+            "task20",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

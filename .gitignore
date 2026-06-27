@@ -12,4 +12,7 @@ dist/
 data/
 *.duckdb
 *.duckdb.wal
+reports/*.md
+reports/*.json
+!reports/.gitkeep
 .ipynb_checkpoints/

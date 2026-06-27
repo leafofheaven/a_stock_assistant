@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.sample_data import get_sample_dashboard_data
+from core.reporting.workflow_report import load_latest_workflow_report
 
 SELECTION_COLUMNS = [
     "rank",
@@ -120,6 +121,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     priced_count = int(tables.get("_priced_symbol_count", 0) or 0)
     coverage_rate = float(tables.get("_coverage_rate", 0.0) or 0.0)
     missing_count = int(tables.get("_missing_symbol_count", 0) or 0)
+    latest_workflow_report = tables.get("_latest_workflow_report")
     return {
         "latest_price_date": _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
@@ -137,7 +139,8 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "coverage_rate": coverage_rate,
         "missing_symbol_count": missing_count,
         "table_rows": {name: len(df) for name, df in tables.items() if isinstance(df, pd.DataFrame)},
-        "last_job_status": "暂无任务运行记录",
+        "last_job_status": _workflow_status_message(latest_workflow_report),
+        "latest_workflow_report": latest_workflow_report,
     }
 
 
@@ -183,12 +186,15 @@ def load_dashboard_data() -> dict[str, Any]:
 
     settings = get_settings()
     if settings.data_provider == "sample":
-        return sample_dashboard_data()
+        data = sample_dashboard_data()
+        data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        return data
 
     store = DuckDBStore(settings.duckdb_path)
     if not store.db_path.exists():
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实 DuckDB 文件不存在）"
+        data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         return data
 
     try:
@@ -203,6 +209,7 @@ def load_dashboard_data() -> dict[str, Any]:
     except DuckDBStoreError:
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实数据读取失败）"
+        data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         return data
 
     if tables["strategy_result"].empty:
@@ -211,8 +218,10 @@ def load_dashboard_data() -> dict[str, Any]:
             return computed
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实选股结果不足）"
+        data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         return data
 
+    tables["_latest_workflow_report"] = load_latest_workflow_report()
     return {
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
         "selection": tables["strategy_result"],
@@ -246,6 +255,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_priced_symbol_count"] = batch_diagnostic.get("priced_symbol_count", 0)
     real_tables["_coverage_rate"] = batch_diagnostic.get("coverage_rate", 0.0)
     real_tables["_missing_symbol_count"] = len(batch_diagnostic.get("missing_symbols", []))
+    real_tables["_latest_workflow_report"] = load_latest_workflow_report()
     backtest_result = dict(backtest_diagnostic.get("backtest_result", {}))
     backtest_result["data_quality_notes"] = backtest_diagnostic.get("data_quality_notes", [])
     return {
@@ -410,6 +420,21 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         st.warning(f"存在字段缺失：{status['field_missing']}")
     st.write("核心数据表状态")
     st.dataframe(pd.DataFrame(status["table_rows"].items(), columns=["table", "rows"]), use_container_width=True)
+    report = status.get("latest_workflow_report")
+    if report:
+        st.write("最近 workflow 报告")
+        st.write(
+            {
+                "最近运行时间": report.get("run_time") or "暂无",
+                "整体状态": report.get("overall_status") or "暂无",
+                "数据来源": report.get("data_provider") or "暂无",
+                "最新行情日期": report.get("latest_price_date") or "暂无",
+                "覆盖率": _format_optional_rate(report.get("coverage_rate")),
+                "候选股票数量": report.get("candidate_count", 0),
+                "是否回退 sample": bool(report.get("fallback_to_sample")),
+                "报告路径": report.get("path"),
+            }
+        )
     st.info(status["last_job_status"])
 
 
@@ -446,6 +471,22 @@ def _format_percent(value: float | None) -> str:
     if value is None or pd.isna(value):
         return "暂无"
     return f"{value:.2%}"
+
+
+def _format_optional_rate(value: Any) -> str:
+    """Format optional rate values for status display."""
+    if value is None or pd.isna(value):
+        return "暂无"
+    return f"{float(value):.2%}"
+
+
+def _workflow_status_message(report: Any) -> str:
+    """Return a concise status message from the latest workflow report."""
+    if not isinstance(report, dict):
+        return "暂无 workflow 报告；可运行 python -m core.jobs.run_real_workflow 生成。"
+    status = report.get("overall_status") or "未知"
+    path = report.get("path") or "未知路径"
+    return f"最近 workflow 报告状态：{status}；报告路径：{path}"
 
 
 if __name__ == "__main__":
