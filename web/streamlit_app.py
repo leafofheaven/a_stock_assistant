@@ -219,9 +219,11 @@ def load_dashboard_data() -> dict[str, Any]:
 
 def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, pd.DataFrame]) -> dict[str, Any] | None:
     """Return computed real factor/selection data when result tables are not persisted yet."""
+    from core.jobs.diagnose_backtest import diagnose_backtest
     from core.jobs.diagnose_factors import diagnose_factors
 
     diagnostic = diagnose_factors(settings=settings, store=store, use_sample=False)
+    backtest_diagnostic = diagnose_backtest(settings=settings, store=store, use_sample=False)
     factor_scores = diagnostic.get("factor_scores_df", pd.DataFrame())
     selected = diagnostic.get("selected_df", pd.DataFrame())
     if factor_scores.empty or selected.empty:
@@ -230,6 +232,8 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["factor_scores"] = factor_scores
     real_tables["strategy_result"] = selected
     real_tables["_data_source"] = f"{settings.data_provider} 本地 DuckDB 真实数据"
+    backtest_result = dict(backtest_diagnostic.get("backtest_result", {}))
+    backtest_result["data_quality_notes"] = backtest_diagnostic.get("data_quality_notes", [])
     return {
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
         "selection": selected,
@@ -239,7 +243,8 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
         "factor_scores": factor_scores,
         "factor_quality": diagnostic.get("factor_quality", {}),
         "data_quality_notes": diagnostic.get("data_quality_notes", []),
-        "backtest": {},
+        "backtest": backtest_result,
+        "backtest_diagnostic": backtest_diagnostic,
         "tables": real_tables,
     }
 
@@ -355,8 +360,11 @@ def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame) -> None:
 def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:
     st.subheader("策略回测")
     if not backtest:
-        st.info("暂无回测结果。")
+        st.info("暂无回测结果。请先运行回测诊断；真实数据不足时不会生成结果。")
         return
+    if backtest.get("data_quality_notes"):
+        for note in backtest["data_quality_notes"]:
+            st.info(note)
     st.write({"调仓频率": "W", "持仓数量": 20, "初始资金": 1_000_000})
     cols = st.columns(5)
     for col, key in zip(cols, ["annual_return", "max_drawdown", "sharpe_ratio", "win_rate", "turnover"]):

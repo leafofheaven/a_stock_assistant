@@ -28,6 +28,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task15": check_task15,
         "task16": check_task16,
         "task17": check_task17,
+        "task18": check_task18,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -655,6 +656,57 @@ def check_task17(root: Path) -> list[str]:
     return failures
 
 
+def check_task18(root: Path) -> list[str]:
+    """Check Task 18 real backtest validation support."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/diagnose_backtest.py",
+            "tests/test_real_backtest_validation.py",
+            "README.md",
+        ],
+    )
+    readme = read_source(root / "README.md")
+    for phrase in [
+        "真实回测结果校验",
+        "python -m core.jobs.update_real_data",
+        "python -m core.jobs.diagnose_real_data",
+        "python -m core.jobs.diagnose_factors",
+        "python -m core.jobs.run_daily_selection",
+        "python -m core.jobs.diagnose_backtest",
+        "streamlit run web/streamlit_app.py",
+    ]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    diagnose_source = read_source(root / "core/jobs/diagnose_backtest.py")
+    for phrase in [
+        "diagnose_backtest",
+        "run_backtest",
+        "equity_curve_rows",
+        "trade_records_rows",
+        "position_records_rows",
+        "AKShare fallback",
+    ]:
+        if phrase not in diagnose_source:
+            failures.append(f"core/jobs/diagnose_backtest.py is missing {phrase}.")
+
+    if not (root / "core/jobs/diagnose_factors.py").exists():
+        failures.append("Task 17 factor diagnostics must remain available.")
+    akshare_source = read_source(root / "core/data_sources/akshare_client.py")
+    for phrase in ["subprocess.run", "curl", "push2his.eastmoney.com"]:
+        if phrase not in akshare_source:
+            failures.append(f"AKShare curl fallback must remain available: missing {phrase}.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+
+    tests_source = read_source(root / "tests/test_real_backtest_validation.py").lower()
+    for phrase in ["temporary duckdb", "mock", "diagnose_backtest", "equity_curve", "sample"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_real_backtest_validation.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -703,6 +755,7 @@ def main(argv: list[str] | None = None) -> int:
             "task15",
             "task16",
             "task17",
+            "task18",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
