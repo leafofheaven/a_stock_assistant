@@ -114,3 +114,27 @@ CREATE TABLE IF NOT EXISTS review_decisions (
     created_at TIMESTAMP,
     updated_at TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS watchlist_snapshots (
+    snapshot_id VARCHAR PRIMARY KEY,
+    ts_code VARCHAR,
+    name VARCHAR,
+    snapshot_date VARCHAR,
+    selection_date VARCHAR,
+    review_date VARCHAR,
+    decision VARCHAR,
+    latest_trade_date VARCHAR,
+    latest_close DOUBLE,
+    total_score DOUBLE,
+    trend_score DOUBLE,
+    momentum_score DOUBLE,
+    liquidity_score DOUBLE,
+    volatility_score DOUBLE,
+    fundamental_score DOUBLE,
+    return_20d DOUBLE,
+    avg_amount_20d DOUBLE,
+    avg_turnover_20d DOUBLE,
+    volatility_20d DOUBLE,
+    data_quality_note VARCHAR,
+    created_at TIMESTAMP
+);

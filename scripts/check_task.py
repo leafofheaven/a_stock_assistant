@@ -33,6 +33,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task20": check_task20,
         "task21": check_task21,
         "task22": check_task22,
+        "task23": check_task23,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -916,6 +917,66 @@ def check_task22(root: Path) -> list[str]:
     return failures
 
 
+def check_task23(root: Path) -> list[str]:
+    """Check Task 23 watchlist tracking report support."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/track_watchlist.py",
+            "core/jobs/export_watchlist_tracking_report.py",
+            "core/reporting/watchlist_tracking_report.py",
+            "core/review/tracking.py",
+            "tests/test_watchlist_tracking_report.py",
+            "README.md",
+        ],
+    )
+    readme = read_source(root / "README.md")
+    for phrase in [
+        "观察池跟踪与变化报告",
+        "watchlist_snapshots",
+        "python -m core.jobs.track_watchlist",
+        "python -m core.jobs.export_watchlist_tracking_report",
+        "--track-watchlist",
+        "--export-watchlist-tracking",
+    ]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    schema_source = read_source(root / "core/storage/schema.sql")
+    if "CREATE TABLE IF NOT EXISTS watchlist_snapshots" not in schema_source:
+        failures.append("schema.sql must create watchlist_snapshots.")
+
+    tracking_source = read_source(root / "core/review/tracking.py")
+    for phrase in ["create_watchlist_snapshots", "latest_tracking_snapshot", "watchlist_snapshots"]:
+        if phrase not in tracking_source:
+            failures.append(f"core/review/tracking.py is missing {phrase}.")
+
+    report_source = read_source(root / "core/reporting/watchlist_tracking_report.py")
+    for phrase in ["build_watchlist_tracking_report", "save_watchlist_tracking_report", "close_change_pct", "total_score_change"]:
+        if phrase not in report_source:
+            failures.append(f"core/reporting/watchlist_tracking_report.py is missing {phrase}.")
+    forbidden = ["买入建议", "卖出建议", "强烈推荐", "目标价", "保证收益", "自动交易建议"]
+    for phrase in forbidden:
+        if phrase in report_source:
+            failures.append(f"watchlist_tracking_report should not contain forbidden phrase: {phrase}.")
+
+    workflow_source = read_source(root / "core/jobs/run_real_workflow.py")
+    for phrase in ["--track-watchlist", "--export-watchlist-tracking", "track_watchlist", "export_watchlist_tracking"]:
+        if phrase not in workflow_source:
+            failures.append(f"run_real_workflow must include Task 23 integration: missing {phrase}.")
+
+    if "export_watchlist" not in read_source(root / "core/jobs/export_watchlist.py"):
+        failures.append("Task 22 export_watchlist must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+
+    tests_source = read_source(root / "tests/test_watchlist_tracking_report.py").lower()
+    for phrase in ["temporary duckdb", "mock", "track_watchlist", "export_watchlist_tracking", "streamlit", "run_real_workflow"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_watchlist_tracking_report.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -969,6 +1030,7 @@ def main(argv: list[str] | None = None) -> int:
             "task20",
             "task21",
             "task22",
+            "task23",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

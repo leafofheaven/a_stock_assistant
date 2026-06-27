@@ -481,6 +481,53 @@ python -m core.jobs.run_real_workflow --skip-update --export-review-template
 python -m core.jobs.run_real_workflow --skip-update --export-watchlist
 ```
 
+## 观察池跟踪与变化报告
+
+`watchlist_snapshots` 表用于记录 active watch 股票的本地跟踪快照。该功能只基于本地 DuckDB 中已有的行情和评分数据，不访问外部接口，不生成交易方向判断，不自动交易。
+
+生成观察池跟踪 snapshot：
+
+```bash
+python -m core.jobs.track_watchlist
+```
+
+生成 snapshot 后同时导出变化报告：
+
+```bash
+python -m core.jobs.track_watchlist --export-report --format all
+```
+
+单独导出观察池变化报告：
+
+```bash
+python -m core.jobs.export_watchlist_tracking_report --format all
+```
+
+在完整工作流中执行观察池跟踪：
+
+```bash
+python -m core.jobs.run_real_workflow --skip-update --track-watchlist
+```
+
+在完整工作流中跟踪并导出变化报告：
+
+```bash
+python -m core.jobs.run_real_workflow --skip-update --track-watchlist --export-watchlist-tracking
+```
+
+变化报告会展示：
+
+- 当前数据来源；
+- snapshot_date；
+- active watch 股票数量；
+- latest_close、total_score；
+- 加入观察后或首次 snapshot 后的价格变化；
+- 综合评分、趋势分、动量分、流动性分、波动率分变化；
+- 数据质量提示；
+- 人工复核提示。
+
+限制：观察池变化报告仅用于人工复核和数据质量检查，不构成投资建议，不提供价格预期，不作收益承诺，不包含交易执行指令。AKShare fallback 数据字段有限，`pe` / `pb` 可能为空；`adj_factor` 可能简化为 1.0。
+
 `decision` 支持以下取值：
 
 - `watch`：加入观察；

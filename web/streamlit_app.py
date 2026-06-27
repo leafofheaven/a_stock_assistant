@@ -20,6 +20,7 @@ from core.reporting.selection_review_report import (
 )
 from core.reporting.review_template_report import latest_review_template_path, template_metadata
 from core.reporting.watchlist_report import load_latest_watchlist_report
+from core.reporting.watchlist_tracking_report import load_latest_watchlist_tracking_report
 from core.reporting.workflow_report import load_latest_workflow_report
 
 SELECTION_COLUMNS = [
@@ -131,6 +132,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     latest_selection_review_report = tables.get("_latest_selection_review_report")
     latest_review_template = tables.get("_latest_review_template")
     latest_watchlist_report = tables.get("_latest_watchlist_report")
+    latest_watchlist_tracking_report = tables.get("_latest_watchlist_tracking_report")
     return {
         "latest_price_date": _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
@@ -153,6 +155,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "latest_selection_review_report": latest_selection_review_report,
         "latest_review_template": latest_review_template,
         "latest_watchlist_report": latest_watchlist_report,
+        "latest_watchlist_tracking_report": latest_watchlist_tracking_report,
     }
 
 
@@ -203,7 +206,9 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
         data.setdefault("watchlist", pd.DataFrame())
+        data.setdefault("watchlist_snapshot", pd.DataFrame())
         return data
 
     store = DuckDBStore(settings.duckdb_path)
@@ -214,7 +219,9 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
         data.setdefault("watchlist", pd.DataFrame())
+        data.setdefault("watchlist_snapshot", pd.DataFrame())
         return data
 
     try:
@@ -233,7 +240,9 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
         data.setdefault("watchlist", pd.DataFrame())
+        data.setdefault("watchlist_snapshot", pd.DataFrame())
         return data
 
     if tables["strategy_result"].empty:
@@ -246,14 +255,19 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
         data.setdefault("watchlist", pd.DataFrame())
+        data.setdefault("watchlist_snapshot", pd.DataFrame())
         return data
 
     tables["_latest_workflow_report"] = load_latest_workflow_report()
     tables["_latest_selection_review_report"] = load_latest_selection_review_report()
     tables["_latest_review_template"] = template_metadata(latest_review_template_path())
     tables["_latest_watchlist_report"] = load_latest_watchlist_report()
+    tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
     watchlist = _load_watchlist_for_dashboard(store)
+    watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
+    tables["_watchlist_snapshot"] = watchlist_snapshot
     return {
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
         "selection": tables["strategy_result"],
@@ -263,6 +277,7 @@ def load_dashboard_data() -> dict[str, Any]:
         "factor_scores": tables["factor_scores"],
         "backtest": {},
         "watchlist": watchlist,
+        "watchlist_snapshot": watchlist_snapshot,
         "tables": tables,
     }
 
@@ -292,6 +307,9 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_latest_selection_review_report"] = load_latest_selection_review_report()
     real_tables["_latest_review_template"] = template_metadata(latest_review_template_path())
     real_tables["_latest_watchlist_report"] = load_latest_watchlist_report()
+    real_tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+    watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
+    real_tables["_watchlist_snapshot"] = watchlist_snapshot
     backtest_result = dict(backtest_diagnostic.get("backtest_result", {}))
     backtest_result["data_quality_notes"] = backtest_diagnostic.get("data_quality_notes", [])
     return {
@@ -305,6 +323,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
         "data_quality_notes": diagnostic.get("data_quality_notes", []),
         "backtest": backtest_result,
         "watchlist": _load_watchlist_for_dashboard(store),
+        "watchlist_snapshot": watchlist_snapshot,
         "backtest_diagnostic": backtest_diagnostic,
         "batch_diagnostic": batch_diagnostic,
         "tables": real_tables,
@@ -555,6 +574,28 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     if watchlist_report:
         st.write("最近 watchlist 报告")
         st.write(watchlist_report)
+    tracking_report = status.get("latest_watchlist_tracking_report")
+    if tracking_report:
+        st.write("最近 watchlist_tracking 报告")
+        st.write(tracking_report)
+    snapshot_df = tables.get("_watchlist_snapshot", pd.DataFrame())
+    if isinstance(snapshot_df, pd.DataFrame) and not snapshot_df.empty:
+        st.write("观察池最新 snapshot")
+        display_columns = [
+            "ts_code",
+            "name",
+            "snapshot_date",
+            "latest_trade_date",
+            "latest_close",
+            "total_score",
+            "trend_score",
+            "momentum_score",
+            "liquidity_score",
+            "volatility_score",
+            "data_quality_note",
+        ]
+        available = [column for column in display_columns if column in snapshot_df.columns]
+        st.dataframe(snapshot_df[available], use_container_width=True)
     st.info(status["last_job_status"])
 
 
@@ -564,6 +605,16 @@ def _load_watchlist_for_dashboard(store: Any) -> pd.DataFrame:
 
     try:
         return build_watchlist_dataframe(store, active_only=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _load_tracking_snapshot_for_dashboard(store: Any) -> pd.DataFrame:
+    """Load latest watchlist snapshot rows from local DuckDB for dashboard display."""
+    from core.review.tracking import latest_tracking_snapshot
+
+    try:
+        return latest_tracking_snapshot(store)
     except Exception:
         return pd.DataFrame()
 

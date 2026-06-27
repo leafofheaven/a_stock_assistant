@@ -15,7 +15,9 @@ from core.jobs.diagnose_update_batch import diagnose_update_batch
 from core.jobs.export_review_template import export_review_template
 from core.jobs.export_selection_review import export_selection_review
 from core.jobs.export_watchlist import export_watchlist
+from core.jobs.export_watchlist_tracking_report import export_watchlist_tracking_report
 from core.jobs.run_daily_selection import run_daily_selection
+from core.jobs.track_watchlist import track_watchlist
 from core.jobs.update_real_data import update_real_data
 from core.review.decisions import summarize_review_decisions
 from core.storage.duckdb_store import DuckDBStore
@@ -37,6 +39,8 @@ def run_real_workflow(
     export_selection_review_report: bool = False,
     export_review_template_report: bool = False,
     export_watchlist_report: bool = False,
+    track_watchlist_enabled: bool = False,
+    export_watchlist_tracking_report_enabled: bool = False,
     quiet: bool = False,
     settings: Settings | None = None,
     step_overrides: dict[str, Callable[[], dict[str, Any]]] | None = None,
@@ -138,6 +142,44 @@ def run_real_workflow(
             "message": "--export-watchlist not enabled.",
             "result": {"message": "已跳过 watchlist 导出。"},
         }
+    if track_watchlist_enabled:
+        steps["track_watchlist"] = _run_step(
+            "track_watchlist",
+            overrides.get(
+                "track_watchlist",
+                lambda: track_watchlist(
+                    output_dir=report_dir,
+                    export_report=False,
+                    quiet=True,
+                    settings=resolved_settings,
+                ),
+            ),
+        )
+    else:
+        steps["track_watchlist"] = {
+            "status": "skipped",
+            "message": "--track-watchlist not enabled.",
+            "result": {"message": "已跳过观察池跟踪。"},
+        }
+    if export_watchlist_tracking_report_enabled:
+        steps["export_watchlist_tracking"] = _run_step(
+            "export_watchlist_tracking",
+            overrides.get(
+                "export_watchlist_tracking",
+                lambda: export_watchlist_tracking_report(
+                    output_dir=report_dir,
+                    report_format="all",
+                    quiet=True,
+                    settings=resolved_settings,
+                ),
+            ),
+        )
+    else:
+        steps["export_watchlist_tracking"] = {
+            "status": "skipped",
+            "message": "--export-watchlist-tracking not enabled.",
+            "result": {"message": "已跳过观察池变化报告导出。"},
+        }
     steps["review_decisions"] = _run_step(
         "review_decisions",
         overrides.get(
@@ -189,6 +231,16 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Also export watchlist reports.",
     )
+    parser.add_argument(
+        "--track-watchlist",
+        action="store_true",
+        help="Also create watchlist tracking snapshots.",
+    )
+    parser.add_argument(
+        "--export-watchlist-tracking",
+        action="store_true",
+        help="Also export watchlist tracking change reports.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Reduce console output.")
     args = parser.parse_args(argv)
 
@@ -200,6 +252,8 @@ def main(argv: list[str] | None = None) -> None:
         export_selection_review_report=args.export_selection_review,
         export_review_template_report=args.export_review_template,
         export_watchlist_report=args.export_watchlist,
+        track_watchlist_enabled=args.track_watchlist,
+        export_watchlist_tracking_report_enabled=args.export_watchlist_tracking,
         quiet=args.quiet,
     )
 
@@ -233,6 +287,10 @@ def _infer_status(name: str, result: dict[str, Any]) -> str:
     if name == "export_review_template":
         return "success" if result.get("generated_files") else "partial_success"
     if name == "export_watchlist":
+        return "success" if result.get("generated_files") else "partial_success"
+    if name == "track_watchlist":
+        return "success" if result.get("snapshot_count", 0) > 0 else str(result.get("status", "partial_success"))
+    if name == "export_watchlist_tracking":
         return "success" if result.get("generated_files") else "partial_success"
     if name == "review_decisions":
         return "success"
