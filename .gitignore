@@ -2,6 +2,7 @@
 .env
 .venv/
 __pycache__/
+**/__pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
@@ -10,11 +11,15 @@ build/
 dist/
 *.egg-info/
 data/
+data/*.duckdb
+data/*.duckdb.wal
 *.duckdb
 *.duckdb.wal
 reports/*.md
 reports/*.json
+reports/*.csv
 !reports/.gitkeep
+backups/
 .ipynb_checkpoints/
 
 # Generated workflow reports

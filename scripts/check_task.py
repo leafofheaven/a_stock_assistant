@@ -35,6 +35,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task22": check_task22,
         "task23": check_task23,
         "task24": check_task24,
+        "task25": check_task25,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1030,6 +1031,54 @@ def check_task24(root: Path) -> list[str]:
     return failures
 
 
+def check_task25(root: Path) -> list[str]:
+    """Check Task 25 local backup and restore support."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/backup_local_data.py",
+            "core/jobs/list_backups.py",
+            "core/jobs/restore_local_data.py",
+            "core/jobs/diagnose_local_state.py",
+            "core/jobs/clean_generated_reports.py",
+            "tests/test_local_backup_restore.py",
+            "README.md",
+        ],
+    )
+    readme = read_source(root / "README.md")
+    for phrase in [
+        "本地数据备份与恢复",
+        "python -m core.jobs.backup_local_data",
+        "python -m core.jobs.restore_local_data",
+        "python -m core.jobs.diagnose_local_state",
+        "python -m core.jobs.clean_generated_reports",
+        "--backup-before-run",
+    ]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    gitignore = read_source(root / ".gitignore")
+    for phrase in [".env", "data/*.duckdb", "reports/*.md", "reports/*.json", "reports/*.csv", "backups/", "**/__pycache__/", ".pytest_cache/"]:
+        if phrase not in gitignore:
+            failures.append(f".gitignore is missing {phrase}.")
+
+    workflow_source = read_source(root / "core/jobs/run_real_workflow.py")
+    for phrase in ["--backup-before-run", "backup_local_data"]:
+        if phrase not in workflow_source:
+            failures.append(f"run_real_workflow must include Task 25 integration: missing {phrase}.")
+
+    if "update_review_decision" not in read_source(root / "core/jobs/update_review_decision.py"):
+        failures.append("Task 24 update_review_decision must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+
+    tests_source = read_source(root / "tests/test_local_backup_restore.py").lower()
+    for phrase in ["temporary duckdb", "mock", "backup_local_data", "restore_local_data", "dry_run", "clean_generated_reports", "run_real_workflow"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_local_backup_restore.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1085,6 +1134,7 @@ def main(argv: list[str] | None = None) -> int:
             "task22",
             "task23",
             "task24",
+            "task25",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

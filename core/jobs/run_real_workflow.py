@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.config import Settings, get_settings
+from core.jobs.backup_local_data import backup_local_data
 from core.jobs.diagnose_backtest import diagnose_backtest
 from core.jobs.diagnose_factors import diagnose_factors
 from core.jobs.diagnose_real_data import diagnose_real_data
@@ -43,6 +44,7 @@ def run_real_workflow(
     track_watchlist_enabled: bool = False,
     export_watchlist_tracking_report_enabled: bool = False,
     diagnose_review_history_enabled: bool = False,
+    backup_before_run: bool = False,
     quiet: bool = False,
     settings: Settings | None = None,
     step_overrides: dict[str, Callable[[], dict[str, Any]]] | None = None,
@@ -57,6 +59,21 @@ def run_real_workflow(
     overrides = step_overrides or {}
     started_at = datetime.now()
     steps: dict[str, dict[str, Any]] = {}
+
+    if backup_before_run:
+        steps["backup_local_data"] = _run_step(
+            "backup_local_data",
+            overrides.get(
+                "backup_local_data",
+                lambda: backup_local_data(label="before_workflow", settings=resolved_settings),
+            ),
+        )
+    else:
+        steps["backup_local_data"] = {
+            "status": "skipped",
+            "message": "--backup-before-run not enabled.",
+            "result": {"message": "已跳过工作流前备份。"},
+        }
 
     if skip_update:
         steps["update_real_data"] = {
@@ -262,6 +279,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Also diagnose review decision history.",
     )
+    parser.add_argument(
+        "--backup-before-run",
+        action="store_true",
+        help="Create a local backup before running workflow steps.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Reduce console output.")
     args = parser.parse_args(argv)
 
@@ -276,6 +298,7 @@ def main(argv: list[str] | None = None) -> None:
         track_watchlist_enabled=args.track_watchlist,
         export_watchlist_tracking_report_enabled=args.export_watchlist_tracking,
         diagnose_review_history_enabled=args.diagnose_review_history,
+        backup_before_run=args.backup_before_run,
         quiet=args.quiet,
     )
 
@@ -318,6 +341,8 @@ def _infer_status(name: str, result: dict[str, Any]) -> str:
         return "success"
     if name == "diagnose_review_history":
         return "success"
+    if name == "backup_local_data":
+        return "success" if result.get("backup_dir") else "partial_success"
     return "success"
 
 

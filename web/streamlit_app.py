@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.sample_data import get_sample_dashboard_data
+from core.jobs.diagnose_local_state import diagnose_local_state
 from core.reporting.selection_review_report import (
     REVIEW_CHECKLIST,
     load_latest_selection_review_report,
@@ -133,6 +134,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     latest_review_template = tables.get("_latest_review_template")
     latest_watchlist_report = tables.get("_latest_watchlist_report")
     latest_watchlist_tracking_report = tables.get("_latest_watchlist_tracking_report")
+    local_state = tables.get("_local_state")
     return {
         "latest_price_date": _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
@@ -156,6 +158,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "latest_review_template": latest_review_template,
         "latest_watchlist_report": latest_watchlist_report,
         "latest_watchlist_tracking_report": latest_watchlist_tracking_report,
+        "local_state": local_state,
     }
 
 
@@ -207,6 +210,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
         data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+        data.setdefault("tables", {})["_local_state"] = _safe_local_state()
         data.setdefault("watchlist", pd.DataFrame())
         data.setdefault("watchlist_snapshot", pd.DataFrame())
         return data
@@ -220,6 +224,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
         data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+        data.setdefault("tables", {})["_local_state"] = _safe_local_state()
         data.setdefault("watchlist", pd.DataFrame())
         data.setdefault("watchlist_snapshot", pd.DataFrame())
         return data
@@ -243,6 +248,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
         data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+        data.setdefault("tables", {})["_local_state"] = _safe_local_state()
         data.setdefault("watchlist", pd.DataFrame())
         data.setdefault("watchlist_snapshot", pd.DataFrame())
         return data
@@ -258,6 +264,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
         data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+        data.setdefault("tables", {})["_local_state"] = _safe_local_state()
         data.setdefault("watchlist", pd.DataFrame())
         data.setdefault("watchlist_snapshot", pd.DataFrame())
         return data
@@ -267,6 +274,7 @@ def load_dashboard_data() -> dict[str, Any]:
     tables["_latest_review_template"] = template_metadata(latest_review_template_path())
     tables["_latest_watchlist_report"] = load_latest_watchlist_report()
     tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+    tables["_local_state"] = _safe_local_state()
     watchlist = _load_watchlist_for_dashboard(store)
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
     tables["_watchlist_snapshot"] = watchlist_snapshot
@@ -310,6 +318,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_latest_review_template"] = template_metadata(latest_review_template_path())
     real_tables["_latest_watchlist_report"] = load_latest_watchlist_report()
     real_tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+    real_tables["_local_state"] = _safe_local_state()
     real_tables["review_decisions"] = _safe_read_store_table(store, "review_decisions")
     real_tables["review_decision_history"] = _safe_read_store_table(store, "review_decision_history")
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
@@ -538,6 +547,24 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.metric("缺数据股票数量", status["missing_symbol_count"])
     st.write({"覆盖率": f"{status['coverage_rate']:.2%}"})
     st.write({"是否 sample 数据": status["is_sample_data"], "是否真实数据": status["is_real_data"]})
+    local_state = status.get("local_state")
+    if isinstance(local_state, dict) and local_state:
+        st.write("本地状态 / 备份")
+        st.write(
+            {
+                "DuckDB 路径": local_state.get("duckdb_path"),
+                "DuckDB 文件大小": local_state.get("duckdb_size"),
+                "核心表行数": local_state.get("table_counts"),
+                "观察池记录数": local_state.get("review_decisions_rows"),
+                "复核历史记录数": local_state.get("review_decision_history_rows"),
+                "watchlist snapshots": local_state.get("watchlist_snapshots_rows"),
+                "reports 文件数量": local_state.get("reports_count"),
+                "backups 数量": local_state.get("backups_count"),
+                "最近备份时间": local_state.get("latest_backup_time") or "暂无",
+                "最近备份路径": local_state.get("latest_backup_path") or "暂无",
+            }
+        )
+        st.caption("个人本地工具，建议定期备份。")
     if status["field_missing"]:
         st.warning(f"存在字段缺失：{status['field_missing']}")
     st.write("核心数据表状态")
@@ -651,6 +678,14 @@ def _safe_read_store_table(store: Any, table_name: str) -> pd.DataFrame:
         return store.read_table(table_name)
     except Exception:
         return pd.DataFrame()
+
+
+def _safe_local_state() -> dict[str, Any]:
+    """Return local state diagnostics for display without mutating files."""
+    try:
+        return diagnose_local_state()
+    except Exception:
+        return {}
 
 
 def _watchlist_from_tables(tables: dict[str, Any]) -> pd.DataFrame:
