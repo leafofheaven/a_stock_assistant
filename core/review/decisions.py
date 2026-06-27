@@ -71,6 +71,7 @@ def import_review_decisions(
     inserted_rows = 0
     if not dry_run and valid_rows:
         existing = _safe_read_reviews(store)
+        valid_rows = _preserve_existing_text_fields(valid_rows, existing)
         existing_keys = set(zip(existing.get("ts_code", []), existing.get("selection_date", [])))
         incoming = pd.DataFrame(valid_rows, columns=REVIEW_COLUMNS)
         incoming_keys = set(zip(incoming["ts_code"], incoming["selection_date"]))
@@ -149,12 +150,12 @@ def _validate_frame(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 def _validate_row(row: pd.Series) -> list[str]:
     errors: list[str] = []
-    if not str(row.get("ts_code", "")).strip():
+    if not _clean_text(row.get("ts_code")):
         errors.append("ts_code 不能为空")
-    decision = str(row.get("decision", "") or "pending").strip()
+    decision = _clean_text(row.get("decision")) or "pending"
     if decision not in ALLOWED_DECISIONS:
         errors.append(f"非法 decision: {decision}")
-    review_status = str(row.get("review_status", "") or "active").strip()
+    review_status = _clean_text(row.get("review_status")) or "active"
     if review_status not in ALLOWED_REVIEW_STATUS:
         errors.append(f"非法 review_status: {review_status}")
     return errors
@@ -162,21 +163,21 @@ def _validate_row(row: pd.Series) -> list[str]:
 
 def _normalize_row(row: pd.Series, source_report_path: str, default_selection_date: str) -> dict[str, Any]:
     now = datetime.now().isoformat(timespec="seconds")
-    ts_code = str(row.get("ts_code", "")).strip()
-    selection_date = str(row.get("selection_date", "")).strip() or default_selection_date
-    decision = str(row.get("decision", "") or "pending").strip()
+    ts_code = _clean_text(row.get("ts_code"))
+    selection_date = _clean_text(row.get("selection_date")) or default_selection_date
+    decision = _clean_text(row.get("decision")) or "pending"
     return {
         "decision_id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{ts_code}:{selection_date}")),
         "ts_code": ts_code,
-        "name": str(row.get("name", "")).strip(),
+        "name": _clean_text(row.get("name")),
         "selection_date": selection_date,
-        "review_date": str(row.get("review_date", "") or now[:10]).strip(),
+        "review_date": _clean_text(row.get("review_date")) or now[:10],
         "decision": decision,
-        "review_status": str(row.get("review_status", "") or "active").strip(),
-        "reviewer": str(row.get("reviewer", "")).strip(),
-        "reason": str(row.get("reason", "")).strip(),
-        "notes": str(row.get("notes", "")).strip(),
-        "data_quality_note": str(row.get("data_quality_note", "")).strip(),
+        "review_status": _clean_text(row.get("review_status")) or "active",
+        "reviewer": _clean_text(row.get("reviewer")),
+        "reason": _clean_text(row.get("reason")),
+        "notes": _clean_text(row.get("notes")),
+        "data_quality_note": _clean_text(row.get("data_quality_note")),
         "source_report_path": source_report_path,
         "created_at": now,
         "updated_at": now,
@@ -210,12 +211,54 @@ def _enrich_watch(row: dict[str, Any], price: pd.DataFrame, scores: pd.DataFrame
     selection_date = str(row.get("selection_date", ""))
     latest_price = _latest_row(price, ts_code, "trade_date")
     latest_score = _latest_row(scores, ts_code, "trade_date")
+    total_score = _optional_float(latest_score.get("total_score"))
+    data_quality_note = _data_quality_note(row.get("data_quality_note"), total_score)
     return {
         **row,
         "latest_trade_date": latest_price.get("trade_date") or latest_score.get("trade_date") or selection_date,
         "latest_close": _optional_float(latest_price.get("close")),
-        "total_score": _optional_float(latest_score.get("total_score")),
+        "total_score": total_score,
+        "data_quality_note": data_quality_note,
     }
+
+
+def _preserve_existing_text_fields(rows: list[dict[str, Any]], existing: pd.DataFrame) -> list[dict[str, Any]]:
+    """Preserve existing reason/notes/reviewer when incoming CSV cells are blank."""
+    if existing.empty:
+        return rows
+    indexed = {
+        (str(item.get("ts_code")), str(item.get("selection_date"))): item
+        for item in existing.to_dict("records")
+    }
+    for row in rows:
+        current = indexed.get((row["ts_code"], row["selection_date"]), {})
+        for column in ["reason", "notes", "reviewer"]:
+            if not row.get(column) and _clean_text(current.get(column)):
+                row[column] = _clean_text(current.get(column))
+        if current.get("created_at"):
+            row["created_at"] = current["created_at"]
+    return rows
+
+
+def _data_quality_note(value: Any, total_score: float | None) -> str:
+    note = _clean_text(value)
+    if total_score is None:
+        missing_score = "当前无可用综合评分"
+        return f"{note}；{missing_score}" if note else missing_score
+    return note
+
+
+def _clean_text(value: Any) -> str:
+    """Normalize CSV text cells, treating NaN-like values as empty."""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "<na>", "null"} else text
 
 
 def _latest_row(df: pd.DataFrame, ts_code: str, date_col: str) -> dict[str, Any]:

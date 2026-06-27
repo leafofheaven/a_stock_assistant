@@ -33,7 +33,13 @@ def _settings(tmp_path: Path) -> Any:
     )
 
 
-def _write_template(path: Path, decision: str = "watch", reason: str = "人工复核通过") -> None:
+def _write_template(
+    path: Path,
+    decision: str = "watch",
+    reason: str = "人工复核通过",
+    notes: str = "temporary duckdb mock note",
+    reviewer: str = "tester",
+) -> None:
     """Write a minimal review decision CSV."""
     pd.DataFrame(
         [
@@ -49,8 +55,8 @@ def _write_template(path: Path, decision: str = "watch", reason: str = "人工�
                 "fundamental_score": 84.0,
                 "decision": decision,
                 "reason": reason,
-                "notes": "temporary duckdb mock note",
-                "reviewer": "tester",
+                "notes": notes,
+                "reviewer": reviewer,
             }
         ]
     ).to_csv(path, index=False)
@@ -103,6 +109,52 @@ def test_import_review_decisions_valid_and_duplicate_updates(tmp_path: Path) -> 
     assert reviews.iloc[0]["reason"] == "updated reason"
 
 
+def test_import_review_decisions_saves_reason_notes_and_reviewer(tmp_path: Path) -> None:
+    """Import should persist reason, notes, and reviewer fields."""
+    store = DuckDBStore(tmp_path / "fields.duckdb")
+    csv_path = tmp_path / "fields.csv"
+    _write_template(csv_path, reason="测试加入观察", notes="重点跟踪订单变化", reviewer="wanghao")
+
+    import_review_decisions(file_path=csv_path, store=store)
+    reviews = read_review_decisions(store)
+
+    assert reviews.iloc[0]["reason"] == "测试加入观察"
+    assert reviews.iloc[0]["notes"] == "重点跟踪订单变化"
+    assert reviews.iloc[0]["reviewer"] == "wanghao"
+
+
+def test_duplicate_import_updates_reason_notes_and_reviewer(tmp_path: Path) -> None:
+    """Duplicate import should update review text fields when new values exist."""
+    store = DuckDBStore(tmp_path / "update-fields.duckdb")
+    csv_path = tmp_path / "update-fields.csv"
+    _write_template(csv_path, reason="old reason", notes="old notes", reviewer="old reviewer")
+    import_review_decisions(file_path=csv_path, store=store)
+    _write_template(csv_path, reason="new reason", notes="new notes", reviewer="new reviewer")
+
+    import_review_decisions(file_path=csv_path, store=store)
+    reviews = read_review_decisions(store)
+
+    assert reviews.iloc[0]["reason"] == "new reason"
+    assert reviews.iloc[0]["notes"] == "new notes"
+    assert reviews.iloc[0]["reviewer"] == "new reviewer"
+
+
+def test_nan_cells_do_not_clear_existing_review_text(tmp_path: Path) -> None:
+    """NaN-like cells should not overwrite existing reason/notes/reviewer."""
+    store = DuckDBStore(tmp_path / "nan-preserve.duckdb")
+    csv_path = tmp_path / "nan-preserve.csv"
+    _write_template(csv_path, reason="keep reason", notes="keep notes", reviewer="keep reviewer")
+    import_review_decisions(file_path=csv_path, store=store)
+    _write_template(csv_path, reason="NaN", notes="NaN", reviewer="NaN")
+
+    import_review_decisions(file_path=csv_path, store=store)
+    reviews = read_review_decisions(store)
+
+    assert reviews.iloc[0]["reason"] == "keep reason"
+    assert reviews.iloc[0]["notes"] == "keep notes"
+    assert reviews.iloc[0]["reviewer"] == "keep reviewer"
+
+
 def test_invalid_decision_does_not_crash_entire_import(tmp_path: Path) -> None:
     """Illegal decision should be reported and skipped clearly."""
     store = DuckDBStore(tmp_path / "invalid.duckdb")
@@ -141,6 +193,11 @@ def test_diagnose_watchlist_outputs_active_watch(tmp_path: Path) -> None:
 
     assert result["active_watch_count"] == 1
     assert result["watchlist"][0]["ts_code"] == "000001.SZ"
+    assert result["watchlist"][0]["reason"] == "人工复核通过"
+    assert result["watchlist"][0]["notes"] == "temporary duckdb mock note"
+    assert result["watchlist"][0]["reviewer"] == "tester"
+    assert result["watchlist"][0]["total_score"] is None
+    assert result["watchlist"][0]["data_quality_note"] == "当前无可用综合评分"
 
 
 def test_export_watchlist_generates_markdown_json_csv(tmp_path: Path) -> None:
@@ -162,6 +219,12 @@ def test_export_watchlist_generates_markdown_json_csv(tmp_path: Path) -> None:
     assert Path(result["generated_files"]["json"]).exists()
     assert Path(result["generated_files"]["csv"]).exists()
     assert result["report"]["watchlist_count"] == 1
+    markdown = Path(result["generated_files"]["markdown"]).read_text(encoding="utf-8")
+    csv_text = Path(result["generated_files"]["csv"]).read_text(encoding="utf-8-sig")
+    assert "人工复核通过" in markdown
+    assert "当前无可用综合评分" in markdown
+    assert "reason" in csv_text
+    assert "data_quality_note" in csv_text
 
 
 def test_run_real_workflow_exports_review_template_and_watchlist(tmp_path: Path) -> None:
@@ -207,4 +270,3 @@ def test_streamlit_helper_can_read_watchlist_report(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded["watchlist_count"] == 1
     assert status["latest_watchlist_report"]["path"].endswith(".json")
-

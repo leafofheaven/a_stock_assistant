@@ -50,6 +50,7 @@ def main() -> None:
             print(
                 f"  {item.get('ts_code')} {item.get('name')} selection_date={item.get('selection_date')} "
                 f"review_date={item.get('review_date')} decision={item.get('decision')} "
+                f"reviewer={item.get('reviewer') or '暂无'} "
                 f"reason={item.get('reason') or '暂无'} notes={item.get('notes') or '暂无'} "
                 f"latest_trade_date={item.get('latest_trade_date') or '暂无'} "
                 f"latest_close={item.get('latest_close')} total_score={item.get('total_score')} "

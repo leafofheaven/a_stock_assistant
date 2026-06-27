@@ -20,6 +20,7 @@ WATCHLIST_COLUMNS = [
     "selection_date",
     "review_date",
     "decision",
+    "reviewer",
     "reason",
     "notes",
     "latest_trade_date",
@@ -60,10 +61,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "",
         "## 观察池总表",
         "",
-        "| ts_code | name | decision | latest_trade_date | latest_close | total_score | reason |",
-        "| --- | --- | --- | --- | ---: | ---: | --- |",
+        "| ts_code | name | decision | reviewer | latest_trade_date | latest_close | total_score | reason |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | --- |",
         *[
-            "| {ts_code} | {name} | {decision} | {latest_trade_date} | {latest_close} | {total_score} | {reason} |".format(
+            "| {ts_code} | {name} | {decision} | {reviewer} | {latest_trade_date} | {latest_close} | {total_score} | {reason} |".format(
                 **_markdown_row(item)
             )
             for item in report["watchlist"]
@@ -80,6 +81,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- selection_date: {item.get('selection_date') or '暂无'}",
                 f"- review_date: {item.get('review_date') or '暂无'}",
                 f"- decision: {item.get('decision') or '暂无'}",
+                f"- reviewer: {item.get('reviewer') or '暂无'}",
                 f"- reason: {item.get('reason') or '暂无'}",
                 f"- notes: {item.get('notes') or '暂无'}",
                 f"- 最新行情日期: {item.get('latest_trade_date') or '暂无'}",
@@ -171,6 +173,7 @@ def _markdown_row(item: dict[str, Any]) -> dict[str, Any]:
         "ts_code": item.get("ts_code", ""),
         "name": item.get("name", ""),
         "decision": item.get("decision", ""),
+        "reviewer": item.get("reviewer", ""),
         "latest_trade_date": item.get("latest_trade_date", ""),
         "latest_close": _display(item.get("latest_close")),
         "total_score": _display(item.get("total_score")),
