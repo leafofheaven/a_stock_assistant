@@ -20,6 +20,12 @@ from core.sample_data import (
 from web.streamlit_app import filter_selection_data, summarize_update_status
 
 
+class SampleSettings:
+    """Settings-like object that forces sample-mode smoke tests."""
+
+    data_provider = "sample"
+
+
 def test_sample_data_functions_return_dataframes() -> None:
     """Sample data should cover the MVP tables without external API calls."""
     frames = [
@@ -42,7 +48,7 @@ def test_sample_data_functions_return_dataframes() -> None:
 
 def test_run_daily_selection_sample_mode_runs_without_token() -> None:
     """Daily selection smoke entry should run with demo data and no real token."""
-    summary = run_daily_selection(use_sample=True)
+    summary = run_daily_selection(use_sample=True, settings=SampleSettings())
 
     assert "sample" in summary["data_source"]
     assert summary["stock_pool_count"] > 0
@@ -53,7 +59,7 @@ def test_run_daily_selection_sample_mode_runs_without_token() -> None:
 
 def test_run_daily_selection_no_data_mode_is_clear() -> None:
     """No-data mode should return a readable empty summary instead of crashing."""
-    summary = run_daily_selection(use_sample=False)
+    summary = run_daily_selection(use_sample=False, settings=SampleSettings())
 
     assert summary["data_source"] == "无数据"
     assert summary["candidate_count"] == 0

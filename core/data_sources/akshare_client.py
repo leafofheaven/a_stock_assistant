@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import json
+import subprocess
 from typing import Any
+from urllib.parse import urlencode
 
 import pandas as pd
 
@@ -15,15 +18,22 @@ logger = logging.getLogger(__name__)
 class AKShareClient(StockDataSource):
     """AKShare implementation of the unified stock data source interface."""
 
-    def __init__(self, akshare_module: Any | None = None, adjust: str = "qfq") -> None:
+    def __init__(
+        self,
+        akshare_module: Any | None = None,
+        adjust: str = "qfq",
+        curl_runner: Any | None = None,
+    ) -> None:
         """Create an AKShare client.
 
         Args:
             akshare_module: Optional injected AKShare-like module for tests.
             adjust: Adjustment mode for daily price calls that support it.
+            curl_runner: Optional ``subprocess.run`` compatible callable for tests.
         """
         self._akshare = akshare_module
         self.adjust = adjust
+        self._curl_runner = curl_runner or subprocess.run
 
     def get_stock_basic(self) -> pd.DataFrame:
         """Return stock basic information from AKShare."""
@@ -139,6 +149,7 @@ class AKShareClient(StockDataSource):
 
         frames: list[pd.DataFrame] = []
         for symbol in symbols:
+            frame = pd.DataFrame()
             try:
                 frame = self._call(
                     function_name,
@@ -150,14 +161,105 @@ class AKShareClient(StockDataSource):
                 )
             except DataSourceError as exc:
                 logger.warning("AKShare %s failed for %s: %s", function_name, symbol, exc)
-                continue
+            if frame.empty and function_name == "stock_zh_a_hist":
+                logger.warning("AKShare %s returned no usable data for %s; trying Eastmoney curl fallback.", function_name, symbol)
+                frame = self._call_eastmoney_kline(symbol, start_date, end_date)
             if frame.empty:
-                logger.warning("AKShare %s returned empty data for %s.", function_name, symbol)
+                logger.warning("AKShare and Eastmoney curl returned empty data for %s.", symbol)
                 continue
             if "ts_code" not in frame.columns or frame["ts_code"].isna().all():
                 frame["ts_code"] = _to_ts_code(symbol)
             frames.append(frame)
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    def _call_eastmoney_kline(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """Fetch Eastmoney kline data through system curl when requests-based AKShare fails."""
+        secid = _to_eastmoney_secid(symbol)
+        params = {
+            "secid": secid,
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": "101",
+            "fqt": _to_eastmoney_adjust(self.adjust),
+            "beg": start_date,
+            "end": end_date,
+            "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        }
+        url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?{urlencode(params)}"
+        command = [
+            "curl",
+            "-4",
+            "--http1.1",
+            "--noproxy",
+            "*",
+            "-sSL",
+            "-A",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "-e",
+            "https://quote.eastmoney.com/",
+            url,
+        ]
+        try:
+            completed = self._curl_runner(command, capture_output=True, text=True, timeout=30, check=False)
+        except Exception as exc:
+            logger.warning("Eastmoney curl fallback failed for %s: %s", symbol, exc)
+            return pd.DataFrame()
+
+        if getattr(completed, "returncode", 1) != 0:
+            stderr = getattr(completed, "stderr", "")
+            logger.warning("Eastmoney curl fallback returned non-zero status for %s: %s", symbol, stderr)
+            return pd.DataFrame()
+
+        try:
+            payload = json.loads(getattr(completed, "stdout", "") or "{}")
+        except json.JSONDecodeError as exc:
+            logger.warning("Eastmoney curl fallback returned invalid JSON for %s: %s", symbol, exc)
+            return pd.DataFrame()
+
+        klines = (payload.get("data") or {}).get("klines") or []
+        if not klines:
+            logger.warning("Eastmoney curl fallback returned no klines for %s.", symbol)
+            return pd.DataFrame()
+
+        rows: list[dict[str, Any]] = []
+        for line in klines:
+            parts = str(line).split(",")
+            if len(parts) < 11:
+                logger.warning("Skipping malformed Eastmoney kline for %s: %s", symbol, line)
+                continue
+            rows.append(
+                {
+                    "ts_code": _to_ts_code(symbol),
+                    "trade_date": parts[0].replace("-", ""),
+                    "open": _to_number(parts[1]),
+                    "close": _to_number(parts[2]),
+                    "high": _to_number(parts[3]),
+                    "low": _to_number(parts[4]),
+                    "vol": _to_number(parts[5]),
+                    "amount": _to_number(parts[6]),
+                    "pct_chg": _to_number(parts[8]),
+                    "change": _to_number(parts[9]),
+                    "turnover_rate": _to_number(parts[10]),
+                    "pre_close": pd.NA,
+                }
+            )
+        return pd.DataFrame(
+            rows,
+            columns=[
+                "ts_code",
+                "trade_date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "pre_close",
+                "change",
+                "pct_chg",
+                "vol",
+                "amount",
+                "turnover_rate",
+            ],
+        )
 
 
 def _standardize_fields(function_name: str, df: pd.DataFrame) -> pd.DataFrame:
@@ -272,3 +374,25 @@ def _to_ts_code(symbol: str) -> str:
     clean = _normalize_symbol(str(symbol))
     suffix = "SH" if clean.startswith("6") else "SZ"
     return f"{clean}.{suffix}"
+
+
+def _to_eastmoney_secid(symbol: str) -> str:
+    """Return Eastmoney secid for an A-share symbol."""
+    clean = _normalize_symbol(str(symbol))
+    market = "1" if clean.startswith("6") else "0"
+    return f"{market}.{clean}"
+
+
+def _to_eastmoney_adjust(adjust: str) -> str:
+    """Map AKShare adjustment names to Eastmoney fqt values."""
+    return {"qfq": "1", "hfq": "2"}.get(adjust, "0")
+
+
+def _to_number(value: Any) -> float | None:
+    """Convert provider numeric text to float while preserving missing values."""
+    if value in {"", "-", None}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

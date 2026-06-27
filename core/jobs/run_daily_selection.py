@@ -93,6 +93,21 @@ def main() -> None:
     else:
         print("  暂无候选股票。")
     print(f"- 结果保存位置或说明: {summary['result_location']}")
+    diagnostics = summary.get("universe_diagnostics") or []
+    if diagnostics:
+        print("- 股票池过滤诊断:")
+        for item in diagnostics:
+            print(
+                "  "
+                f"{item.get('ts_code')} {item.get('name')} "
+                f"latest_trade_date={item.get('latest_trade_date') or '暂无'} "
+                f"list_date={item.get('list_date') or '暂无'} "
+                f"available_price_days={item.get('available_price_days')} "
+                f"avg_amount_20d={item.get('avg_amount_20d')} "
+                f"pe_missing={item.get('pe_missing')} "
+                f"pb_missing={item.get('pb_missing')} "
+                f"exclude_reason={item.get('exclude_reason') or '无'}"
+            )
 
 
 def _empty_summary(data_source: str) -> dict[str, Any]:
@@ -134,11 +149,29 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
 
     latest_trade_date = str(daily_price["trade_date"].dropna().astype(str).max())
     try:
-        universe = build_tradeable_universe(stock_basic, daily_price, daily_basic, latest_trade_date)
+        is_akshare = settings.data_provider == "akshare"
+        universe = build_tradeable_universe(
+            stock_basic,
+            daily_price,
+            daily_basic,
+            latest_trade_date,
+            allow_missing_list_date_with_price_history=is_akshare,
+            min_price_history_days=60,
+            allow_missing_valuation=is_akshare,
+        )
         tradeable = universe[universe["is_tradeable"].fillna(False)].copy()
         if tradeable.empty:
             summary = _empty_summary("无数据")
             summary["stock_pool_count"] = int(len(universe))
+            summary["latest_price_date"] = latest_trade_date
+            summary["selection_date"] = latest_trade_date
+            summary["universe_diagnostics"] = _universe_diagnostics(
+                universe=universe,
+                stock_basic=stock_basic,
+                daily_price=daily_price,
+                daily_basic=daily_basic,
+                latest_trade_date=latest_trade_date,
+            )
             summary["result_location"] = "真实数据已读取，但股票池过滤后无可交易股票；可回退 sample 数据。"
             return summary
         factor_scores = _calculate_minimal_real_scores(
@@ -163,15 +196,16 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
     return {
         "run_date": date.today().isoformat(),
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
+        "selection_date": latest_trade_date,
         "stock_pool_count": int(len(tradeable)),
         "scored_stock_count": int(len(factor_scores)),
-            "candidate_count": int(len(selected)),
-            "top_candidates": _top_candidate_records(selected),
-            "latest_price_date": latest_trade_date,
-            "wrote_to_database": False,
-            "fallback_to_sample": False,
-            "result_location": f"基于本地 DuckDB 真实数据完成最小选股试运行，最新行情日期 {latest_trade_date}。",
-        }
+        "candidate_count": int(len(selected)),
+        "top_candidates": _top_candidate_records(selected),
+        "latest_price_date": latest_trade_date,
+        "wrote_to_database": False,
+        "fallback_to_sample": False,
+        "result_location": f"基于本地 DuckDB 真实数据完成最小选股试运行，最新行情日期 {latest_trade_date}。",
+    }
 
 
 def _calculate_minimal_real_scores(
@@ -214,6 +248,60 @@ def _latest_date(df: pd.DataFrame, column: str) -> str | None:
         return None
     values = df[column].dropna().astype(str)
     return None if values.empty else str(values.max())
+
+
+def _universe_diagnostics(
+    universe: pd.DataFrame,
+    stock_basic: pd.DataFrame,
+    daily_price: pd.DataFrame,
+    daily_basic: pd.DataFrame,
+    latest_trade_date: str,
+) -> list[dict[str, Any]]:
+    """Return per-stock filtering diagnostics for real-data troubleshooting."""
+    if universe.empty:
+        return []
+
+    diagnostics: list[dict[str, Any]] = []
+    for row in universe.to_dict("records"):
+        ts_code = str(row.get("ts_code", ""))
+        price_rows = _rows_until(daily_price, "trade_date", latest_trade_date, ts_code)
+        basic_rows = _rows_until(daily_basic, "trade_date", latest_trade_date, ts_code)
+        source_basic = (
+            stock_basic[stock_basic["ts_code"].astype(str) == ts_code]
+            if "ts_code" in stock_basic.columns
+            else pd.DataFrame()
+        )
+        list_date = row.get("list_date")
+        if (list_date is None or str(list_date) in {"", "None", "<NA>", "nan"}) and not source_basic.empty:
+            list_date = source_basic.iloc[0].get("list_date")
+        diagnostics.append(
+            {
+                "ts_code": ts_code,
+                "name": row.get("name"),
+                "latest_trade_date": latest_trade_date,
+                "list_date": None if pd.isna(list_date) else list_date,
+                "available_price_days": int(len(price_rows)),
+                "avg_amount_20d": row.get("avg_amount_20d"),
+                "pe_missing": _column_all_missing(basic_rows, "pe"),
+                "pb_missing": _column_all_missing(basic_rows, "pb"),
+                "exclude_reason": row.get("exclude_reason", ""),
+            }
+        )
+    return diagnostics
+
+
+def _rows_until(df: pd.DataFrame, date_column: str, trade_date: str, ts_code: str) -> pd.DataFrame:
+    """Return all rows for one stock up to the selected date."""
+    if df.empty or date_column not in df.columns or "ts_code" not in df.columns:
+        return pd.DataFrame(columns=df.columns)
+    return df[(df["ts_code"].astype(str) == ts_code) & (df[date_column].astype(str) <= trade_date)]
+
+
+def _column_all_missing(df: pd.DataFrame, column: str) -> bool:
+    """Return whether a column is absent or entirely missing."""
+    if df.empty or column not in df.columns:
+        return True
+    return bool(pd.to_numeric(df[column], errors="coerce").dropna().empty)
 
 
 def _top_candidate_records(selection: pd.DataFrame, limit: int = 5) -> list[dict[str, Any]]:
