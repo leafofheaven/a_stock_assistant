@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -155,6 +156,34 @@ class FullyFailingAKShareModule(MockAKShareModule):
         return pd.DataFrame()
 
 
+class EmptyForOneSymbolAKShareModule(MockAKShareModule):
+    """Mock AKShare module where one symbol returns empty history."""
+
+    def stock_zh_a_hist(self, **kwargs: Any) -> pd.DataFrame:
+        """Return empty for one symbol and normal data for the other."""
+        if kwargs.get("symbol") == "600000":
+            return pd.DataFrame()
+        return super().stock_zh_a_hist(**kwargs)
+
+
+def successful_eastmoney_curl(command: list[str], **kwargs: Any) -> SimpleNamespace:
+    """Return a mock Eastmoney kline response."""
+    url = command[-1]
+    if "secid=0.000001" in url:
+        kline = "2024-01-02,10.00,10.20,10.50,9.80,1000,100000,7.00,1.20,0.12,2.50"
+    elif "secid=1.600000" in url:
+        kline = "2024-01-02,8.00,8.10,8.30,7.90,2000,200000,5.00,1.25,0.10,1.50"
+    else:
+        kline = ""
+    stdout = f'{{"data":{{"klines":["{kline}"]}}}}' if kline else '{"data":{"klines":[]}}'
+    return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+
+def failing_eastmoney_curl(command: list[str], **kwargs: Any) -> SimpleNamespace:
+    """Return a mock failed curl response."""
+    return SimpleNamespace(returncode=7, stdout="", stderr="mock curl failure")
+
+
 def test_data_provider_akshare_selects_akshare_client() -> None:
     """DATA_PROVIDER=akshare should select AKShareClient."""
     selection = select_data_provider(AkshareSettings())
@@ -214,7 +243,7 @@ def test_akshare_symbol_suffix_mapping() -> None:
 def test_akshare_empty_data_is_handled_clearly(tmp_path: Path) -> None:
     """Empty AKShare frames should not crash ingestion."""
     store = DuckDBStore(tmp_path / "ak-empty.duckdb")
-    client = AKShareClient(akshare_module=MockAKShareModule(empty=True))
+    client = AKShareClient(akshare_module=MockAKShareModule(empty=True), curl_runner=failing_eastmoney_curl)
 
     result = update_real_data(settings=AkshareSettings(), store=store, client=client)
 
@@ -248,7 +277,7 @@ def test_akshare_fallback_runs_when_tushare_fails(tmp_path: Path) -> None:
 def test_akshare_single_symbol_failure_keeps_successful_symbols(tmp_path: Path) -> None:
     """One failed AKShare symbol should not discard other successful symbols."""
     store = DuckDBStore(tmp_path / "partial-akshare.duckdb")
-    client = AKShareClient(akshare_module=PartiallyFailingAKShareModule())
+    client = AKShareClient(akshare_module=PartiallyFailingAKShareModule(), curl_runner=failing_eastmoney_curl)
 
     result = update_real_data(settings=AkshareSettings(), store=store, client=client)
 
@@ -260,13 +289,93 @@ def test_akshare_single_symbol_failure_keeps_successful_symbols(tmp_path: Path) 
 def test_akshare_all_symbol_failures_return_clear_failure(tmp_path: Path) -> None:
     """All failed AKShare symbols should produce a clear failed update summary."""
     store = DuckDBStore(tmp_path / "failed-akshare.duckdb")
-    client = AKShareClient(akshare_module=FullyFailingAKShareModule())
+    client = AKShareClient(akshare_module=FullyFailingAKShareModule(), curl_runner=failing_eastmoney_curl)
 
     result = update_real_data(settings=AkshareSettings(), store=store, client=client)
 
     assert result["status"] == "failed"
     assert "所有样本股票日线行情均为空或失败" in result["message"]
     assert result["written_rows"]["daily_price"] == 0
+
+
+def test_eastmoney_curl_fallback_builds_daily_price_when_akshare_fails() -> None:
+    """Curl fallback should parse Eastmoney klines after AKShare history fails."""
+    client = AKShareClient(akshare_module=FullyFailingAKShareModule(), curl_runner=successful_eastmoney_curl)
+
+    daily_price = client.get_daily_price("20240101", "20240105", ["000001"])
+
+    assert len(daily_price) == 1
+    assert daily_price.loc[0, "ts_code"] == "000001.SZ"
+    assert daily_price.loc[0, "trade_date"] == "20240102"
+    assert daily_price.loc[0, "open"] == 10.0
+    assert daily_price.loc[0, "close"] == 10.2
+    assert daily_price.loc[0, "high"] == 10.5
+    assert daily_price.loc[0, "low"] == 9.8
+    assert daily_price.loc[0, "vol"] == 1000.0
+    assert daily_price.loc[0, "amount"] == 100000.0
+    assert daily_price.loc[0, "pct_chg"] == 1.2
+    assert daily_price.loc[0, "change"] == 0.12
+    assert daily_price.loc[0, "turnover_rate"] == 2.5
+
+
+def test_eastmoney_curl_fallback_uses_expected_secids() -> None:
+    """Curl fallback should convert A-share symbols to Eastmoney secids."""
+    commands: list[list[str]] = []
+
+    def recording_curl(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        commands.append(command)
+        return successful_eastmoney_curl(command, **kwargs)
+
+    client = AKShareClient(akshare_module=FullyFailingAKShareModule(), curl_runner=recording_curl)
+
+    result = client.get_daily_price("20240101", "20240105", ["000001", "600000"])
+
+    assert result["ts_code"].tolist() == ["000001.SZ", "600000.SH"]
+    urls = [command[-1] for command in commands]
+    assert any("secid=0.000001" in url for url in urls)
+    assert any("secid=1.600000" in url for url in urls)
+
+
+def test_eastmoney_curl_fallback_builds_daily_basic() -> None:
+    """Daily basic should derive turnover_rate from Eastmoney klines."""
+    client = AKShareClient(akshare_module=FullyFailingAKShareModule(), curl_runner=successful_eastmoney_curl)
+
+    daily_basic = client.get_daily_basic("20240101", "20240105", ["000001"])
+
+    assert {"ts_code", "trade_date", "turnover_rate", "pe", "pb"}.issubset(daily_basic.columns)
+    assert daily_basic.loc[0, "ts_code"] == "000001.SZ"
+    assert daily_basic.loc[0, "trade_date"] == "20240102"
+    assert daily_basic.loc[0, "turnover_rate"] == 2.5
+    assert pd.isna(daily_basic.loc[0, "pe"])
+    assert pd.isna(daily_basic.loc[0, "pb"])
+
+
+def test_eastmoney_curl_partial_success_keeps_other_symbols(tmp_path: Path) -> None:
+    """If one symbol has no AKShare or curl data, other symbols should still be written."""
+    store = DuckDBStore(tmp_path / "curl-partial.duckdb")
+
+    def one_symbol_curl(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        if "secid=1.600000" in command[-1]:
+            return failing_eastmoney_curl(command, **kwargs)
+        return successful_eastmoney_curl(command, **kwargs)
+
+    client = AKShareClient(akshare_module=FullyFailingAKShareModule(), curl_runner=one_symbol_curl)
+
+    result = update_real_data(settings=AkshareSettings(), store=store, client=client)
+
+    assert result["status"] == "success"
+    daily_price = store.read_table("daily_price")
+    assert daily_price["ts_code"].tolist() == ["000001.SZ"]
+
+
+def test_empty_akshare_history_can_use_curl_fallback() -> None:
+    """Empty AKShare history for a symbol should also trigger curl fallback."""
+    client = AKShareClient(akshare_module=EmptyForOneSymbolAKShareModule(), curl_runner=successful_eastmoney_curl)
+
+    daily_price = client.get_daily_price("20240101", "20240105", ["600000"])
+
+    assert daily_price["ts_code"].tolist() == ["600000.SH"]
+    assert daily_price.loc[0, "turnover_rate"] == 1.5
 
 
 def test_empty_tushare_token_can_use_akshare_fallback(tmp_path: Path) -> None:
