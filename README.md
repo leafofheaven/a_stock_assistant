@@ -263,6 +263,73 @@ streamlit run web/streamlit_app.py
 
 当前回测只基于少量样本股票真实数据试运行；AKShare fallback 字段有限，`pe` / `pb` 可能为空，`adj_factor` 可能简化为 `1.0`。回测结果仅用于验证本地数据链路和代码流程，不代表正式投资策略表现，不构成投资建议，不自动交易。
 
+## 真实股票样本扩容与批量更新
+
+真实数据试运行可以通过固定预设股票池做中小规模批量验证，不做全市场下载。
+
+mini 配置：
+
+```env
+DATA_PROVIDER=akshare
+AKSHARE_SAMPLE_SYMBOLS=
+REAL_UNIVERSE_PRESET=mini
+REAL_BATCH_SIZE=10
+REAL_BATCH_SLEEP_SECONDS=0
+REAL_MAX_RETRIES=1
+REAL_REQUEST_TIMEOUT_SECONDS=30
+```
+
+small 配置：
+
+```env
+DATA_PROVIDER=akshare
+AKSHARE_SAMPLE_SYMBOLS=
+REAL_UNIVERSE_PRESET=small
+REAL_BATCH_SIZE=10
+REAL_BATCH_SLEEP_SECONDS=0.2
+REAL_MAX_RETRIES=2
+REAL_REQUEST_TIMEOUT_SECONDS=30
+```
+
+medium 配置：
+
+```env
+DATA_PROVIDER=akshare
+AKSHARE_SAMPLE_SYMBOLS=
+REAL_UNIVERSE_PRESET=medium
+REAL_BATCH_SIZE=10
+REAL_BATCH_SLEEP_SECONDS=0.5
+REAL_MAX_RETRIES=2
+REAL_REQUEST_TIMEOUT_SECONDS=30
+```
+
+优先级：如果 `AKSHARE_SAMPLE_SYMBOLS` 显式配置了股票列表，则优先使用该列表；只有当 `AKSHARE_SAMPLE_SYMBOLS` 为空时，才会根据 `REAL_UNIVERSE_PRESET` 选择 `mini` / `small` / `medium` 预设样本。
+
+批量更新命令：
+
+```bash
+python -m core.jobs.update_real_data
+```
+
+批量诊断命令：
+
+```bash
+python -m core.jobs.diagnose_update_batch
+```
+
+完整真实试运行命令：
+
+```bash
+python -m core.jobs.update_real_data
+python -m core.jobs.diagnose_real_data
+python -m core.jobs.diagnose_update_batch
+python -m core.jobs.diagnose_factors
+python -m core.jobs.run_daily_selection
+python -m core.jobs.diagnose_backtest
+```
+
+限制：当前仅用于少量真实股票试运行，不做全市场下载；AKShare fallback 的 `pe` / `pb` 可能为空，`adj_factor` 当前可能简化为 `1.0`；不构成投资建议，不自动交易。
+
 ## 前端启动命令
 
 请在项目根目录执行以下命令启动 Streamlit 页面：

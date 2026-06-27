@@ -24,6 +24,11 @@ def test_settings_defaults() -> None:
     assert settings.sample_symbols == ["000001.SZ", "600000.SH", "000002.SZ"]
     assert settings.akshare_symbols == ["000001", "600000", "000002"]
     assert settings.akshare_adjust == "qfq"
+    assert settings.real_universe_preset == "mini"
+    assert settings.real_batch_size == 10
+    assert settings.real_batch_sleep_seconds == 0.0
+    assert settings.real_max_retries == 1
+    assert settings.real_request_timeout_seconds == 30
 
 
 def test_settings_loads_from_env_file(tmp_path: Path) -> None:
@@ -45,6 +50,11 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
                 "REAL_DATA_SAMPLE_SYMBOLS=000001.SZ, 600000.SH",
                 "AKSHARE_SAMPLE_SYMBOLS=000001, 600000",
                 "AKSHARE_ADJUST=hfq",
+                "REAL_UNIVERSE_PRESET=small",
+                "REAL_BATCH_SIZE=5",
+                "REAL_BATCH_SLEEP_SECONDS=0.1",
+                "REAL_MAX_RETRIES=2",
+                "REAL_REQUEST_TIMEOUT_SECONDS=12",
             ]
         ),
         encoding="utf-8",
@@ -65,6 +75,23 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
     assert settings.sample_symbols == ["000001.SZ", "600000.SH"]
     assert settings.akshare_symbols == ["000001", "600000"]
     assert settings.akshare_adjust == "hfq"
+    assert settings.real_universe_preset == "small"
+    assert settings.real_batch_size == 5
+    assert settings.real_batch_sleep_seconds == 0.1
+    assert settings.real_max_retries == 2
+    assert settings.real_request_timeout_seconds == 12
+
+
+def test_akshare_symbols_fall_back_to_universe_preset() -> None:
+    """Empty AKSHARE_SAMPLE_SYMBOLS should use the configured static preset."""
+    settings = Settings(
+        _env_file=None,
+        AKSHARE_SAMPLE_SYMBOLS="",
+        REAL_UNIVERSE_PRESET="small",
+    )
+
+    assert len(settings.akshare_symbols) >= 30
+    assert settings.akshare_symbols[:3] == ["000001", "000002", "000063"]
 
 
 def test_environment_overrides_env_file(tmp_path: Path, monkeypatch) -> None:

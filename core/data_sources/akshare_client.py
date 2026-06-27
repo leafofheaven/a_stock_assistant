@@ -23,6 +23,7 @@ class AKShareClient(StockDataSource):
         akshare_module: Any | None = None,
         adjust: str = "qfq",
         curl_runner: Any | None = None,
+        request_timeout_seconds: int = 30,
     ) -> None:
         """Create an AKShare client.
 
@@ -30,10 +31,13 @@ class AKShareClient(StockDataSource):
             akshare_module: Optional injected AKShare-like module for tests.
             adjust: Adjustment mode for daily price calls that support it.
             curl_runner: Optional ``subprocess.run`` compatible callable for tests.
+            request_timeout_seconds: Timeout for the system curl fallback.
         """
         self._akshare = akshare_module
         self.adjust = adjust
         self._curl_runner = curl_runner or subprocess.run
+        self.request_timeout_seconds = request_timeout_seconds
+        self.failure_records: list[dict[str, str]] = []
 
     def get_stock_basic(self) -> pd.DataFrame:
         """Return stock basic information from AKShare."""
@@ -150,6 +154,7 @@ class AKShareClient(StockDataSource):
         frames: list[pd.DataFrame] = []
         for symbol in symbols:
             frame = pd.DataFrame()
+            error_message = ""
             try:
                 frame = self._call(
                     function_name,
@@ -160,11 +165,20 @@ class AKShareClient(StockDataSource):
                     adjust=self.adjust,
                 )
             except DataSourceError as exc:
+                error_message = str(exc)
                 logger.warning("AKShare %s failed for %s: %s", function_name, symbol, exc)
             if frame.empty and function_name == "stock_zh_a_hist":
                 logger.warning("AKShare %s returned no usable data for %s; trying Eastmoney curl fallback.", function_name, symbol)
                 frame = self._call_eastmoney_kline(symbol, start_date, end_date)
             if frame.empty:
+                self.failure_records.append(
+                    {
+                        "symbol": _to_ts_code(symbol),
+                        "provider": "akshare",
+                        "failed_stage": function_name,
+                        "error_message": error_message or "empty data after AKShare and Eastmoney curl fallback",
+                    }
+                )
                 logger.warning("AKShare and Eastmoney curl returned empty data for %s.", symbol)
                 continue
             if "ts_code" not in frame.columns or frame["ts_code"].isna().all():
@@ -200,7 +214,13 @@ class AKShareClient(StockDataSource):
             url,
         ]
         try:
-            completed = self._curl_runner(command, capture_output=True, text=True, timeout=30, check=False)
+            completed = self._curl_runner(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=self.request_timeout_seconds,
+                check=False,
+            )
         except Exception as exc:
             logger.warning("Eastmoney curl fallback failed for %s: %s", symbol, exc)
             return pd.DataFrame()

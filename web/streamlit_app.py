@@ -116,6 +116,10 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     strategy_result = tables.get("strategy_result", pd.DataFrame())
     data_source = str(tables.get("_data_source", ""))
     factor_missing = summarize_factor_missing(factor_scores)
+    configured_count = int(tables.get("_configured_symbol_count", 0) or 0)
+    priced_count = int(tables.get("_priced_symbol_count", 0) or 0)
+    coverage_rate = float(tables.get("_coverage_rate", 0.0) or 0.0)
+    missing_count = int(tables.get("_missing_symbol_count", 0) or 0)
     return {
         "latest_price_date": _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
@@ -128,6 +132,10 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
             if stats["nan_count"] > 0
         },
         "factor_missing": factor_missing,
+        "configured_symbol_count": configured_count,
+        "priced_symbol_count": priced_count,
+        "coverage_rate": coverage_rate,
+        "missing_symbol_count": missing_count,
         "table_rows": {name: len(df) for name, df in tables.items() if isinstance(df, pd.DataFrame)},
         "last_job_status": "暂无任务运行记录",
     }
@@ -221,9 +229,11 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     """Return computed real factor/selection data when result tables are not persisted yet."""
     from core.jobs.diagnose_backtest import diagnose_backtest
     from core.jobs.diagnose_factors import diagnose_factors
+    from core.jobs.diagnose_update_batch import diagnose_update_batch
 
     diagnostic = diagnose_factors(settings=settings, store=store, use_sample=False)
     backtest_diagnostic = diagnose_backtest(settings=settings, store=store, use_sample=False)
+    batch_diagnostic = diagnose_update_batch(settings=settings, store=store)
     factor_scores = diagnostic.get("factor_scores_df", pd.DataFrame())
     selected = diagnostic.get("selected_df", pd.DataFrame())
     if factor_scores.empty or selected.empty:
@@ -232,6 +242,10 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["factor_scores"] = factor_scores
     real_tables["strategy_result"] = selected
     real_tables["_data_source"] = f"{settings.data_provider} 本地 DuckDB 真实数据"
+    real_tables["_configured_symbol_count"] = batch_diagnostic.get("configured_symbol_count", 0)
+    real_tables["_priced_symbol_count"] = batch_diagnostic.get("priced_symbol_count", 0)
+    real_tables["_coverage_rate"] = batch_diagnostic.get("coverage_rate", 0.0)
+    real_tables["_missing_symbol_count"] = len(batch_diagnostic.get("missing_symbols", []))
     backtest_result = dict(backtest_diagnostic.get("backtest_result", {}))
     backtest_result["data_quality_notes"] = backtest_diagnostic.get("data_quality_notes", [])
     return {
@@ -245,6 +259,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
         "data_quality_notes": diagnostic.get("data_quality_notes", []),
         "backtest": backtest_result,
         "backtest_diagnostic": backtest_diagnostic,
+        "batch_diagnostic": batch_diagnostic,
         "tables": real_tables,
     }
 
@@ -386,6 +401,10 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.metric("最新行情日期", status["latest_price_date"] or "暂无")
     st.metric("最新因子日期", status["latest_factor_date"] or "暂无")
     st.metric("最新选股日期", status["latest_selection_date"] or "暂无")
+    st.metric("配置股票数量", status["configured_symbol_count"])
+    st.metric("已有行情股票数量", status["priced_symbol_count"])
+    st.metric("缺数据股票数量", status["missing_symbol_count"])
+    st.write({"覆盖率": f"{status['coverage_rate']:.2%}"})
     st.write({"是否 sample 数据": status["is_sample_data"], "是否真实数据": status["is_real_data"]})
     if status["field_missing"]:
         st.warning(f"存在字段缺失：{status['field_missing']}")
