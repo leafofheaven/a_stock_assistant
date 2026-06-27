@@ -44,6 +44,7 @@ class AKShareClient(StockDataSource):
         self.enable_basic_enrichment = enable_basic_enrichment
         self.enable_valuation_enrichment = enable_valuation_enrichment
         self.failure_records: list[dict[str, str]] = []
+        self.enrichment_records: list[dict[str, str]] = []
 
     def get_stock_basic(self) -> pd.DataFrame:
         """Return stock basic information from AKShare."""
@@ -129,21 +130,27 @@ class AKShareClient(StockDataSource):
         symbol_list = symbols or result["ts_code"].dropna().astype(str).tolist()
         for symbol in symbol_list:
             ts_code = _to_ts_code(symbol)
-            try:
-                info = self._call_raw("stock_individual_info_em", symbol=_normalize_symbol(symbol))
-            except DataSourceError as exc:
-                self._record_failure(ts_code, "stock_basic_enrichment", str(exc))
-                logger.warning("AKShare basic enrichment failed for %s: %s", symbol, exc)
+            info, error_message = self._call_optional_raw("stock_individual_info_em", symbol=_normalize_symbol(symbol))
+            if error_message:
+                self._record_enrichment(ts_code, "stock_basic_enrichment", error_message)
+                logger.warning("AKShare basic enrichment failed for %s: %s", symbol, error_message)
                 continue
-            values = _parse_individual_info(info)
-            if not values:
+            try:
+                values = _parse_individual_info(info)
+            except Exception as exc:
+                message = f"stock_individual_info_em parse failed: {exc}"
+                self._record_enrichment(ts_code, "stock_basic_enrichment", message)
+                logger.warning("AKShare basic enrichment parse failed for %s: %s", symbol, exc)
+                continue
+            if not values or not any(_not_missing_value(values.get(column)) for column in ["area", "industry", "market", "list_date", "delist_date", "is_hs"]):
+                self._record_enrichment(ts_code, "stock_basic_enrichment", "stock_individual_info_em returned no usable fields")
                 continue
             mask = result["ts_code"].astype(str) == ts_code
             if not mask.any():
                 continue
             for column in ["area", "industry", "market", "list_date", "delist_date", "is_hs"]:
                 value = values.get(column)
-                if value not in {None, ""}:
+                if _not_missing_value(value):
                     result.loc[mask, column] = value
             if (result.loc[mask, "market"].isna() | (result.loc[mask, "market"].astype(str).str.strip() == "")).any():
                 result.loc[mask, "market"] = _market_from_ts_code(ts_code)
@@ -187,6 +194,22 @@ class AKShareClient(StockDataSource):
 
         return result
 
+    def _call_optional_raw(self, function_name: str, **kwargs: Any) -> tuple[pd.DataFrame, str]:
+        """Call an optional AKShare enrichment function without noisy tracebacks."""
+        try:
+            function = getattr(self._module(), function_name)
+        except DataSourceError as exc:
+            return pd.DataFrame(), str(exc)
+        except AttributeError:
+            return pd.DataFrame(), f"AKShare function is unavailable: {function_name}"
+        try:
+            result = function(**kwargs)
+        except Exception as exc:
+            return pd.DataFrame(), f"{type(exc).__name__}: {exc}"
+        if not isinstance(result, pd.DataFrame):
+            return pd.DataFrame(), f"AKShare call did not return a DataFrame: {function_name}"
+        return result, ""
+
     def _merge_valuation_enrichment(
         self,
         daily_basic: pd.DataFrame,
@@ -197,16 +220,27 @@ class AKShareClient(StockDataSource):
         """Merge optional PE/PB and market-cap data into derived daily_basic rows."""
         if daily_basic.empty:
             return daily_basic
+        try:
+            getattr(self._module(), "stock_a_lg_indicator")
+        except AttributeError:
+            self._record_enrichment(
+                "ALL",
+                "daily_basic_valuation_enrichment_unavailable",
+                "AKShare function is unavailable: stock_a_lg_indicator",
+            )
+            logger.warning("AKShare valuation enrichment skipped: stock_a_lg_indicator is unavailable.")
+            return daily_basic
         frames: list[pd.DataFrame] = []
         for symbol in symbols:
             ts_code = _to_ts_code(symbol)
-            try:
-                raw = self._call("stock_a_lg_indicator", symbol=_normalize_symbol(symbol))
-            except DataSourceError as exc:
-                self._record_failure(ts_code, "daily_basic_valuation_enrichment", str(exc))
-                logger.warning("AKShare valuation enrichment failed for %s: %s", symbol, exc)
+            raw_frame, error_message = self._call_optional_raw("stock_a_lg_indicator", symbol=_normalize_symbol(symbol))
+            if error_message:
+                self._record_enrichment(ts_code, "daily_basic_valuation_enrichment", error_message)
+                logger.warning("AKShare valuation enrichment failed for %s: %s", symbol, error_message)
                 continue
+            raw = _standardize_fields("stock_a_lg_indicator", raw_frame)
             if raw.empty:
+                self._record_enrichment(ts_code, "daily_basic_valuation_enrichment", "stock_a_lg_indicator returned empty data")
                 continue
             if "trade_date" in raw.columns:
                 raw = raw[
@@ -242,6 +276,17 @@ class AKShareClient(StockDataSource):
         self.failure_records.append(
             {
                 "symbol": _to_ts_code(symbol),
+                "provider": "akshare",
+                "failed_stage": stage,
+                "error_message": message,
+            }
+        )
+
+    def _record_enrichment(self, symbol: str, stage: str, message: str) -> None:
+        """Record optional enrichment warnings separately from main data failures."""
+        self.enrichment_records.append(
+            {
+                "symbol": _to_ts_code(symbol) if symbol != "ALL" else "ALL",
                 "provider": "akshare",
                 "failed_stage": stage,
                 "error_message": message,
@@ -549,6 +594,10 @@ def _parse_individual_info(df: pd.DataFrame) -> dict[str, Any]:
         return {}
     item_col = _first_existing(df, ["item", "项目", "指标"])
     value_col = _first_existing(df, ["value", "值", "数值"])
+    if not item_col and len(df.columns) >= 1:
+        item_col = str(df.columns[0])
+    if not value_col and len(df.columns) >= 2:
+        value_col = str(df.columns[1])
     if not item_col or not value_col:
         return {}
     raw = {
@@ -581,20 +630,32 @@ def _first_value(mapping: dict[str, Any], keys: list[str]) -> Any:
     """Return the first non-empty value for candidate keys."""
     for key in keys:
         value = mapping.get(key)
-        if value not in {None, ""} and not pd.isna(value):
+        if _not_missing_value(value):
             return value
     return pd.NA
 
 
 def _clean_date(value: Any) -> Any:
     """Normalize provider dates to YYYYMMDD strings when possible."""
-    if value is None or pd.isna(value):
+    if not _not_missing_value(value):
         return pd.NA
     text = str(value).strip()
     if not text:
         return pd.NA
     digits = "".join(ch for ch in text if ch.isdigit())
     return digits[:8] if len(digits) >= 8 else text
+
+
+def _not_missing_value(value: Any) -> bool:
+    """Return whether a provider value should be treated as present."""
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip() != ""
 
 
 def _to_number(value: Any) -> float | None:

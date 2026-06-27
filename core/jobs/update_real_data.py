@@ -151,8 +151,13 @@ def _run_provider_update(
         ):
             try:
                 stock_basic = client.enrich_stock_basic(stock_basic, sample_symbols)  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            except Exception as exc:
+                _record_client_enrichment(
+                    client,
+                    ["ALL"],
+                    "stock_basic_enrichment",
+                    f"{type(exc).__name__}: {exc}",
+                )
         frames = {
             "stock_basic": stock_basic,
             "trade_calendar": _filter_date_range(
@@ -196,6 +201,7 @@ def _run_provider_update(
             if frame.empty
         ]
         batch_summary = _batch_summary(provider_name, sample_symbols, normalized_frames, client)
+        enrichment_summary = _enrichment_summary(sample_symbols, normalized_frames, client, settings)
         if provider_name == "akshare" and normalized_frames["daily_price"].empty and sample_symbols:
             return {
                 "status": "failed",
@@ -209,6 +215,7 @@ def _run_provider_update(
                 "after_rows": before_rows,
                 "empty_tables": empty_tables,
                 **batch_summary,
+                **enrichment_summary,
                 "next_steps": ["检查 AKShare 网络、版本或样本股票配置后重试。"],
             }
         written_rows = {
@@ -232,6 +239,7 @@ def _run_provider_update(
         }
 
     batch_summary = _batch_summary(provider_name, sample_symbols, normalized_frames, client)
+    enrichment_summary = _enrichment_summary(sample_symbols, normalized_frames, client, settings)
     status = _status_from_batch_summary(batch_summary)
     return {
         "status": status,
@@ -245,6 +253,7 @@ def _run_provider_update(
         "after_rows": after_rows,
         "empty_tables": empty_tables,
         **batch_summary,
+        **enrichment_summary,
         "next_steps": [
             "python -m core.jobs.diagnose_real_data",
             "python -m core.jobs.diagnose_update_batch",
@@ -263,10 +272,29 @@ def main() -> None:
     print(f"- 日期范围: {result['start_date']} 至 {result['end_date']}")
     print(f"- 样本股票: {', '.join(result['sample_symbols']) or '未配置'}")
     if "total_symbols" in result:
+        print(f"- 主行情更新: {result['status']}")
         print(
-            f"- 批量统计: 总股票数 {result['total_symbols']}，成功 {result['success_symbols']}，"
+            f"- 主行情统计: 总股票数 {result['total_symbols']}，成功 {result['success_symbols']}，"
             f"失败 {result['failed_symbols']}，成功率 {result['success_rate']:.2%}"
         )
+    enrichment = result.get("enrichment_summary", {})
+    if enrichment:
+        print(
+            f"- 基础信息补全: {enrichment.get('basic_status')}，"
+            f"成功 {enrichment.get('basic_success_symbols', 0)}，失败 {enrichment.get('basic_failed_symbols', 0)}"
+        )
+        print(
+            f"- 估值字段补全: {enrichment.get('valuation_status')}，"
+            f"成功 {enrichment.get('valuation_success_symbols', 0)}，失败 {enrichment.get('valuation_failed_symbols', 0)}"
+        )
+        if enrichment.get("warnings"):
+            print("- 补全提示:")
+            for item in enrichment["warnings"]:
+                print(
+                    f"  {item['symbol']} stage={item['failed_stage']} "
+                    f"message={item['error_message']}"
+                )
+            print("- 补全失败不影响主行情更新。")
     print("- 写入行数:")
     for table_name, row_count in result["written_rows"].items():
         before = result.get("before_rows", {}).get(table_name, 0)
@@ -382,6 +410,22 @@ def _record_client_failure(client: StockDataSource, symbols: list[str], stage: s
         )
 
 
+def _record_client_enrichment(client: StockDataSource, symbols: list[str], stage: str, message: str) -> None:
+    """Record optional enrichment warnings on clients that expose enrichment_records."""
+    records = getattr(client, "enrichment_records", None)
+    if not isinstance(records, list):
+        return
+    for symbol in symbols:
+        records.append(
+            {
+                "symbol": _to_ts_code(symbol) if symbol != "ALL" else "ALL",
+                "provider": "akshare",
+                "failed_stage": stage,
+                "error_message": message,
+            }
+        )
+
+
 def _batch_summary(
     provider_name: str,
     sample_symbols: list[str],
@@ -396,7 +440,11 @@ def _batch_summary(
     else:
         successful = set(daily_price["ts_code"].dropna().astype(str).unique())
     empty_symbols = [symbol for symbol in requested_ts_codes if symbol not in successful]
-    failure_records = _dedupe_failure_records(getattr(client, "failure_records", []))
+    failure_records = [
+        item
+        for item in _dedupe_failure_records(getattr(client, "failure_records", []))
+        if not _is_enrichment_stage(item.get("failed_stage", ""))
+    ]
     recorded_symbols = {item["symbol"] for item in failure_records}
     for symbol in empty_symbols:
         if symbol not in recorded_symbols:
@@ -421,6 +469,92 @@ def _batch_summary(
     }
 
 
+def _enrichment_summary(
+    sample_symbols: list[str],
+    frames: dict[str, pd.DataFrame],
+    client: StockDataSource,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Return optional enrichment status without affecting main update status."""
+    warnings = _dedupe_failure_records(getattr(client, "enrichment_records", []))
+    requested_ts_codes = [_to_ts_code(symbol) for symbol in sample_symbols]
+    stock_basic = frames.get("stock_basic", pd.DataFrame())
+    daily_basic = frames.get("daily_basic", pd.DataFrame())
+    basic_success = _symbols_with_any_value(stock_basic, ["industry", "list_date"])
+    valuation_success = _symbols_with_any_value(daily_basic, ["pe", "pb", "total_mv", "circ_mv"])
+    basic_warning_symbols = _warning_symbols(warnings, "stock_basic")
+    valuation_warning_symbols = _warning_symbols(warnings, "daily_basic")
+    if not getattr(settings, "enable_real_basic_enrichment", True):
+        basic_status = "skipped"
+    else:
+        basic_status = _enrichment_status(
+            len(basic_success.intersection(requested_ts_codes)),
+            len(basic_warning_symbols.intersection(requested_ts_codes)),
+            len(requested_ts_codes),
+        )
+    if not getattr(settings, "enable_real_valuation_enrichment", True):
+        valuation_status = "skipped"
+    elif any(item["failed_stage"] == "daily_basic_valuation_enrichment_unavailable" for item in warnings):
+        valuation_status = "skipped"
+    else:
+        valuation_status = _enrichment_status(
+            len(valuation_success.intersection(requested_ts_codes)),
+            len(valuation_warning_symbols.intersection(requested_ts_codes)),
+            len(requested_ts_codes),
+        )
+    return {
+        "enrichment_summary": {
+            "basic_status": basic_status,
+            "basic_success_symbols": len(basic_success.intersection(requested_ts_codes)),
+            "basic_failed_symbols": len(basic_warning_symbols.intersection(requested_ts_codes)),
+            "valuation_status": valuation_status,
+            "valuation_success_symbols": len(valuation_success.intersection(requested_ts_codes)),
+            "valuation_failed_symbols": len(valuation_warning_symbols.intersection(requested_ts_codes)),
+            "warnings": warnings,
+        },
+        "enrichment_warnings": warnings,
+    }
+
+
+def _symbols_with_any_value(df: pd.DataFrame, columns: list[str]) -> set[str]:
+    """Return symbols that have at least one non-empty value in any requested column."""
+    if df.empty or "ts_code" not in df.columns:
+        return set()
+    available = [column for column in columns if column in df.columns]
+    if not available:
+        return set()
+    values = df[available].apply(lambda column: column.map(lambda value: not _is_missing(value)))
+    mask = values.any(axis=1)
+    return set(df.loc[mask, "ts_code"].dropna().astype(str).unique())
+
+
+def _warning_symbols(warnings: list[dict[str, str]], prefix: str) -> set[str]:
+    """Return warning symbols whose stage starts with a prefix."""
+    return {
+        item["symbol"]
+        for item in warnings
+        if item.get("symbol") != "ALL" and item.get("failed_stage", "").startswith(prefix)
+    }
+
+
+def _enrichment_status(success_count: int, failed_count: int, total_count: int) -> str:
+    """Return optional enrichment status."""
+    if total_count == 0:
+        return "skipped"
+    if success_count == 0 and failed_count == 0:
+        return "skipped"
+    if success_count == 0 and failed_count > 0:
+        return "failed"
+    if failed_count > 0:
+        return "partial_success"
+    return "success"
+
+
+def _is_enrichment_stage(stage: str) -> bool:
+    """Return whether a failure stage belongs to optional enrichment."""
+    return "enrichment" in str(stage)
+
+
 def _status_from_batch_summary(summary: dict[str, Any]) -> str:
     """Return update status from symbol-level coverage."""
     if summary["total_symbols"] and summary["success_symbols"] == 0:
@@ -439,8 +573,9 @@ def _dedupe_failure_records(records: Any) -> list[dict[str, str]]:
     for item in records:
         if not isinstance(item, dict):
             continue
+        symbol = str(item.get("symbol", ""))
         normalized = {
-            "symbol": _to_ts_code(str(item.get("symbol", ""))),
+            "symbol": "ALL" if symbol == "ALL" else _to_ts_code(symbol),
             "provider": str(item.get("provider", "unknown")),
             "failed_stage": str(item.get("failed_stage", "unknown")),
             "error_message": str(item.get("error_message", "")),
@@ -450,6 +585,18 @@ def _dedupe_failure_records(records: Any) -> list[dict[str, str]]:
             result.append(normalized)
             seen.add(key)
     return result
+
+
+def _is_missing(value: Any) -> bool:
+    """Return whether a scalar should be treated as missing."""
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip() == ""
 
 
 def _sample_symbols_for_provider(settings: Settings, provider_name: str) -> list[str]:

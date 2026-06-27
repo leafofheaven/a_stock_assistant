@@ -39,6 +39,7 @@ def diagnose_data_quality(
             "daily_basic_rows": 0,
             "stock_basic_completeness": _empty_rates(STOCK_BASIC_FIELDS),
             "daily_basic_completeness": _empty_rates(DAILY_BASIC_FIELDS),
+            "missing_reasons": ["本地 DuckDB 读取失败，无法判断补全字段完整率。"],
             "symbol_quality": [],
             "affects_fundamental_score": True,
             "next_steps": ["python -m core.jobs.update_real_data"],
@@ -47,6 +48,7 @@ def diagnose_data_quality(
     stock_rates = _completeness(stock_basic, STOCK_BASIC_FIELDS)
     basic_rates = _completeness(daily_basic, DAILY_BASIC_FIELDS)
     symbol_quality = _symbol_quality(stock_basic, daily_price, daily_basic)
+    missing_reasons = _missing_reasons(stock_rates, basic_rates, daily_basic)
     affects_fundamental = (
         daily_basic.empty
         or basic_rates.get("pe", 0.0) == 0.0
@@ -61,6 +63,7 @@ def diagnose_data_quality(
         "daily_basic_rows": int(len(daily_basic)),
         "stock_basic_completeness": stock_rates,
         "daily_basic_completeness": basic_rates,
+        "missing_reasons": missing_reasons,
         "symbol_quality": symbol_quality,
         "affects_fundamental_score": affects_fundamental,
         "next_steps": _next_steps(affects_fundamental),
@@ -82,6 +85,10 @@ def main() -> None:
     print("- daily_basic 字段完整率:")
     for field, rate in result["daily_basic_completeness"].items():
         print(f"  {field}: {rate:.2%}")
+    if result.get("missing_reasons"):
+        print("- 缺失原因:")
+        for reason in result["missing_reasons"]:
+            print(f"  {reason}")
     print("- 每只股票数据质量:")
     if result["symbol_quality"]:
         for item in result["symbol_quality"]:
@@ -157,6 +164,27 @@ def _quality_note(stock_row: dict[str, Any], basic_row: dict[str, Any], latest_p
     if not latest_price_date:
         missing.append("无行情日期")
     return "；".join(missing) if missing else "基础信息和估值字段可用"
+
+
+def _missing_reasons(
+    stock_rates: dict[str, float],
+    daily_basic_rates: dict[str, float],
+    daily_basic: pd.DataFrame,
+) -> list[str]:
+    """Return clear reasons for important missing fields."""
+    reasons: list[str] = []
+    if stock_rates.get("industry", 0.0) == 0.0:
+        reasons.append("industry 完整率为 0，基础信息补全未成功或 AKShare 返回字段不可解析。")
+    if stock_rates.get("list_date", 0.0) == 0.0:
+        reasons.append("list_date 完整率为 0，基础信息补全未成功或 AKShare 返回字段不可解析。")
+    if daily_basic.empty:
+        reasons.append("daily_basic 无数据，估值字段无法诊断。")
+    else:
+        if daily_basic_rates.get("pe", 0.0) == 0.0:
+            reasons.append("pe 完整率为 0，估值补全接口当前不可用或未成功。")
+        if daily_basic_rates.get("pb", 0.0) == 0.0:
+            reasons.append("pb 完整率为 0，估值补全接口当前不可用或未成功。")
+    return reasons
 
 
 def _rows_for(df: pd.DataFrame, ts_code: str) -> pd.DataFrame:

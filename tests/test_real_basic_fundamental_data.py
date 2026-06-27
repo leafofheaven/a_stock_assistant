@@ -64,7 +64,7 @@ class MockAKShareModule:
     def stock_individual_info_em(self, symbol: str) -> pd.DataFrame:
         """Return basic information for one stock or raise a mock error."""
         if symbol in self.fail_basic:
-            raise RuntimeError("mock basic failure")
+            raise ValueError("Length mismatch: Expected axis has 3 elements, new values have 2 elements")
         industry = "银行" if symbol == "000001" else "股份制银行"
         list_date = "19910403" if symbol == "000001" else "19991110"
         return pd.DataFrame(
@@ -119,6 +119,23 @@ class MockAKShareModule:
         )
 
 
+class WeirdBasicInfoAKShareModule(MockAKShareModule):
+    """Mock module where basic enrichment returns an unexpected 3-column shape."""
+
+    def stock_individual_info_em(self, symbol: str) -> pd.DataFrame:
+        """Return a 3-column structure that should not crash parsing."""
+        return pd.DataFrame({"a": ["x"], "b": ["y"], "c": ["z"]})
+
+
+class NoValuationAKShareModule(MockAKShareModule):
+    """Mock module without stock_a_lg_indicator."""
+
+    def __getattribute__(self, name: str) -> Any:
+        if name == "stock_a_lg_indicator":
+            raise AttributeError(name)
+        return super().__getattribute__(name)
+
+
 def test_stock_basic_enrichment_writes_industry_and_list_date(tmp_path: Path) -> None:
     """AKShare stock_basic enrichment should write industry/list_date to temporary duckdb."""
     store = DuckDBStore(tmp_path / "temporary.duckdb")
@@ -152,10 +169,57 @@ def test_enrichment_single_symbol_failure_does_not_block_others(tmp_path: Path) 
     result = update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
 
     assert result["success_symbols"] == 2
-    assert "stock_basic_enrichment" in {item["failed_stage"] for item in result["failure_records"]}
+    assert result["status"] == "success"
+    assert "stock_basic_enrichment" not in {item["failed_stage"] for item in result["failure_records"]}
+    assert "stock_basic_enrichment" in {item["failed_stage"] for item in result["enrichment_warnings"]}
+    assert result["enrichment_summary"]["basic_status"] == "partial_success"
     daily_basic = store.read_table("daily_basic")
     assert daily_basic[daily_basic["ts_code"] == "000001.SZ"]["pe"].notna().any()
     assert daily_basic[daily_basic["ts_code"] == "600000.SH"]["pe"].isna().all()
+
+
+def test_weird_stock_individual_info_shape_does_not_crash_update(tmp_path: Path) -> None:
+    """Mock stock_individual_info_em returning 3 columns should not crash update_real_data."""
+    store = DuckDBStore(tmp_path / "weird-basic.duckdb")
+    client = AKShareClient(akshare_module=WeirdBasicInfoAKShareModule())
+
+    result = update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
+
+    assert result["status"] == "success"
+    assert result["success_symbols"] == 2
+    assert result["failure_records"] == []
+    assert result["enrichment_summary"]["basic_status"] == "failed"
+    assert result["enrichment_warnings"]
+
+
+def test_stock_individual_info_value_error_keeps_main_update_success(tmp_path: Path) -> None:
+    """Mock stock_individual_info_em ValueError should be an enrichment warning only."""
+    store = DuckDBStore(tmp_path / "value-error.duckdb")
+    client = AKShareClient(akshare_module=MockAKShareModule(fail_basic={"000001", "600000"}))
+
+    result = update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
+
+    assert result["status"] == "success"
+    assert result["failed_symbols"] == 0
+    assert result["failure_records"] == []
+    assert result["enrichment_summary"]["basic_status"] == "failed"
+    assert all(item["failed_stage"] == "stock_basic_enrichment" for item in result["enrichment_warnings"] if item["symbol"] != "ALL")
+
+
+def test_missing_stock_a_lg_indicator_gracefully_skips_valuation(tmp_path: Path) -> None:
+    """Missing stock_a_lg_indicator should skip valuation enrichment without main failures."""
+    store = DuckDBStore(tmp_path / "no-valuation.duckdb")
+    client = AKShareClient(akshare_module=NoValuationAKShareModule())
+
+    result = update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
+
+    daily_basic = store.read_table("daily_basic")
+    assert result["status"] == "success"
+    assert result["failure_records"] == []
+    assert result["enrichment_summary"]["valuation_status"] == "skipped"
+    assert any(item["failed_stage"] == "daily_basic_valuation_enrichment_unavailable" for item in result["enrichment_warnings"])
+    assert daily_basic["pe"].isna().all()
+    assert daily_basic["pb"].isna().all()
 
 
 def test_enrichment_switches_keep_simplified_logic(tmp_path: Path) -> None:
@@ -191,6 +255,20 @@ def test_diagnose_data_quality_outputs_completeness(tmp_path: Path) -> None:
     assert result["stock_basic_completeness"]["industry"] == 1.0
     assert result["daily_basic_completeness"]["pe"] == 1.0
     assert result["symbol_quality"][0]["data_quality_note"] == "基础信息和估值字段可用"
+
+
+def test_diagnose_data_quality_reports_pe_pb_missing_reasons(tmp_path: Path) -> None:
+    """diagnose_data_quality should explain pe/pb missing reasons."""
+    store = DuckDBStore(tmp_path / "missing-reasons.duckdb")
+    client = AKShareClient(akshare_module=NoValuationAKShareModule())
+    update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
+
+    result = diagnose_data_quality(settings=Task27Settings(duckdb_path=store.db_path), store=store)
+
+    assert result["daily_basic_completeness"]["pe"] == 0.0
+    assert result["daily_basic_completeness"]["pb"] == 0.0
+    assert any("估值补全接口当前不可用或未成功" in reason for reason in result["missing_reasons"])
+    assert result["affects_fundamental_score"] is True
 
 
 def test_diagnose_factors_explains_missing_fundamental_score(tmp_path: Path) -> None:
