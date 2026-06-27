@@ -114,13 +114,39 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     daily_price = tables.get("daily_price", pd.DataFrame())
     factor_scores = tables.get("factor_scores", pd.DataFrame())
     strategy_result = tables.get("strategy_result", pd.DataFrame())
+    data_source = str(tables.get("_data_source", ""))
+    factor_missing = summarize_factor_missing(factor_scores)
     return {
         "latest_price_date": _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
         "latest_selection_date": _latest_date(strategy_result, "trade_date"),
-        "table_rows": {name: len(df) for name, df in tables.items()},
+        "is_sample_data": "sample" in data_source or "演示" in data_source,
+        "is_real_data": "本地 DuckDB 真实数据" in data_source,
+        "field_missing": {
+            column: stats["nan_count"]
+            for column, stats in factor_missing.items()
+            if stats["nan_count"] > 0
+        },
+        "factor_missing": factor_missing,
+        "table_rows": {name: len(df) for name, df in tables.items() if isinstance(df, pd.DataFrame)},
         "last_job_status": "暂无任务运行记录",
     }
+
+
+def summarize_factor_missing(factor_df: pd.DataFrame) -> dict[str, dict[str, float | int]]:
+    """Summarize factor non-null rates and missing counts for dashboard display."""
+    if factor_df.empty:
+        return {}
+    result: dict[str, dict[str, float | int]] = {}
+    row_count = len(factor_df)
+    for column in [column for column in FACTOR_SCORE_COLUMNS if column in factor_df.columns]:
+        values = pd.to_numeric(factor_df[column], errors="coerce")
+        non_null = int(values.notna().sum())
+        result[column] = {
+            "non_null_rate": float(non_null / row_count) if row_count else 0.0,
+            "nan_count": int(row_count - non_null),
+        }
+    return result
 
 
 def describe_dashboard_data_source(data: dict[str, Any]) -> dict[str, str]:
@@ -172,6 +198,9 @@ def load_dashboard_data() -> dict[str, Any]:
         return data
 
     if tables["strategy_result"].empty:
+        computed = _computed_real_dashboard_data(settings, store, tables)
+        if computed is not None:
+            return computed
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实选股结果不足）"
         return data
@@ -185,6 +214,33 @@ def load_dashboard_data() -> dict[str, Any]:
         "factor_scores": tables["factor_scores"],
         "backtest": {},
         "tables": tables,
+    }
+
+
+def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, pd.DataFrame]) -> dict[str, Any] | None:
+    """Return computed real factor/selection data when result tables are not persisted yet."""
+    from core.jobs.diagnose_factors import diagnose_factors
+
+    diagnostic = diagnose_factors(settings=settings, store=store, use_sample=False)
+    factor_scores = diagnostic.get("factor_scores_df", pd.DataFrame())
+    selected = diagnostic.get("selected_df", pd.DataFrame())
+    if factor_scores.empty or selected.empty:
+        return None
+    real_tables = dict(tables)
+    real_tables["factor_scores"] = factor_scores
+    real_tables["strategy_result"] = selected
+    real_tables["_data_source"] = f"{settings.data_provider} 本地 DuckDB 真实数据"
+    return {
+        "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
+        "selection": selected,
+        "stock_basic": tables["stock_basic"],
+        "price": tables["daily_price"],
+        "daily_basic": tables["daily_basic"],
+        "factor_scores": factor_scores,
+        "factor_quality": diagnostic.get("factor_quality", {}),
+        "data_quality_notes": diagnostic.get("data_quality_notes", []),
+        "backtest": {},
+        "tables": real_tables,
     }
 
 
@@ -272,6 +328,22 @@ def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame) -> None:
     if factor_df.empty:
         st.info("暂无因子评分数据。")
         return
+    missing = summarize_factor_missing(factor_df)
+    if missing:
+        st.write("因子非空率")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "factor": factor,
+                        "non_null_rate": stats["non_null_rate"],
+                        "nan_count": stats["nan_count"],
+                    }
+                    for factor, stats in missing.items()
+                ]
+            ),
+            use_container_width=True,
+        )
     dates = sorted(factor_df["trade_date"].astype(str).unique()) if "trade_date" in factor_df.columns else []
     trade_date = st.selectbox("交易日期", dates) if dates else None
     industry = st.selectbox("行业筛选", get_industry_options(factor_df), key="factor_industry")
@@ -306,6 +378,9 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.metric("最新行情日期", status["latest_price_date"] or "暂无")
     st.metric("最新因子日期", status["latest_factor_date"] or "暂无")
     st.metric("最新选股日期", status["latest_selection_date"] or "暂无")
+    st.write({"是否 sample 数据": status["is_sample_data"], "是否真实数据": status["is_real_data"]})
+    if status["field_missing"]:
+        st.warning(f"存在字段缺失：{status['field_missing']}")
     st.write("核心数据表状态")
     st.dataframe(pd.DataFrame(status["table_rows"].items(), columns=["table", "rows"]), use_container_width=True)
     st.info(status["last_job_status"])

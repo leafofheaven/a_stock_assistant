@@ -190,13 +190,19 @@ python -m core.jobs.update_real_data
 python -m core.jobs.diagnose_real_data
 ```
 
-4. 运行选股：
+4. 诊断因子结果：
+
+```bash
+python -m core.jobs.diagnose_factors
+```
+
+5. 运行选股：
 
 ```bash
 python -m core.jobs.run_daily_selection
 ```
 
-5. 启动页面：
+6. 启动页面：
 
 ```bash
 streamlit run web/streamlit_app.py
@@ -209,6 +215,36 @@ streamlit run web/streamlit_app.py
 - `本地 DuckDB 真实数据` 表示当前读取的是本地真实数据。
 
 当前仅支持少量股票验证，不建议直接全市场长周期运行。不构成投资建议，不自动交易。
+
+## 真实因子结果校验
+
+完成真实数据更新后，可以运行因子诊断命令：
+
+```bash
+python -m core.jobs.update_real_data
+python -m core.jobs.diagnose_real_data
+python -m core.jobs.diagnose_factors
+python -m core.jobs.run_daily_selection
+streamlit run web/streamlit_app.py
+```
+
+`diagnose_factors` 会输出当前 `DATA_PROVIDER`、DuckDB 路径、当前使用的数据类型、最新行情日期、股票池数量、可计算因子的股票数量、各因子非空率、NaN 数量、最大值、最小值、均值、中位数、`total_score` 非空股票数量、Top 10 综合评分股票、异常值提示和下一步建议。
+
+判断当前数据类型：
+
+- `sample 数据（演示）`：仅使用内置演示数据；
+- `akshare 本地 DuckDB 真实数据`：读取 AKShare / 东方财富 fallback 写入的本地真实数据；
+- `tushare 本地 DuckDB 真实数据`：读取 Tushare 写入的本地真实数据；
+- `真实数据不足，已回退 sample 数据`：本地真实数据不足，流程使用演示数据保证 smoke test 可运行。
+
+AKShare fallback 限制：
+
+- 当前只验证少量样本股票，不适合全市场长周期直接运行；
+- `pe` / `pb` 可能为空，基本面分项可能偏低或为空；
+- `adj_factor` 可能简化为 `1.0`；
+- 仅用于真实数据链路试运行，不适合作为正式投资决策依据。
+
+本项目仅用于研究与辅助决策，不构成投资建议，不自动交易。
 
 ## 前端启动命令
 
