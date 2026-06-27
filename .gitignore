@@ -16,3 +16,8 @@ reports/*.md
 reports/*.json
 !reports/.gitkeep
 .ipynb_checkpoints/
+
+# Generated workflow reports
+reports/*.md
+reports/*.json
+reports/*.csv
