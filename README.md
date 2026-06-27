@@ -571,6 +571,66 @@ python -m core.jobs.run_real_workflow --skip-update --diagnose-review-history
 
 说明：本项目为个人本地 A 股选股辅助工具，用于数据整理、因子观察、候选复核和观察池跟踪，不包含自动交易功能。
 
+## 本地数据备份与恢复
+
+本项目为个人本地研究工具，用于数据整理、候选复核和观察池跟踪，不自动交易。建议在重要更新前备份 DuckDB。
+
+诊断本地状态：
+
+```bash
+python -m core.jobs.diagnose_local_state
+```
+
+创建备份：
+
+```bash
+python -m core.jobs.backup_local_data
+```
+
+创建带 reports 的备份：
+
+```bash
+python -m core.jobs.backup_local_data --include-reports
+```
+
+查看备份：
+
+```bash
+python -m core.jobs.list_backups
+```
+
+恢复前 dry-run：
+
+```bash
+python -m core.jobs.restore_local_data --backup-dir backups/a_stock_backup_xxx --dry-run
+```
+
+强制恢复：
+
+```bash
+python -m core.jobs.restore_local_data --backup-dir backups/a_stock_backup_xxx --force
+```
+
+清理生成报告 dry-run：
+
+```bash
+python -m core.jobs.clean_generated_reports
+```
+
+实际清理生成报告：
+
+```bash
+python -m core.jobs.clean_generated_reports --force
+```
+
+工作流前自动备份：
+
+```bash
+python -m core.jobs.run_real_workflow --backup-before-run
+```
+
+备份目录默认位于 `backups/`，其中包含 DuckDB 文件、安全元数据、表行数摘要和可选 reports 副本。备份不会保存 `.env` 原文或 token。
+
 `decision` 支持以下取值：
 
 - `watch`：加入观察；

@@ -27,6 +27,7 @@ def build_workflow_report(
     overall_status: str,
 ) -> dict[str, Any]:
     """Return a structured workflow report from step results."""
+    backup = _step_result(steps, "backup_local_data")
     update = _step_result(steps, "update_real_data")
     real_data = _step_result(steps, "diagnose_real_data")
     batch = _step_result(steps, "diagnose_update_batch")
@@ -58,6 +59,7 @@ def build_workflow_report(
         },
         "steps": _jsonable(steps),
         "summaries": {
+            "backup_local_data": _backup_summary(backup),
             "update_real_data": _update_summary(update),
             "diagnose_update_batch": _batch_summary(batch),
             "diagnose_real_data": _real_data_summary(real_data),
@@ -92,6 +94,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"- AKSHARE_SAMPLE_SYMBOLS: {report['real_universe']['akshare_sample_symbols'] or '未配置'}",
         f"- REAL_UNIVERSE_PRESET: {report['real_universe']['real_universe_preset'] or '未配置'}",
         f"- 配置股票数量: {report['real_universe']['configured_symbol_count']}",
+        "",
+        "## backup_local_data 摘要",
+        "",
+        *_dict_lines(summaries["backup_local_data"]),
         "",
         "## update_real_data 摘要",
         "",
@@ -264,6 +270,16 @@ def _update_summary(step: dict[str, Any]) -> dict[str, Any]:
         "failed_symbols": result.get("failed_symbols", 0),
         "daily_price_written_rows": written.get("daily_price", 0),
         "daily_basic_written_rows": written.get("daily_basic", 0),
+    }
+
+
+def _backup_summary(step: dict[str, Any]) -> dict[str, Any]:
+    result = step.get("result", {})
+    return {
+        "status": step.get("status"),
+        "backup_dir": result.get("backup_dir"),
+        "include_reports": result.get("include_reports"),
+        "backup_size": result.get("backup_size"),
     }
 
 
