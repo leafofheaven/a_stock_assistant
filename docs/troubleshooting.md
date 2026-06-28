@@ -123,6 +123,22 @@ python -m core.jobs.diagnose_real_data
 AKSHARE_SAMPLE_SYMBOLS=000001,600000,000002
 ```
 
+## AKShare 基础增强字段缺失
+
+现象：运行更新时看到类似“AKShare 基础增强字段缺失，已使用基础股票信息兜底”。
+
+原因：AKShare 的基础信息接口在不同版本中返回结构可能不同，或者某些增强字段缺失。系统会兼容 2 列/3 列结构；无法识别时使用已有 `stock_basic` 字段或本地 preset fallback。
+
+影响：这不是主行情更新失败，不影响 `daily_price`、`daily_basic` 写入，也不会改变选股公式、权重或候选排序。
+
+检查命令：
+
+```bash
+python -m core.jobs.diagnose_data_quality
+```
+
+处理：如果行业、市场或上市日期完整率正常，可以忽略该 warning；如果完整率较低，保持小样本后重试更新。
+
 ## 东方财富接口走代理失败
 
 现象：Python requests 失败，但系统 curl 可能可用。
@@ -386,6 +402,18 @@ python -m core.jobs.doctor_daily_run --post-run
 ```
 
 处理：先看 `reports/daily_workflow_*.md` 的“日常运行体检”和“下一步建议”。DuckDB 缺失时先运行 `update_real_data` 或 `restore_local_data`；报告占位文件缺失时运行 `doctor_daily_run --fix-safe`。
+
+## 运行时看到 [progress] 日志
+
+现象：终端或 Streamlit 页面出现 `[progress] step=... current=... success=... failed=... skipped=...`。
+
+原因：这是数据更新和一键工作流的实时进度输出。
+
+处理：正常观察即可。页面会把它解析成当前步骤、当前股票或子任务、成功/失败/跳过数量和最终报告路径。
+
+## 本地生成文件出现在 Git 状态里
+
+现象：`reports/`、`data/`、`backups/`、`.env` 或 DuckDB 出现在 `git status` 里。
 
 原因：忽略规则异常或文件已被跟踪。
 

@@ -16,6 +16,10 @@ v0.1 是当前项目的阶段封版，定位为个人本地 A 股选股辅助工
 - 一键日报：`run_daily_workflow` 串联更新、诊断、选股、候选复核、观察池和综合日报。
 - 本地备份：支持 DuckDB 备份、备份列表、dry-run 恢复和 force 恢复。
 - doctor 体检：检查 `.env`、DuckDB、核心表、`reports/.gitkeep`、备份、报告和误提交风险。
+- 简化参数设置：Streamlit 本地控制台支持自定义/预设股票池、日期设置、保存参数、本地重算和更新数据。
+- 选股逻辑说明：页面和命令行可查看公式、权重、候选排名原因和主要贡献因子。
+- 实时进度显示：数据更新和一键工作流会在终端及页面逐步显示当前步骤、当前股票、计数和报告路径。
+- AKShare 基础信息兼容：基础信息增强兼容 2 列/3 列返回结构，失败时使用基础字段或本地 preset 兜底。
 
 ## 当前限制
 
@@ -24,6 +28,7 @@ v0.1 是当前项目的阶段封版，定位为个人本地 A 股选股辅助工
 - 不做全市场长周期下载，当前股票池仍是 sample / small / medium 试运行阶段。
 - PE/PB 当前优先补最新交易日，全历史 `daily_basic` 估值字段可能为空。
 - AKShare / 东方财富接口可能受网络环境影响，失败时需重试或改用本地数据模式。
+- AKShare 基础信息增强字段可能缺失；这类 warning 不影响主行情更新。
 - `adj_factor` 在 AKShare fallback 下可能简化为 `1.0`。
 - 当前策略和因子为基础版本，不代表正式投资策略表现。
 
@@ -40,6 +45,8 @@ python -m core.jobs.doctor_daily_run --post-run
 ```bash
 python -m core.jobs.run_daily_workflow --doctor-before-run --skip-update --format all
 ```
+
+也可以通过 Streamlit 的“参数设置 / 本地控制台”完成同样流程。点击“保存并本地重算”或“保存并更新数据”后，页面会实时显示运行进度和日志。
 
 ## 推荐备份命令
 

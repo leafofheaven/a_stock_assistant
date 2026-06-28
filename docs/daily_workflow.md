@@ -10,6 +10,8 @@ streamlit run web/streamlit_app.py
 
 打开 `http://localhost:8501` 后进入“参数设置 / 本地控制台”。Mac 上也可双击 `scripts/mac/A股选股助手.command` 启动。该启动器不做完整原生 Swift App、不做菜单栏常驻、不做自动后台更新、不做 dmg、不做云同步。
 
+本地控制台适合日常操作：先查看参数和数据库日期，再按需要点击“保存参数”“保存并本地重算”或“保存并更新数据”。运行时页面会实时显示当前步骤、当前股票或子任务、成功/失败/跳过数量、日志和最终报告路径。
+
 所有命令默认先执行：
 
 ```bash
@@ -55,6 +57,8 @@ python -m core.jobs.run_daily_workflow --skip-update --format all
 
 该命令会生成 `reports/daily_workflow_*.md`、`reports/daily_workflow_*.json`，`--format all` 还会生成 CSV 摘要。清理运行生成文件时优先使用 `python -m core.jobs.clean_generated_reports --force`，不要删除 `reports/.gitkeep`。
 
+终端中出现 `[progress] step=...` 是实时进度输出。它用于确认当前正在执行哪一步，不代表错误。
+
 运行后复查：
 
 ```bash
@@ -86,6 +90,8 @@ python -m core.jobs.track_watchlist --export-report --format all
 ```
 
 需要查看“为什么这些股票排在前面”时，可以运行 `python -m core.jobs.explain_selection_logic --format markdown`，或在 Streamlit 的“选股逻辑”Tab 查看公式、因子权重、主要贡献因子和弱项。
+
+Task 35-38 的完整交接说明见 [task_35_38_handoff.md](task_35_38_handoff.md)。
 
 ## 每天/每周怎么用
 
