@@ -43,6 +43,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task30": check_task30,
         "task31": check_task31,
         "task32": check_task32,
+        "task33": check_task33,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1450,6 +1451,75 @@ def check_task32(root: Path) -> list[str]:
     return failures
 
 
+def check_task33(root: Path) -> list[str]:
+    """Check Task 33 v0.1 release docs and handbook."""
+    failures = check_paths(
+        root,
+        [
+            "docs/v0_1_release_notes.md",
+            "docs/v0_1_handbook.md",
+            "tests/test_v0_1_release_docs.py",
+            "README.md",
+            "docs/usage_guide.md",
+            "docs/commands_reference.md",
+            "docs/daily_workflow.md",
+            "docs/troubleshooting.md",
+            "docs/data_and_backup.md",
+        ],
+    )
+    readme = read_source(root / "README.md")
+    for phrase in ["v0.1", "run_daily_workflow", "doctor_daily_run", "docs/v0_1_handbook.md"]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    release_notes = read_source(root / "docs/v0_1_release_notes.md")
+    for phrase in ["v0.1 本地日常使用版", "当前核心能力", "当前限制", "推荐日常命令", "git tag v0.1"]:
+        if phrase not in release_notes:
+            failures.append(f"v0_1_release_notes.md is missing {phrase}.")
+
+    handbook = read_source(root / "docs/v0_1_handbook.md")
+    for phrase in ["第一次使用", "每天推荐流程", "人工复核", "观察池刷新", "Git 注意事项", "reports/.gitkeep"]:
+        if phrase not in handbook:
+            failures.append(f"v0_1_handbook.md is missing {phrase}.")
+
+    commands = read_source(root / "docs/commands_reference.md")
+    for phrase in [
+        "python -m core.jobs.doctor_daily_run",
+        "python -m core.jobs.run_daily_workflow",
+        "python -m core.jobs.update_real_data",
+        "python -m core.jobs.diagnose_data_quality",
+        "python -m core.jobs.diagnose_factors",
+        "python -m core.jobs.run_daily_selection",
+        "python -m core.jobs.export_selection_review",
+        "python -m core.jobs.export_review_template",
+        "python -m core.jobs.import_review_decisions",
+        "python -m core.jobs.refresh_watchlist_scores",
+        "python -m core.jobs.diagnose_watchlist",
+        "python -m core.jobs.export_watchlist",
+        "python -m core.jobs.track_watchlist",
+        "python -m core.jobs.export_watchlist_tracking_report",
+        "python -m core.jobs.backup_local_data",
+        "python -m core.jobs.list_backups",
+        "python -m core.jobs.restore_local_data",
+        "python -m core.jobs.clean_generated_reports",
+        "streamlit run web/streamlit_app.py",
+    ]:
+        if phrase not in commands:
+            failures.append(f"docs/commands_reference.md is missing {phrase}.")
+
+    daily_workflow = read_source(root / "docs/daily_workflow.md")
+    if "推荐日常一键命令" not in daily_workflow:
+        failures.append("docs/daily_workflow.md must contain 推荐日常一键命令.")
+    troubleshooting = read_source(root / "docs/troubleshooting.md")
+    if "reports/.gitkeep" not in troubleshooting:
+        failures.append("docs/troubleshooting.md must mention reports/.gitkeep.")
+    if "doctor_daily_run" not in read_source(root / "core/jobs/doctor_daily_run.py"):
+        failures.append("Task 32 doctor_daily_run must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1513,6 +1583,7 @@ def main(argv: list[str] | None = None) -> int:
             "task30",
             "task31",
             "task32",
+            "task33",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

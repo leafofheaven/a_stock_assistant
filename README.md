@@ -4,6 +4,8 @@
 
 ## 当前功能总览
 
+当前阶段：v0.1 本地日常使用版。系统已经具备日常更新、候选复核、观察池管理、日报、备份和 doctor 体检能力，可以进入个人本地日常使用。
+
 - sample/mock 数据模式，便于无外部数据时跑通流程。
 - AKShare + 东方财富 curl fallback 小范围真实数据更新。
 - DuckDB 本地存储、真实数据诊断和批量更新诊断。
@@ -54,21 +56,34 @@ streamlit run web/streamlit_app.py
 
 ## 真实数据工作流
 
-真实数据端到端验证的常用入口：
-
-最简单的日常入口：
+真实数据端到端验证仍可按以下命令拆分执行：
 
 ```bash
-python -m core.jobs.run_real_workflow --backup-before-run
+python -m core.jobs.update_real_data
+python -m core.jobs.diagnose_real_data
+python -m core.jobs.run_daily_selection
 ```
 
-只看本地 DuckDB，不更新数据：
+最推荐的一条日常命令：
 
 ```bash
-python -m core.jobs.run_real_workflow --skip-update
+python -m core.jobs.run_daily_workflow --doctor-before-run --backup-before-run --format all
 ```
 
-完整复核流程请见 [docs/daily_workflow.md](docs/daily_workflow.md)。
+只用本地 DuckDB、不更新数据：
+
+```bash
+python -m core.jobs.run_daily_workflow --doctor-before-run --skip-update --format all
+```
+
+运行前后体检：
+
+```bash
+python -m core.jobs.doctor_daily_run --pre-run
+python -m core.jobs.doctor_daily_run --post-run
+```
+
+报告输出在 `reports/`，常看 `daily_workflow_*.md`、`selection_review_*.csv`、`watchlist_*.md`。完整复核流程请见 [docs/v0_1_handbook.md](docs/v0_1_handbook.md) 和 [docs/daily_workflow.md](docs/daily_workflow.md)。
 
 ## 历史功能入口索引
 
@@ -105,6 +120,8 @@ streamlit run web/streamlit_app.py
 ## 文档目录
 
 - [完整使用说明](docs/usage_guide.md)
+- [v0.1 日常使用手册](docs/v0_1_handbook.md)
+- [v0.1 发布说明](docs/v0_1_release_notes.md)
 - [命令参考](docs/commands_reference.md)
 - [日常流程](docs/daily_workflow.md)
 - [常见问题排查](docs/troubleshooting.md)
