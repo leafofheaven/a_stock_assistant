@@ -24,7 +24,7 @@ from core.reporting.watchlist_report import load_latest_watchlist_report
 from core.reporting.watchlist_tracking_report import load_latest_watchlist_tracking_report
 from core.reporting.workflow_report import load_latest_workflow_report
 from core.reporting.daily_workflow_report import load_latest_daily_workflow_report
-from core.config.env_file import masked_env_values, read_env_file, update_env_file
+from core.config.env_file import masked_env_values, parse_stock_symbols, read_env_file, update_env_file
 from core.runtime.command_runner import open_project_path, run_allowed_command
 
 SELECTION_COLUMNS = [
@@ -789,15 +789,46 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     env_values = read_env_file(env_path)
     display_values = masked_env_values(env_values)
     status = summarize_update_status(tables)
+    effective = effective_pool_config(env_values)
+    date_status = build_date_status(env_values, status)
+
+    st.write("当前生效配置")
+    st.write(
+        {
+            "当前股票池模式": effective["mode_label"],
+            "当前实际生效股票数量": effective["symbol_count"],
+            "当前实际生效股票代码": effective["symbols_text"],
+            "AKSHARE_SAMPLE_SYMBOLS 当前值": effective["akshare_sample_symbols"] or "空",
+            "REAL_UNIVERSE_PRESET 当前值": effective["real_universe_preset"],
+            "当前提示": effective["message"],
+        }
+    )
+    if effective["preset_inactive"]:
+        st.warning("你现在选择的是“自定义股票池”，所以系统只会更新上面输入的股票代码。预设股票池 small / medium 暂时不会生效。")
+    else:
+        st.info("当前使用 REAL_UNIVERSE_PRESET 股票池。")
+
+    st.write("参数日期 vs 数据库日期")
+    st.write(
+        {
+            "参数开始日期": date_status["start_date"] or "未设置",
+            "参数结束日期": date_status["end_date"] or "留空",
+            "数据库最新行情日期": date_status["latest_price_date"] or "暂无",
+            "数据库最新因子日期": date_status["latest_factor_date"] or "暂无",
+            "数据库最新选股日期": date_status["latest_selection_date"] or "暂无",
+        }
+    )
+    if date_status["warning"]:
+        st.warning(date_status["message"])
+    else:
+        st.info(date_status["message"])
 
     st.write("当前运行状态")
     st.write(
         {
             "当前 DATA_PROVIDER": env_values.get("DATA_PROVIDER", "未设置"),
             "DuckDB 路径": env_values.get("DUCKDB_PATH", "./data/a_stock_assistant.duckdb"),
-            "最新行情日期": status.get("latest_price_date") or "暂无",
             "最新交易日 PE/PB 完整率": _latest_pe_pb_text(tables),
-            "当前配置股票数量": _configured_symbol_count(env_values),
             "当前已有行情股票数量": status.get("priced_symbol_count", 0),
             "最近日报路径": (status.get("latest_daily_workflow_report") or {}).get("path") if isinstance(status.get("latest_daily_workflow_report"), dict) else "暂无",
             "最近观察池报告路径": (status.get("latest_watchlist_report") or {}).get("path") if isinstance(status.get("latest_watchlist_report"), dict) else "暂无",
@@ -805,80 +836,212 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         }
     )
 
-    st.write("参数设置")
+    st.write("简化设置区")
     with st.form("local_console_settings"):
-        provider = st.selectbox(
-            "DATA_PROVIDER",
-            ["sample", "tushare", "akshare"],
-            index=_option_index(["sample", "tushare", "akshare"], env_values.get("DATA_PROVIDER", "akshare")),
-        )
-        pool_mode = st.radio("股票池模式", ["自定义股票代码", "使用 REAL_UNIVERSE_PRESET"], horizontal=True)
-        symbols = st.text_input("AKSHARE_SAMPLE_SYMBOLS", value=env_values.get("AKSHARE_SAMPLE_SYMBOLS", "000001,600000,000002"))
+        default_pool_mode = "自定义股票池" if effective["mode"] == "custom" else "使用预设股票池"
+        pool_mode = st.radio("股票池模式", ["自定义股票池", "使用预设股票池"], index=_option_index(["自定义股票池", "使用预设股票池"], default_pool_mode), horizontal=True)
+        symbols = st.text_input("自定义股票代码", value=env_values.get("AKSHARE_SAMPLE_SYMBOLS", "000001,600000,000002"))
         preset = st.selectbox(
-            "REAL_UNIVERSE_PRESET",
+            "预设股票池",
             ["mini", "small", "medium"],
             index=_option_index(["mini", "small", "medium"], env_values.get("REAL_UNIVERSE_PRESET", "mini")),
         )
-        st.caption("AKSHARE_SAMPLE_SYMBOLS 不为空时优先使用自定义股票池；输入示例：000001,600000,002475。")
-        start_date = st.text_input("REAL_DATA_START_DATE", value=env_values.get("REAL_DATA_START_DATE", "20240101"))
-        end_date = st.text_input("REAL_DATA_END_DATE", value=env_values.get("REAL_DATA_END_DATE", ""))
-        st.caption("REAL_DATA_END_DATE 留空表示尽量拉到最新可得日期。")
-        basic_enrichment = st.checkbox("ENABLE_REAL_BASIC_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_REAL_BASIC_ENRICHMENT", "true")))
-        valuation_enrichment = st.checkbox("ENABLE_REAL_VALUATION_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_REAL_VALUATION_ENRICHMENT", "true")))
-        batch_size = st.number_input("REAL_BATCH_SIZE", min_value=1, value=int(env_values.get("REAL_BATCH_SIZE", "10") or 10), step=1)
-        batch_sleep = st.number_input("REAL_BATCH_SLEEP_SECONDS", min_value=0.0, value=float(env_values.get("REAL_BATCH_SLEEP_SECONDS", "0") or 0.0), step=0.1)
-        max_retries = st.number_input("REAL_MAX_RETRIES", min_value=0, value=int(env_values.get("REAL_MAX_RETRIES", "1") or 1), step=1)
-        timeout_seconds = st.number_input("REAL_REQUEST_TIMEOUT_SECONDS", min_value=1, value=int(env_values.get("REAL_REQUEST_TIMEOUT_SECONDS", "30") or 30), step=1)
-        data_dir = st.text_input("DATA_DIR", value=env_values.get("DATA_DIR", "./data"))
-        duckdb_path = st.text_input("DUCKDB_PATH", value=env_values.get("DUCKDB_PATH", "./data/a_stock_assistant.duckdb"))
-        save_clicked = st.form_submit_button("保存参数")
-    if save_clicked:
-        updates = {
-            "DATA_PROVIDER": provider,
-            "AKSHARE_SAMPLE_SYMBOLS": "" if pool_mode == "使用 REAL_UNIVERSE_PRESET" else symbols,
+        if pool_mode == "自定义股票池":
+            st.caption("支持 000001,600000,002475，也支持中文逗号、换行和 000001.SZ / 600000.SH。保存后预设股票池暂时不会生效。")
+        else:
+            st.caption("保存时会清空 AKSHARE_SAMPLE_SYMBOLS，预设股票池将在下次更新数据时生效。")
+        start_date = st.text_input("参数开始日期", value=env_values.get("REAL_DATA_START_DATE", "20240101"))
+        end_date = st.text_input("参数结束日期", value=env_values.get("REAL_DATA_END_DATE", ""))
+        st.caption("结束日期留空表示尽量拉取到最新可得日期。")
+        with st.expander("高级参数", expanded=False):
+            provider = st.selectbox(
+                "DATA_PROVIDER",
+                ["sample", "tushare", "akshare"],
+                index=_option_index(["sample", "tushare", "akshare"], env_values.get("DATA_PROVIDER", "akshare")),
+            )
+            akshare_adjust = st.selectbox(
+                "AKSHARE_ADJUST",
+                ["qfq", "hfq", ""],
+                index=_option_index(["qfq", "hfq", ""], env_values.get("AKSHARE_ADJUST", "qfq")),
+            )
+            basic_enrichment = st.checkbox("ENABLE_REAL_BASIC_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_REAL_BASIC_ENRICHMENT", "true")))
+            valuation_enrichment = st.checkbox("ENABLE_REAL_VALUATION_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_REAL_VALUATION_ENRICHMENT", "true")))
+            batch_size = st.number_input("REAL_BATCH_SIZE", min_value=1, value=int(env_values.get("REAL_BATCH_SIZE", "10") or 10), step=1)
+            batch_sleep = st.number_input("REAL_BATCH_SLEEP_SECONDS", min_value=0.0, value=float(env_values.get("REAL_BATCH_SLEEP_SECONDS", "0") or 0.0), step=0.1)
+            max_retries = st.number_input("REAL_MAX_RETRIES", min_value=0, value=int(env_values.get("REAL_MAX_RETRIES", "1") or 1), step=1)
+            timeout_seconds = st.number_input("REAL_REQUEST_TIMEOUT_SECONDS", min_value=1, value=int(env_values.get("REAL_REQUEST_TIMEOUT_SECONDS", "30") or 30), step=1)
+            data_dir = st.text_input("DATA_DIR", value=env_values.get("DATA_DIR", "./data"))
+            duckdb_path = st.text_input("DUCKDB_PATH", value=env_values.get("DUCKDB_PATH", "./data/a_stock_assistant.duckdb"))
+            st.write({"TUSHARE_TOKEN 状态": display_values.get("TUSHARE_TOKEN", "未设置")})
+        save_only = st.form_submit_button("保存参数")
+        save_recalculate = st.form_submit_button("保存并本地重算")
+        save_update = st.form_submit_button("保存并更新数据")
+
+    updates, validation = build_settings_updates(
+        pool_mode=pool_mode,
+        symbols_text=symbols,
+        preset=preset,
+        start_date=start_date,
+        end_date=end_date,
+        provider=provider,
+        akshare_adjust=akshare_adjust,
+        basic_enrichment=basic_enrichment,
+        valuation_enrichment=valuation_enrichment,
+        batch_size=batch_size,
+        batch_sleep=batch_sleep,
+        max_retries=max_retries,
+        timeout_seconds=timeout_seconds,
+        data_dir=data_dir,
+        duckdb_path=duckdb_path,
+    )
+    if validation["invalid"]:
+        st.warning(f"以下股票代码不是 6 位数字，未保存：{', '.join(validation['invalid'])}")
+    if save_only or save_recalculate or save_update:
+        if validation["invalid"]:
+            st.error("请先修正股票代码，再保存参数。")
+        else:
+            saved = _save_console_settings(st, env_path, updates)
+            if saved and save_only:
+                st.info("参数已保存，但数据库尚未更新。若要生效，请点击“保存并更新数据”。请点击页面右上角刷新，或按 R 重新加载页面。")
+            elif saved and save_recalculate:
+                st.info("该操作不会联网更新行情，只会用本地已有数据重新生成报告。")
+                _run_console_action(st, "保存并本地重算", "run_daily_workflow", ["--doctor-before-run", "--skip-update", "--format", "all"])
+            elif saved and save_update:
+                st.info("该操作会联网更新真实行情数据，可能较慢。")
+                _run_console_action(st, "保存并更新数据", "run_daily_workflow", ["--doctor-before-run", "--backup-before-run", "--format", "all"])
+
+    st.write("一键操作区")
+    _command_button(st, "运行体检", "doctor_daily_run")
+    _open_button(st, "打开报告文件夹", PROJECT_ROOT / "reports")
+    _command_button(st, "清理旧报告", "clean_generated_reports", ["--force"])
+
+    with st.expander("高级操作", expanded=False):
+        output_format = st.selectbox("输出格式", ["all", "markdown", "json", "csv"], index=0)
+        _command_button(st, "只用本地已有数据，不联网更新行情", "run_daily_workflow", ["--doctor-before-run", "--skip-update", "--format", output_format])
+        _command_button(st, "更新真实数据", "update_real_data")
+        _command_button(st, "生成候选", "run_daily_selection")
+        _command_button(st, "刷新观察池", "refresh_watchlist_scores")
+        _command_button(st, "查看观察池", "diagnose_watchlist")
+        _open_button(st, "打开项目文件夹", PROJECT_ROOT)
+
+
+def build_settings_updates(
+    *,
+    pool_mode: str,
+    symbols_text: str,
+    preset: str,
+    start_date: str,
+    end_date: str,
+    provider: str,
+    akshare_adjust: str,
+    basic_enrichment: bool,
+    valuation_enrichment: bool,
+    batch_size: int,
+    batch_sleep: float,
+    max_retries: int,
+    timeout_seconds: int,
+    data_dir: str,
+    duckdb_path: str,
+) -> tuple[dict[str, Any], dict[str, list[str]]]:
+    """Build .env updates for the simplified settings form."""
+    parsed = parse_stock_symbols(symbols_text)
+    use_preset = pool_mode == "使用预设股票池"
+    updates = {
+        "DATA_PROVIDER": provider,
+        "AKSHARE_SAMPLE_SYMBOLS": "" if use_preset else ",".join(parsed["symbols"]),
+        "REAL_UNIVERSE_PRESET": preset,
+        "AKSHARE_ADJUST": akshare_adjust,
+        "REAL_DATA_START_DATE": start_date,
+        "REAL_DATA_END_DATE": end_date,
+        "ENABLE_REAL_BASIC_ENRICHMENT": basic_enrichment,
+        "ENABLE_REAL_VALUATION_ENRICHMENT": valuation_enrichment,
+        "REAL_BATCH_SIZE": batch_size,
+        "REAL_BATCH_SLEEP_SECONDS": batch_sleep,
+        "REAL_MAX_RETRIES": max_retries,
+        "REAL_REQUEST_TIMEOUT_SECONDS": timeout_seconds,
+        "DATA_DIR": data_dir,
+        "DUCKDB_PATH": duckdb_path,
+    }
+    return updates, {"invalid": [] if use_preset else parsed["invalid"]}
+
+
+def effective_pool_config(values: dict[str, str]) -> dict[str, Any]:
+    """Describe the currently effective stock-pool configuration."""
+    symbols = parse_stock_symbols(values.get("AKSHARE_SAMPLE_SYMBOLS", ""))
+    preset = values.get("REAL_UNIVERSE_PRESET", "mini")
+    if symbols["symbols"]:
+        return {
+            "mode": "custom",
+            "mode_label": "自定义股票池",
+            "symbol_count": len(symbols["symbols"]),
+            "symbols": symbols["symbols"],
+            "symbols_text": ",".join(symbols["symbols"]),
+            "akshare_sample_symbols": values.get("AKSHARE_SAMPLE_SYMBOLS", ""),
             "REAL_UNIVERSE_PRESET": preset,
-            "REAL_DATA_START_DATE": start_date,
-            "REAL_DATA_END_DATE": end_date,
-            "ENABLE_REAL_BASIC_ENRICHMENT": basic_enrichment,
-            "ENABLE_REAL_VALUATION_ENRICHMENT": valuation_enrichment,
-            "REAL_BATCH_SIZE": batch_size,
-            "REAL_BATCH_SLEEP_SECONDS": batch_sleep,
-            "REAL_MAX_RETRIES": max_retries,
-            "REAL_REQUEST_TIMEOUT_SECONDS": timeout_seconds,
-            "DATA_DIR": data_dir,
-            "DUCKDB_PATH": duckdb_path,
+            "real_universe_preset": preset,
+            "preset_inactive": True,
+            "message": "AKSHARE_SAMPLE_SYMBOLS 不为空，当前优先使用自定义股票池，REAL_UNIVERSE_PRESET 当前不生效。",
         }
+    return {
+        "mode": "preset",
+        "mode_label": "REAL_UNIVERSE_PRESET",
+        "symbol_count": 0,
+        "symbols": [],
+        "symbols_text": f"使用预设：{preset}",
+        "akshare_sample_symbols": "",
+        "real_universe_preset": preset,
+        "preset_inactive": False,
+        "message": "AKSHARE_SAMPLE_SYMBOLS 为空，当前使用 REAL_UNIVERSE_PRESET 股票池。",
+    }
+
+
+def build_date_status(env_values: dict[str, str], status: dict[str, Any]) -> dict[str, Any]:
+    """Compare parameter dates with actual database dates."""
+    end_date = env_values.get("REAL_DATA_END_DATE", "")
+    latest_price_date = status.get("latest_price_date")
+    message = "结束日期留空表示尽量拉取到最新可得日期。"
+    warning = False
+    if end_date and latest_price_date and str(latest_price_date) < str(end_date):
+        warning = True
+        message = f"参数结束日期为 {end_date}，但数据库最新行情日期仍为 {latest_price_date}。需要点击“保存并更新数据”才会拉取新数据。"
+    elif end_date:
+        message = "数据库最新行情日期已达到或晚于参数结束日期。"
+    return {
+        "start_date": env_values.get("REAL_DATA_START_DATE", ""),
+        "end_date": end_date,
+        "latest_price_date": latest_price_date,
+        "latest_factor_date": status.get("latest_factor_date"),
+        "latest_selection_date": status.get("latest_selection_date"),
+        "warning": warning,
+        "message": message,
+    }
+
+
+def _save_console_settings(st: Any, env_path: Path, updates: dict[str, Any]) -> bool:
+    try:
+        result = update_env_file(env_path, updates)
+        st.success(f"参数已保存：{', '.join(result['updated_keys'])}。")
+        return True
+    except Exception as exc:
+        st.error(f"保存失败：{exc}")
+        return False
+
+
+def _run_console_action(st: Any, label: str, command_key: str, args: list[str]) -> None:
+    with st.spinner(f"正在执行：{label}"):
         try:
-            result = update_env_file(env_path, updates)
-            st.success(f"参数已保存：{', '.join(result['updated_keys'])}。重新运行工作流后生效。")
+            result = run_allowed_command(command_key, args)
         except Exception as exc:
-            st.error(f"保存失败：{exc}")
-
-    st.write("运行选项")
-    doctor_before = st.checkbox("运行前 doctor", value=True, key="console_doctor_before")
-    backup_before = st.checkbox("运行前备份", value=True, key="console_backup_before")
-    skip_update = st.checkbox("跳过数据更新", value=False, key="console_skip_update")
-    output_format = st.selectbox("输出格式", ["all", "markdown", "json", "csv"], index=0)
-
-    st.write("操作")
-    workflow_args = []
-    if doctor_before:
-        workflow_args.append("--doctor-before-run")
-    if backup_before and not skip_update:
-        workflow_args.append("--backup-before-run")
-    if skip_update:
-        workflow_args.append("--skip-update")
-    workflow_args.extend(["--format", output_format])
-    _command_button(st, "运行 doctor 体检", "doctor_daily_run")
-    _command_button(st, "一键运行", "run_daily_workflow", workflow_args)
-    _command_button(st, "只用本地数据运行", "run_daily_workflow", ["--doctor-before-run", "--skip-update", "--format", output_format])
-    _command_button(st, "更新真实数据", "update_real_data")
-    _command_button(st, "生成候选", "run_daily_selection")
-    _command_button(st, "刷新观察池", "refresh_watchlist_scores")
-    _command_button(st, "查看观察池", "diagnose_watchlist")
-    _command_button(st, "清理报告", "clean_generated_reports", ["--force"])
-    _open_button(st, "打开 reports 文件夹", PROJECT_ROOT / "reports")
-    _open_button(st, "打开项目文件夹", PROJECT_ROOT)
+            st.error(f"执行失败：{exc}")
+            return
+    if result.status == "success":
+        st.success("执行完成。请点击页面右上角刷新，或按 R 重新加载页面。")
+    else:
+        st.error(f"执行失败：{result.status}，returncode={result.returncode}")
+    with st.expander("stdout"):
+        st.code(result.stdout or "无输出")
+    with st.expander("stderr"):
+        st.code(result.stderr or "无输出")
 
 
 def _command_button(st: Any, label: str, command_key: str, args: list[str] | None = None) -> None:

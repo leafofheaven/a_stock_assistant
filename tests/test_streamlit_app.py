@@ -197,6 +197,9 @@ class FakeStreamlit:
     def info(self, text: str) -> None:
         self.info_messages.append(text)
 
+    def warning(self, text: str) -> None:
+        return None
+
     def metric(self, label: str, value) -> None:
         return None
 
@@ -245,7 +248,7 @@ class FakeStreamlit:
     def spinner(self, text: str) -> FakeTab:
         return FakeTab()
 
-    def expander(self, text: str) -> FakeTab:
+    def expander(self, text: str, **kwargs) -> FakeTab:
         return FakeTab()
 
     def code(self, text: str) -> None:

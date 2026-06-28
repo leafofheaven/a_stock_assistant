@@ -188,7 +188,13 @@ python -m core.jobs.doctor_daily_run --json
 streamlit run web/streamlit_app.py
 ```
 
-打开 `http://localhost:8501` 后进入“参数设置 / 本地控制台”。页面支持修改 DATA_PROVIDER、AKSHARE_SAMPLE_SYMBOLS、REAL_UNIVERSE_PRESET、日期、补全开关、批量参数、DATA_DIR 和 DUCKDB_PATH；也支持点击运行 doctor、一键运行、只用本地数据运行、更新真实数据、刷新观察池、清理报告、打开 reports 文件夹。
+打开 `http://localhost:8501` 后进入“参数设置 / 本地控制台”。页面提供简化设置向导：
+
+- 保存参数：只保存 `.env`，不运行命令；
+- 保存并本地重算：运行 `run_daily_workflow --doctor-before-run --skip-update --format all`，只用本地已有数据；
+- 保存并更新数据：运行 `run_daily_workflow --doctor-before-run --backup-before-run --format all`，会联网更新真实行情。
+
+自定义股票池会写入 `AKSHARE_SAMPLE_SYMBOLS`，它不为空时 `REAL_UNIVERSE_PRESET` 不生效。使用预设股票池会清空 `AKSHARE_SAMPLE_SYMBOLS` 并保存 `REAL_UNIVERSE_PRESET=small` 或 `medium`。结束日期留空表示尽量拉取到最新可得日期；修改结束日期后，只有“保存并更新数据”会让数据库最新行情日期变化。
 
 Mac 双击启动器：
 
