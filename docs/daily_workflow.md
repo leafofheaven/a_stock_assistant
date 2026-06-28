@@ -31,6 +31,7 @@ python -m core.jobs.run_daily_selection
 python -m core.jobs.export_selection_review --top-n 10 --format all
 python -m core.jobs.export_review_template --top-n 10
 python -m core.jobs.import_review_decisions --file reports/review_template_xxx.csv
+python -m core.jobs.refresh_watchlist_scores
 python -m core.jobs.diagnose_watchlist
 python -m core.jobs.track_watchlist --export-report --format all
 ```

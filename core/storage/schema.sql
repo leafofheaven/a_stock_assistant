@@ -123,8 +123,13 @@ CREATE TABLE IF NOT EXISTS watchlist_snapshots (
     selection_date VARCHAR,
     review_date VARCHAR,
     decision VARCHAR,
+    industry VARCHAR,
+    market VARCHAR,
+    list_date VARCHAR,
     latest_trade_date VARCHAR,
     latest_close DOUBLE,
+    pe DOUBLE,
+    pb DOUBLE,
     total_score DOUBLE,
     trend_score DOUBLE,
     momentum_score DOUBLE,
@@ -135,6 +140,7 @@ CREATE TABLE IF NOT EXISTS watchlist_snapshots (
     avg_amount_20d DOUBLE,
     avg_turnover_20d DOUBLE,
     volatility_20d DOUBLE,
+    score_missing_reason VARCHAR,
     data_quality_note VARCHAR,
     created_at TIMESTAMP
 );

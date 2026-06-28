@@ -78,8 +78,8 @@ python -m core.jobs.run_real_workflow --skip-update
 - 基础信息与 PE/PB 估值字段补全：`ENABLE_REAL_BASIC_ENRICHMENT=true`，`ENABLE_REAL_VALUATION_ENRICHMENT=true`，`python -m core.jobs.diagnose_data_quality`
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
-- 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
-- 观察池跟踪与变化报告：`watchlist_snapshots`，`python -m core.jobs.track_watchlist`，`python -m core.jobs.export_watchlist_tracking_report`，`--track-watchlist`，`--export-watchlist-tracking`
+- 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
+- 观察池评分刷新、跟踪与变化报告：`watchlist_snapshots`，`python -m core.jobs.refresh_watchlist_scores --dry-run`，`python -m core.jobs.track_watchlist`，`python -m core.jobs.export_watchlist_tracking_report`，`--track-watchlist`，`--export-watchlist-tracking`
 - 观察池状态调整与复核记录管理：`python -m core.jobs.update_review_decision`，`python -m core.jobs.diagnose_review_history`，`--diagnose-review-history`
 - 本地数据备份与恢复：`python -m core.jobs.backup_local_data`，`python -m core.jobs.restore_local_data`，`python -m core.jobs.clean_generated_reports`
 

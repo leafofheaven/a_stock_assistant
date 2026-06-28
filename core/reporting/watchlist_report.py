@@ -34,6 +34,12 @@ WATCHLIST_COLUMNS = [
     "pe",
     "pb",
     "total_score",
+    "trend_score",
+    "momentum_score",
+    "liquidity_score",
+    "fundamental_score",
+    "volatility_score",
+    "score_missing_reason",
     "data_quality_note",
 ]
 
@@ -69,10 +75,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "",
         "## 观察池总表",
         "",
-        "| ts_code | name | industry | market | list_date | pe | pb | decision | review_status | history_count | latest_action_type | latest_action_at | latest_close | total_score | reason |",
-        "| --- | --- | --- | --- | --- | ---: | ---: | --- | --- | ---: | --- | --- | ---: | ---: | --- |",
+        "| ts_code | name | industry | market | list_date | pe | pb | fundamental_score | total_score | decision | review_status | history_count | latest_close | reason |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | --- |",
         *[
-            "| {ts_code} | {name} | {industry} | {market} | {list_date} | {pe} | {pb} | {decision} | {review_status} | {history_count} | {latest_action_type} | {latest_action_at} | {latest_close} | {total_score} | {reason} |".format(
+            "| {ts_code} | {name} | {industry} | {market} | {list_date} | {pe} | {pb} | {fundamental_score} | {total_score} | {decision} | {review_status} | {history_count} | {latest_close} | {reason} |".format(
                 **_markdown_row(item)
             )
             for item in report["watchlist"]
@@ -96,6 +102,11 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- list_date: {item.get('list_date') or '缺失'}",
                 f"- pe: {_display(item.get('pe'))}",
                 f"- pb: {_display(item.get('pb'))}",
+                f"- trend_score: {_display(item.get('trend_score'))}",
+                f"- momentum_score: {_display(item.get('momentum_score'))}",
+                f"- liquidity_score: {_display(item.get('liquidity_score'))}",
+                f"- fundamental_score: {_display(item.get('fundamental_score'))}",
+                f"- volatility_score: {_display(item.get('volatility_score'))}",
                 f"- reason: {item.get('reason') or '暂无'}",
                 f"- notes: {item.get('notes') or '暂无'}",
                 f"- latest_action_type: {item.get('latest_action_type') or '暂无'}",
@@ -104,6 +115,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- 最新行情日期: {item.get('latest_trade_date') or '暂无'}",
                 f"- 最新收盘价: {_display(item.get('latest_close'))}",
                 f"- 当前评分: {_display(item.get('total_score'))}",
+                f"- 缺评分原因: {item.get('score_missing_reason') or '无'}",
                 f"- 数据质量提示: {item.get('data_quality_note') or '暂无'}",
                 "",
             ]
@@ -197,6 +209,7 @@ def _markdown_row(item: dict[str, Any]) -> dict[str, Any]:
         "list_date": str(item.get("list_date") or "").replace("|", "/"),
         "pe": _display(item.get("pe")),
         "pb": _display(item.get("pb")),
+        "fundamental_score": _display(item.get("fundamental_score")),
         "latest_action_type": item.get("latest_action_type", ""),
         "latest_action_at": item.get("latest_action_at", ""),
         "history_count": item.get("history_count", 0),
