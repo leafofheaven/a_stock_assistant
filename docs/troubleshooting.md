@@ -43,19 +43,30 @@ chmod +x scripts/mac/A股选股助手.command
 
 现象：在“参数设置 / 本地控制台”修改股票池或日期后，数据没有立刻变化。
 
-原因：页面保存的是 `.env`，需要重新运行工作流。
+原因：页面保存的是 `.env`。如果只点“保存参数”，不会更新 DuckDB；如果点“保存并本地重算”，只用本地已有数据，不联网更新行情。
 
-处理命令：
+处理：修改股票池或 `REAL_DATA_END_DATE` 后，点击“保存并更新数据”。页面里的“参数日期 vs 数据库日期”会提示数据库最新行情日期是否已经达到目标结束日期。
 
-```bash
-python -m core.jobs.run_daily_workflow --doctor-before-run --skip-update --format all
+## small / medium 没有生效
+
+现象：页面选择了 `REAL_UNIVERSE_PRESET=small` 或 `medium`，但实际仍只更新少数股票。
+
+原因：`AKSHARE_SAMPLE_SYMBOLS` 不为空时，自定义股票池优先，预设股票池不生效。
+
+处理：在“参数设置 / 本地控制台”选择“使用预设股票池”，再点击“保存并更新数据”。系统会保存：
+
+```env
+AKSHARE_SAMPLE_SYMBOLS=
+REAL_UNIVERSE_PRESET=small
 ```
 
-如需重新拉取真实数据，点击页面里的“更新真实数据”，或运行：
+## 修改结束日期后数据库日期没变
 
-```bash
-python -m core.jobs.update_real_data
-```
+现象：`REAL_DATA_END_DATE` 已改成新日期，但页面显示“数据库最新行情日期”仍是旧日期。
+
+原因：参数日期只是目标配置，数据库日期代表本地实际已有数据。
+
+处理：点击“保存并更新数据”。结束日期留空表示尽量拉取到最新可得日期。
 
 ## DATA_PROVIDER 仍然是 tushare
 

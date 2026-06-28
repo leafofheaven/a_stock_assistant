@@ -45,6 +45,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task32": check_task32,
         "task33": check_task33,
         "task34": check_task34,
+        "task35": check_task35,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1572,6 +1573,31 @@ def check_task34(root: Path) -> list[str]:
     return failures
 
 
+def check_task35(root: Path) -> list[str]:
+    """Check Task 35 simplified settings workflow."""
+    failures = check_paths(
+        root,
+        [
+            "web/streamlit_app.py",
+            "tests/test_simplified_settings_workflow.py",
+            "core/config/env_file.py",
+            "core/runtime/command_runner.py",
+            "scripts/mac/A股选股助手.command",
+            "docs/v0_1_handbook.md",
+        ],
+    )
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["保存并更新数据", "保存并本地重算", "当前生效配置", "参数结束日期", "数据库最新行情日期"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing {phrase}.")
+    docs = read_source(root / "docs/v0_1_handbook.md") + read_source(root / "docs/usage_guide.md")
+    if "保存并更新数据" not in docs:
+        failures.append("docs must explain 保存并更新数据.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1637,6 +1663,7 @@ def main(argv: list[str] | None = None) -> int:
             "task32",
             "task33",
             "task34",
+            "task35",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

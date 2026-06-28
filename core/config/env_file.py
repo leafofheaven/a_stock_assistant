@@ -106,17 +106,28 @@ def format_env_value(key: str, value: Any) -> str:
 
 def clean_stock_symbols(value: str) -> list[str]:
     """Normalize comma-separated A-share symbols for AKShare input."""
+    return parse_stock_symbols(value)["symbols"]
+
+
+def parse_stock_symbols(value: str) -> dict[str, list[str]]:
+    """Parse A-share symbols and return cleaned symbols plus invalid entries."""
     seen: set[str] = set()
-    result: list[str] = []
-    for raw in value.replace("，", ",").split(","):
+    symbols: list[str] = []
+    invalid: list[str] = []
+    normalized_input = value.replace("，", ",").replace("\n", ",").replace("\r", ",")
+    for raw in normalized_input.split(","):
         symbol = raw.strip().upper()
         if not symbol:
             continue
         symbol = symbol.replace(".SZ", "").replace(".SH", "")
-        if len(symbol) == 6 and symbol.isdigit() and symbol not in seen:
+        if len(symbol) == 6 and symbol.isdigit():
+            if symbol in seen:
+                continue
             seen.add(symbol)
-            result.append(symbol)
-    return result
+            symbols.append(symbol)
+        else:
+            invalid.append(raw.strip())
+    return {"symbols": symbols, "invalid": invalid}
 
 
 def masked_env_values(values: dict[str, str]) -> dict[str, str]:

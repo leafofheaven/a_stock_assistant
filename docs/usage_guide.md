@@ -182,6 +182,14 @@ python -m core.jobs.export_watchlist_tracking_report --format all
 
 ## 一键日常工作流
 
+也可以在 Streamlit 的“参数设置 / 本地控制台”中操作：
+
+- 保存参数：只保存设置，不运行命令；
+- 保存并本地重算：只用本地已有数据，不联网更新行情；
+- 保存并更新数据：保存设置后联网更新行情并生成报告。
+
+自定义股票池会写入 `AKSHARE_SAMPLE_SYMBOLS`，它不为空时 `REAL_UNIVERSE_PRESET=small/medium` 不生效。切换到预设股票池会自动清空 `AKSHARE_SAMPLE_SYMBOLS`。修改结束日期后，数据库最新行情日期不会自动变化，需要点击“保存并更新数据”。
+
 运行前体检：
 
 ```bash
