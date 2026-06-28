@@ -50,6 +50,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task37": check_task37,
         "task38": check_task38,
         "task39": check_task39,
+        "task40": check_task40,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1795,6 +1796,63 @@ def check_task39(root: Path) -> list[str]:
     return failures
 
 
+def check_task40(root: Path) -> list[str]:
+    """Check Task 40 Elder technical review layer."""
+    failures = check_paths(
+        root,
+        [
+            "core/technical/elder.py",
+            "core/jobs/run_elder_review.py",
+            "docs/elder_review.md",
+            "tests/test_elder_review.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    elder_source = read_source(root / "core/technical/elder.py")
+    for phrase in [
+        "calculate_elder_indicators",
+        "calculate_weekly_elder_trend",
+        "build_elder_review",
+        "ema13",
+        "ema22",
+        "macd_histogram",
+        "force_index_2d",
+        "force_index_13d",
+        "bull_power",
+        "bear_power",
+        "close_to_ema13_pct",
+        "close_to_ema22_pct",
+        "elder_score",
+        "action_hint",
+    ]:
+        if phrase not in elder_source:
+            failures.append(f"core/technical/elder.py is missing {phrase}.")
+
+    job_source = read_source(root / "core/jobs/run_elder_review.py")
+    for phrase in ["run_elder_review", "--format", "markdown", "不覆盖 total_score"]:
+        if phrase not in job_source:
+            failures.append(f"core/jobs/run_elder_review.py is missing {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["埃尔德复核", "build_elder_review", "elder_score", "action_hint"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing {phrase}.")
+
+    docs = read_source(root / "docs/elder_review.md") + read_source(root / "README.md")
+    for phrase in ["EMA13", "MACD", "Force Index", "Elder Ray", "不修改", "不覆盖"]:
+        if phrase not in docs:
+            failures.append(f"Task 40 docs are missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_elder_review.py")
+    for phrase in ["EMA", "MACD", "Force", "Elder Ray", "数据不足", "total_score"]:
+        if phrase.lower() not in tests_source.lower():
+            failures.append(f"tests/test_elder_review.py should cover {phrase}.")
+
+    if "DEFAULT_WEIGHTS" not in read_source(root / "core/factors/scoring.py"):
+        failures.append("Existing scoring weights must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1865,6 +1923,7 @@ def main(argv: list[str] | None = None) -> int:
             "task37",
             "task38",
             "task39",
+            "task40",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
