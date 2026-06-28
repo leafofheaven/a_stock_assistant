@@ -15,7 +15,7 @@
 - 候选股票复核报告、人工复核模板导出和复核结果导入。
 - 观察池管理、观察池跟踪、观察池变化报告、状态调整与历史记录。
 - 本地 DuckDB 备份、恢复 dry-run、报告清理和本地状态诊断。
-- Chrome 本地控制台：Streamlit 页面内可修改常用 `.env` 参数、运行白名单命令、查看 doctor 体检并打开 reports 文件夹。
+- Chrome 本地控制台：Streamlit 页面内可修改常用 `.env` 参数、运行白名单命令、实时查看运行进度、查看 doctor 体检并打开 reports 文件夹。
 
 ## 快速开始
 
@@ -119,7 +119,7 @@ python -m core.jobs.doctor_daily_run --post-run
 streamlit run web/streamlit_app.py
 ```
 
-页面用于查看数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地状态提示。“选股逻辑”Tab 会显示 `total_score` 公式、因子权重、候选排名原因和主要贡献因子。“参数设置 / 本地控制台”提供简化设置向导：切换自定义股票池或预设股票池，修改开始/结束日期，查看“参数日期 vs 数据库日期”，并使用“保存参数”“保存并本地重算”“保存并更新数据”。修改日期后数据库日期不会立刻变化，需要点击“保存并更新数据”才会联网拉取新行情。
+页面用于查看数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地状态提示。“选股逻辑”Tab 会显示 `total_score` 公式、因子权重、候选排名原因和主要贡献因子。“参数设置 / 本地控制台”提供简化设置向导：切换自定义股票池或预设股票池，修改开始/结束日期，查看“参数日期 vs 数据库日期”，并使用“保存参数”“保存并本地重算”“保存并更新数据”。点击运行后页面会逐行显示当前步骤、当前股票或子任务、成功/失败/跳过数量、实时日志和最终报告路径。修改日期后数据库日期不会立刻变化，需要点击“保存并更新数据”才会联网拉取新行情。
 
 Mac 双击启动器：
 
@@ -138,7 +138,7 @@ open scripts/mac/A股选股助手.command
 - [命令参考](docs/commands_reference.md)
 - [日常流程](docs/daily_workflow.md)
 - [选股逻辑说明](docs/selection_logic.md)
-- [Task 35-39 状态与交接说明](docs/task_35_39_handoff.md)
+- [Task 35-38 交接说明](docs/task_35_38_handoff.md)
 - [常见问题排查](docs/troubleshooting.md)
 - [数据与备份](docs/data_and_backup.md)
 
@@ -150,3 +150,4 @@ open scripts/mac/A股选股助手.command
 - 用 `python -m core.jobs.diagnose_data_quality` 查看 PE/PB 完整率；用 `python -m core.jobs.diagnose_factors` 判断 `fundamental_score` 是否恢复。PE/PB 仍可能为空，`adj_factor` 可能简化为 `1.0`。
 - 本项目不接券商，不自动交易。
 - `.env`、`data/`、`reports/`、`backups/` 为本地个人数据，不应提交到 Git。
+- AKShare 基础信息增强如果出现字段缺失，系统会使用基础股票信息或本地 preset 兜底；这类 warning 不影响主行情更新。

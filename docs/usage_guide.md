@@ -192,6 +192,8 @@ python -m core.jobs.export_watchlist_tracking_report --format all
 
 自定义股票池会写入 `AKSHARE_SAMPLE_SYMBOLS`，它不为空时 `REAL_UNIVERSE_PRESET=small/medium` 不生效。切换到预设股票池会自动清空 `AKSHARE_SAMPLE_SYMBOLS`。修改结束日期后，数据库最新行情日期不会自动变化，需要点击“保存并更新数据”。
 
+运行过程中页面会实时显示当前步骤、当前股票或子任务、成功/失败/跳过数量、实时日志和最终报告路径。终端中的 `[progress]` 行是同一套进度输出。
+
 运行前体检：
 
 ```bash
@@ -266,3 +268,5 @@ streamlit run web/streamlit_app.py
 - 观察池；
 - 观察池跟踪；
 - 本地状态 / 备份提示。
+
+参数设置、选股逻辑说明、实时进度和 AKShare 基础信息兼容修复的交接说明见 [task_35_38_handoff.md](task_35_38_handoff.md)。

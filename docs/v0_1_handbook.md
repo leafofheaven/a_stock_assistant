@@ -49,6 +49,8 @@ open scripts/mac/A股选股助手.command
 - 保存并本地重算：保存 `.env`，然后只用本地已有数据重新生成报告，不联网更新行情。
 - 保存并更新数据：保存 `.env`，然后运行完整日常工作流，会联网更新真实行情，适合修改股票池或结束日期后使用。
 
+运行时页面会实时显示当前步骤、当前处理股票或子任务、成功/失败/跳过数量、日志和最终报告路径。看到 `[progress]` 开头的日志表示命令正在输出进度，不是卡住。
+
 股票池模式：
 
 - 自定义股票池：输入 `000001,600000,002475`，也支持中文逗号、换行、`000001.SZ`。系统会保存为 `AKSHARE_SAMPLE_SYMBOLS=000001,600000,002475`。
@@ -115,7 +117,7 @@ python -m core.jobs.explain_selection_logic --format markdown
 
 也可以在 Streamlit 的“选股逻辑”Tab 查看。
 
-Task 35-39 的参数设置、选股逻辑说明、实时进度、AKShare 基础信息兼容修复和检查项交接说明见 [task_35_39_handoff.md](task_35_39_handoff.md)。
+Task 35-38 的参数设置、选股逻辑说明、实时进度和 AKShare 基础信息兼容修复交接说明见 [task_35_38_handoff.md](task_35_38_handoff.md)。
 
 ## 5. 人工复核
 
@@ -255,6 +257,8 @@ python -m core.jobs.run_daily_workflow --doctor-before-run --skip-update --forma
 ```bash
 python -m core.jobs.update_real_data
 ```
+
+如果看到“AKShare 基础增强字段缺失，已使用基础股票信息兜底”，表示基础信息增强字段不可用或结构变化，主行情更新仍可继续。可用 `python -m core.jobs.diagnose_data_quality` 查看行业、市场、上市日期和 PE/PB 完整率。
 
 ### run_daily_workflow partial_success
 
