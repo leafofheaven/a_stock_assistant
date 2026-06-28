@@ -39,6 +39,8 @@ python -m core.jobs.run_daily_workflow --skip-update --format all
 
 该命令会生成 `reports/daily_workflow_*.md`、`reports/daily_workflow_*.json`，`--format all` 还会生成 CSV 摘要。清理运行生成文件时优先使用 `python -m core.jobs.clean_generated_reports --force`，不要删除 `reports/.gitkeep`。
 
+阅读日报时优先看最新交易日 PE/PB 完整率、候选股票 PE/PB 缺失数量、观察池 PE/PB 缺失数量。全历史 PE/PB 完整率低，通常表示历史区间估值字段可能为空，不等于当前候选缺估值。
+
 手动拆分流程如下：
 
 ```bash

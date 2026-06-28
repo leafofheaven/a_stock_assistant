@@ -86,6 +86,8 @@ python -m core.jobs.run_real_workflow --skip-update
 
 `run_real_workflow` 偏底层真实数据流程诊断；`run_daily_workflow` 偏日常使用，会一键生成候选复核、观察池、跟踪和 `daily_workflow` 综合日报。
 
+数据质量口径：PE/PB 当前优先补全最新交易日。日报和候选/观察池报告优先看“最新交易日、当前候选、当前观察池”的完整率；全历史 `daily_basic` 完整率偏低通常只表示历史区间估值字段尚未逐日补全。
+
 ## Streamlit 启动
 
 ```bash

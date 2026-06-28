@@ -157,6 +157,8 @@ python -m core.jobs.run_daily_workflow --no-watchlist-tracking
 
 作用：按日常顺序执行更新、数据质量诊断、因子诊断、选股、候选复核报告、观察池评分刷新、观察池报告、观察池跟踪，并导出 `reports/daily_workflow_*.md/json/csv`。`run_real_workflow` 偏底层诊断，`run_daily_workflow` 偏日常使用。
 
+日报中的 PE/PB 质量优先看最新交易日、当前候选和当前观察池口径。全历史完整率低不一定表示当前候选缺估值。
+
 ## 复核状态调整
 
 命令：

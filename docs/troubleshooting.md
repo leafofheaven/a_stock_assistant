@@ -258,6 +258,21 @@ find reports -type f ! -name ".gitkeep" -delete
 python -m core.jobs.run_daily_workflow --skip-update --format all
 ```
 
+## 全历史 PE/PB 完整率低，但候选报告有 PE/PB
+
+现象：`diagnose_data_quality` 中全历史 `daily_basic` 的 PE/PB 完整率较低，但 `daily_workflow`、候选复核和观察池报告里当前股票已有 PE/PB。
+
+原因：当前项目优先补全最新交易日估值字段，历史区间逐日 PE/PB 可能为空。30 只股票、117 个交易日时，如果只补最新交易日，全历史完整率会偏低，但当前候选和观察池仍可正常显示估值。
+
+检查命令：
+
+```bash
+python -m core.jobs.diagnose_data_quality
+python -m core.jobs.run_daily_workflow --skip-update --format all
+```
+
+处理：优先看 `latest_date_pe_non_null_rate`、`latest_date_pb_non_null_rate`、候选股票 PE/PB 缺失数量和观察池 PE/PB 缺失数量。
+
 原因：忽略规则异常或文件已被跟踪。
 
 检查命令：

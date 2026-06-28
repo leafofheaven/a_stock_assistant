@@ -194,6 +194,8 @@ python -m core.jobs.run_daily_workflow --skip-update --format all
 
 输出位于 `reports/daily_workflow_*.md/json/csv`，包含 Top 候选、观察池、观察池变化、PE/PB 完整率和下一步建议。`run_real_workflow` 仍保留用于底层真实数据流程诊断。
 
+PE/PB 当前优先补全最新交易日。日常判断请优先看日报中的最新交易日口径、当前候选口径和观察池口径；全历史完整率低不代表当前候选股票缺少 PE/PB。
+
 手动调整复核状态：
 
 ```bash
