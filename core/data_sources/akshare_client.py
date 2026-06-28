@@ -46,6 +46,7 @@ class AKShareClient(StockDataSource):
         self.enable_valuation_enrichment = enable_valuation_enrichment
         self.failure_records: list[dict[str, str]] = []
         self.enrichment_records: list[dict[str, str]] = []
+        self._logged_enrichment_warnings: set[tuple[str, str]] = set()
 
     def get_stock_basic(self) -> pd.DataFrame:
         """Return stock basic information from AKShare."""
@@ -133,18 +134,21 @@ class AKShareClient(StockDataSource):
             ts_code = _to_ts_code(symbol)
             info, error_message = self._call_optional_raw("stock_individual_info_em", symbol=_normalize_symbol(symbol))
             if error_message:
-                self._record_enrichment(ts_code, "stock_basic_enrichment", error_message)
-                logger.warning("AKShare basic enrichment failed for %s: %s", symbol, error_message)
+                message = _sanitize_basic_enrichment_error(error_message)
+                self._record_enrichment(ts_code, "stock_basic_enrichment", message)
+                self._log_enrichment_warning_once("stock_basic_enrichment", message)
                 continue
             try:
                 values = _parse_individual_info(info)
             except Exception as exc:
-                message = f"stock_individual_info_em parse failed: {exc}"
+                message = _sanitize_basic_enrichment_error(f"{type(exc).__name__}: {exc}")
                 self._record_enrichment(ts_code, "stock_basic_enrichment", message)
-                logger.warning("AKShare basic enrichment parse failed for %s: %s", symbol, exc)
+                self._log_enrichment_warning_once("stock_basic_enrichment", message)
                 continue
             if not values or not any(_not_missing_value(values.get(column)) for column in ["area", "industry", "market", "list_date", "delist_date", "is_hs"]):
-                self._record_enrichment(ts_code, "stock_basic_enrichment", "stock_individual_info_em returned no usable fields")
+                message = "某股票基础信息补全字段缺失，已跳过增强字段并保留 stock_basic 原有字段。"
+                self._record_enrichment(ts_code, "stock_basic_enrichment", message)
+                self._log_enrichment_warning_once("stock_basic_enrichment", message)
                 continue
             mask = result["ts_code"].astype(str) == ts_code
             if not mask.any():
@@ -323,6 +327,15 @@ class AKShareClient(StockDataSource):
                 "error_message": message,
             }
         )
+
+    def _log_enrichment_warning_once(self, stage: str, message: str) -> None:
+        """Log repeated optional enrichment warnings once to avoid console noise."""
+        key = (stage, message)
+        if key in self._logged_enrichment_warnings:
+            logger.info("AKShare optional enrichment warning repeated for %s: %s", stage, message)
+            return
+        self._logged_enrichment_warnings.add(key)
+        logger.warning("AKShare optional enrichment warning for %s: %s", stage, message)
 
     def _call_market_data(
         self,
@@ -621,19 +634,12 @@ def _market_from_ts_code(ts_code: str) -> str:
 
 def _parse_individual_info(df: pd.DataFrame) -> dict[str, Any]:
     """Parse AKShare stock_individual_info_em rows into stock_basic fields."""
-    if df.empty:
-        return {}
-    item_col = _first_existing(df, ["item", "项目", "指标"])
-    value_col = _first_existing(df, ["value", "值", "数值"])
-    if not item_col and len(df.columns) >= 1:
-        item_col = str(df.columns[0])
-    if not value_col and len(df.columns) >= 2:
-        value_col = str(df.columns[1])
-    if not item_col or not value_col:
+    normalized = normalize_basic_enrichment_frame(df)
+    if normalized.empty:
         return {}
     raw = {
-        str(row.get(item_col, "")).strip(): row.get(value_col)
-        for row in df.to_dict("records")
+        str(row.get("item", "")).strip(): row.get("value")
+        for row in normalized.to_dict("records")
     }
     industry = _first_value(raw, ["行业", "所属行业", "行业分类"])
     area = _first_value(raw, ["地区", "地域", "省份"])
@@ -647,6 +653,80 @@ def _parse_individual_info(df: pd.DataFrame) -> dict[str, Any]:
         "delist_date": _clean_date(_first_value(raw, ["退市日期", "摘牌日期"])),
         "is_hs": _first_value(raw, ["是否沪深港通", "沪深港通"]),
     }
+
+
+def normalize_basic_enrichment_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize AKShare individual-info frames to item/value/extra columns.
+
+    AKShare ``stock_individual_info_em`` has changed shapes across versions.
+    This helper never assigns a fixed number of column names to the raw frame.
+    Instead it inspects the existing columns and returns a standard structure
+    with ``item`` and ``value`` columns, plus optional ``extra`` and
+    ``source_columns`` for diagnostics.
+    """
+    standard_columns = ["item", "value", "extra", "source_columns"]
+    if df.empty:
+        return pd.DataFrame(columns=standard_columns)
+    raw = df.copy()
+    source_columns = [str(column).strip() for column in raw.columns]
+    raw.columns = source_columns
+    item_col = _first_existing(raw, ["item", "项目", "指标", "字段", "名称", "name"])
+    value_col = _first_existing(raw, ["value", "值", "数值", "内容", "结果"])
+    if item_col == value_col:
+        value_col = None
+    extra_col = _first_existing(raw, ["extra", "备注", "单位", "说明"])
+    if not item_col or not value_col:
+        inferred_item, inferred_value, inferred_extra = _infer_basic_enrichment_columns(raw)
+        item_col = item_col or inferred_item
+        value_col = value_col or inferred_value
+        extra_col = extra_col or inferred_extra
+    if not item_col or not value_col:
+        return pd.DataFrame(columns=standard_columns)
+    result = pd.DataFrame(
+        {
+            "item": raw[item_col],
+            "value": raw[value_col],
+            "extra": raw[extra_col] if extra_col and extra_col in raw.columns else pd.NA,
+            "source_columns": [",".join(source_columns)] * len(raw),
+        }
+    )
+    result["item"] = result["item"].astype(str).str.strip()
+    result = result[result["item"] != ""].reset_index(drop=True)
+    return result[standard_columns]
+
+
+def _sanitize_basic_enrichment_error(message: str) -> str:
+    """Return a user-facing optional basic-info enrichment warning."""
+    text = str(message or "")
+    if "Length mismatch" in text or "Expected axis" in text:
+        return "AKShare 基础增强字段缺失，已使用基础股票信息兜底。"
+    if "unavailable" in text or "not return a DataFrame" in text:
+        return "AKShare 基础信息增强接口不可用，已使用基础股票信息兜底。"
+    return "AKShare 基础信息增强失败，已使用基础股票信息兜底。"
+
+
+def _infer_basic_enrichment_columns(df: pd.DataFrame) -> tuple[str | None, str | None, str | None]:
+    """Infer item/value/extra columns from AKShare individual-info frames."""
+    if len(df.columns) < 2:
+        return None, None, None
+    columns = [str(column) for column in df.columns]
+    known_items = {"行业", "所属行业", "行业分类", "地区", "地域", "省份", "市场", "交易所", "上市时间", "上市日期", "上市日"}
+    best_pair: tuple[str, str] | None = None
+    best_score = -1
+    for item_col in columns:
+        item_values = set(df[item_col].dropna().astype(str).str.strip())
+        score = len(item_values.intersection(known_items))
+        for value_col in columns:
+            if item_col == value_col:
+                continue
+            if score > best_score:
+                best_pair = (item_col, value_col)
+                best_score = score
+    if best_pair and best_score > 0:
+        extra = next((column for column in columns if column not in best_pair), None)
+        return best_pair[0], best_pair[1], extra
+    extra = columns[2] if len(columns) >= 3 else None
+    return columns[0], columns[1], extra
 
 
 def _first_existing(df: pd.DataFrame, columns: list[str]) -> str | None:
