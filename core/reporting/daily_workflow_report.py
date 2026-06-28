@@ -36,7 +36,8 @@ def build_daily_workflow_report(
     top_candidates = _top_candidates(selection, selection_review, top_n)
     watch_items = _watchlist_items(watchlist, refresh)
     tracking_items = _tracking_items(tracking_export)
-    data_quality_notes = _data_quality_notes(data_quality, factors, selection)
+    data_quality_scope = _data_quality_scope(data_quality, top_candidates, watch_items)
+    data_quality_notes = _data_quality_notes(data_quality_scope, data_quality, factors, selection)
     files = _generated_files(generated_files, selection_review, watchlist_export, tracking_export)
 
     return {
@@ -50,6 +51,7 @@ def build_daily_workflow_report(
         "latest_price_date": _latest_price_date(data_quality, factors, selection),
         "stock_pool_count": _stock_pool_count(factors, selection),
         "valuation_quality": _valuation_quality(data_quality),
+        "data_quality_scope": data_quality_scope,
         "total_score_non_null_count": factors.get("result", {}).get("total_score_non_null_count", 0),
         "top_n": top_n,
         "top_candidates": top_candidates,
@@ -85,8 +87,12 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"- 是否更新数据: {'是' if report['update_ran'] else '否'}",
         f"- 最新行情日期: {report.get('latest_price_date') or '暂无'}",
         f"- 股票池数量: {report.get('stock_pool_count', 0)}",
-        f"- pe 完整率: {_format_rate(report['valuation_quality'].get('pe_non_null_rate'))}",
-        f"- pb 完整率: {_format_rate(report['valuation_quality'].get('pb_non_null_rate'))}",
+        f"- 全历史 pe 完整率: {_format_rate(report['valuation_quality'].get('pe_non_null_rate'))}",
+        f"- 全历史 pb 完整率: {_format_rate(report['valuation_quality'].get('pb_non_null_rate'))}",
+        f"- 最新交易日 PE 完整率: {_format_rate(report['data_quality_scope'].get('latest_date_pe_non_null_rate'))}",
+        f"- 最新交易日 PB 完整率: {_format_rate(report['data_quality_scope'].get('latest_date_pb_non_null_rate'))}",
+        f"- 候选股票 PE/PB 缺失数量: {report['data_quality_scope'].get('candidate_pe_missing_count', 0)} / {report['data_quality_scope'].get('candidate_pb_missing_count', 0)}",
+        f"- 观察池 PE/PB 缺失数量: {report['data_quality_scope'].get('watchlist_pe_missing_count', 0)} / {report['data_quality_scope'].get('watchlist_pb_missing_count', 0)}",
         f"- 综合评分非空股票数量: {report.get('total_score_non_null_count', 0)}",
         "",
         "## Top 候选股票",
@@ -277,7 +283,31 @@ def _tracking_items(tracking_export_step: dict[str, Any]) -> list[dict[str, Any]
     ]
 
 
-def _data_quality_notes(*steps: dict[str, Any]) -> list[str]:
+def _data_quality_scope(
+    data_quality_step: dict[str, Any],
+    top_candidates: list[dict[str, Any]],
+    watch_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return current-date and current-list data quality scope."""
+    result = data_quality_step.get("result", {})
+    return {
+        "latest_trade_date": result.get("latest_trade_date"),
+        "historical_daily_basic_rows": result.get("daily_basic_rows", 0),
+        "historical_pe_non_null_rate": result.get("valuation_summary", {}).get("pe_non_null_rate"),
+        "historical_pb_non_null_rate": result.get("valuation_summary", {}).get("pb_non_null_rate"),
+        "latest_date_rows": result.get("latest_date_stock_count", 0),
+        "latest_date_pe_non_null_rate": result.get("latest_date_pe_non_null_rate", result.get("valuation_summary", {}).get("pe_non_null_rate")),
+        "latest_date_pb_non_null_rate": result.get("latest_date_pb_non_null_rate", result.get("valuation_summary", {}).get("pb_non_null_rate")),
+        "latest_date_total_mv_non_null_rate": result.get("latest_date_total_mv_non_null_rate"),
+        "latest_date_circ_mv_non_null_rate": result.get("latest_date_circ_mv_non_null_rate"),
+        "candidate_pe_missing_count": _missing_count(top_candidates, "pe"),
+        "candidate_pb_missing_count": _missing_count(top_candidates, "pb"),
+        "watchlist_pe_missing_count": _missing_count(watch_items, "pe"),
+        "watchlist_pb_missing_count": _missing_count(watch_items, "pb"),
+    }
+
+
+def _data_quality_notes(scope: dict[str, Any], *steps: dict[str, Any]) -> list[str]:
     notes: list[str] = []
     for step in steps:
         result = step.get("result", {})
@@ -287,7 +317,58 @@ def _data_quality_notes(*steps: dict[str, Any]) -> list[str]:
                 notes.extend(str(item) for item in value if item)
             elif value:
                 notes.append(str(value))
-    return list(dict.fromkeys(notes))
+    filtered = [
+        note
+        for note in notes
+        if not _is_stale_valuation_note(note, scope)
+    ]
+    historical_pe = scope.get("latest_date_pe_non_null_rate") != scope.get("historical_pe_non_null_rate")
+    if _current_scope_complete(scope) and _has_historical_valuation_gap(steps):
+        filtered.append("PE/PB 当前仅补全最新交易日，历史区间估值字段可能为空。")
+    elif historical_pe:
+        filtered.append("PE/PB 当前优先按最新交易日和当前列表口径解读。")
+    return list(dict.fromkeys(filtered))
+
+
+def _missing_count(items: list[dict[str, Any]], column: str) -> int:
+    return sum(1 for item in items if _is_missing(item.get(column)))
+
+
+def _current_scope_complete(scope: dict[str, Any]) -> bool:
+    return (
+        float(scope.get("latest_date_pe_non_null_rate") or 0.0) >= 1.0
+        and float(scope.get("latest_date_pb_non_null_rate") or 0.0) >= 1.0
+        and int(scope.get("candidate_pe_missing_count") or 0) == 0
+        and int(scope.get("candidate_pb_missing_count") or 0) == 0
+        and int(scope.get("watchlist_pe_missing_count") or 0) == 0
+        and int(scope.get("watchlist_pb_missing_count") or 0) == 0
+    )
+
+
+def _has_historical_valuation_gap(steps: tuple[dict[str, Any], ...]) -> bool:
+    for step in steps:
+        result = step.get("result", {})
+        summary = result.get("valuation_summary", {})
+        if float(summary.get("pe_non_null_rate") or 0.0) < 1.0 or float(summary.get("pb_non_null_rate") or 0.0) < 1.0:
+            return True
+        notes = result.get("data_quality_notes", [])
+        if isinstance(notes, list) and any("历史区间估值字段可能为空" in str(note) for note in notes):
+            return True
+    return False
+
+
+def _is_stale_valuation_note(note: str, scope: dict[str, Any]) -> bool:
+    if not _current_scope_complete(scope):
+        return False
+    stale_phrases = [
+        "部分股票 pe 缺失",
+        "部分股票 pb 缺失",
+        "缺失股票的 pe_score",
+        "缺失股票的估值相关复核信息不完整",
+        "最新交易日部分股票 pe 缺失",
+        "最新交易日部分股票 pb 缺失",
+    ]
+    return any(phrase in note for phrase in stale_phrases)
 
 
 def _generated_files(base: dict[str, str], *steps: dict[str, Any]) -> dict[str, str]:
@@ -310,6 +391,17 @@ def _valuation_quality(data_quality_step: dict[str, Any]) -> dict[str, Any]:
 def _field_rate(result: dict[str, Any], group: str, field: str) -> float | None:
     fields = result.get("field_completeness", {}).get(group, {})
     return fields.get(field, {}).get("non_null_rate") if isinstance(fields.get(field), dict) else None
+
+
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip().lower() in {"", "nan", "none", "<na>", "null"}
 
 
 def _latest_price_date(*steps: dict[str, Any]) -> str | None:

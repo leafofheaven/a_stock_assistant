@@ -39,6 +39,12 @@ def diagnose_data_quality(
             "daily_basic_rows": 0,
             "stock_basic_completeness": _empty_rates(STOCK_BASIC_FIELDS),
             "daily_basic_completeness": _empty_rates(DAILY_BASIC_FIELDS),
+            "latest_trade_date": None,
+            "latest_date_stock_count": 0,
+            "latest_date_pe_non_null_rate": 0.0,
+            "latest_date_pb_non_null_rate": 0.0,
+            "latest_date_total_mv_non_null_rate": 0.0,
+            "latest_date_circ_mv_non_null_rate": 0.0,
             "missing_reasons": ["本地 DuckDB 读取失败，无法判断补全字段完整率。"],
             "symbol_quality": [],
             "affects_fundamental_score": True,
@@ -47,6 +53,7 @@ def diagnose_data_quality(
 
     stock_rates = _completeness(stock_basic, STOCK_BASIC_FIELDS)
     basic_rates = _completeness(daily_basic, DAILY_BASIC_FIELDS)
+    latest_rates = _latest_date_completeness(daily_price, daily_basic)
     symbol_quality = _symbol_quality(stock_basic, daily_price, daily_basic)
     missing_reasons = _missing_reasons(stock_rates, basic_rates, daily_basic)
     valuation_summary = _valuation_summary(daily_basic)
@@ -64,6 +71,7 @@ def diagnose_data_quality(
         "daily_basic_rows": int(len(daily_basic)),
         "stock_basic_completeness": stock_rates,
         "daily_basic_completeness": basic_rates,
+        **latest_rates,
         "missing_reasons": missing_reasons,
         "symbol_quality": symbol_quality,
         "valuation_summary": valuation_summary,
@@ -97,6 +105,13 @@ def main() -> None:
         print(f"  valuation_missing_count: {valuation.get('valuation_missing_count', 0)}")
         print(f"  pe_non_null_rate: {valuation.get('pe_non_null_rate', 0.0):.2%}")
         print(f"  pb_non_null_rate: {valuation.get('pb_non_null_rate', 0.0):.2%}")
+    print("- 最新交易日估值字段完整率:")
+    print(f"  latest_trade_date: {result.get('latest_trade_date') or '暂无'}")
+    print(f"  latest_date_stock_count: {result.get('latest_date_stock_count', 0)}")
+    print(f"  latest_date_pe_non_null_rate: {result.get('latest_date_pe_non_null_rate', 0.0):.2%}")
+    print(f"  latest_date_pb_non_null_rate: {result.get('latest_date_pb_non_null_rate', 0.0):.2%}")
+    print(f"  latest_date_total_mv_non_null_rate: {result.get('latest_date_total_mv_non_null_rate', 0.0):.2%}")
+    print(f"  latest_date_circ_mv_non_null_rate: {result.get('latest_date_circ_mv_non_null_rate', 0.0):.2%}")
     if result.get("missing_reasons"):
         print("- 缺失原因:")
         for reason in result["missing_reasons"]:
@@ -224,6 +239,35 @@ def _valuation_summary(daily_basic: pd.DataFrame) -> dict[str, Any]:
         "pe_non_null_rate": float(_present_mask(daily_basic, "pe").sum() / len(daily_basic)) if len(daily_basic) else 0.0,
         "pb_non_null_rate": float(_present_mask(daily_basic, "pb").sum() / len(daily_basic)) if len(daily_basic) else 0.0,
     }
+
+
+def _latest_date_completeness(daily_price: pd.DataFrame, daily_basic: pd.DataFrame) -> dict[str, Any]:
+    """Return valuation completeness for the current latest local trade date."""
+    latest_trade_date = _latest_date(daily_price, "trade_date") or _latest_date(daily_basic, "trade_date")
+    if not latest_trade_date or daily_basic.empty or "trade_date" not in daily_basic.columns:
+        return {
+            "latest_trade_date": latest_trade_date,
+            "latest_date_stock_count": 0,
+            "latest_date_pe_non_null_rate": 0.0,
+            "latest_date_pb_non_null_rate": 0.0,
+            "latest_date_total_mv_non_null_rate": 0.0,
+            "latest_date_circ_mv_non_null_rate": 0.0,
+        }
+    latest_rows = daily_basic[daily_basic["trade_date"].astype(str) == str(latest_trade_date)].copy()
+    return {
+        "latest_trade_date": latest_trade_date,
+        "latest_date_stock_count": int(latest_rows["ts_code"].nunique()) if "ts_code" in latest_rows.columns else int(len(latest_rows)),
+        "latest_date_pe_non_null_rate": _field_present_rate(latest_rows, "pe"),
+        "latest_date_pb_non_null_rate": _field_present_rate(latest_rows, "pb"),
+        "latest_date_total_mv_non_null_rate": _field_present_rate(latest_rows, "total_mv"),
+        "latest_date_circ_mv_non_null_rate": _field_present_rate(latest_rows, "circ_mv"),
+    }
+
+
+def _field_present_rate(df: pd.DataFrame, column: str) -> float:
+    if df.empty or column not in df.columns:
+        return 0.0
+    return float(_present_mask(df, column).sum() / len(df)) if len(df) else 0.0
 
 
 def _present_mask(df: pd.DataFrame, column: str) -> pd.Series:

@@ -294,18 +294,25 @@ def _data_quality_notes(data_provider: str, daily_basic: pd.DataFrame, adj_facto
     if daily_basic.empty:
         notes.append("daily_basic 缺失，fundamental_score 可能为空。")
     else:
-        if "pe" not in daily_basic.columns:
+        latest_basic = _latest_trade_date_rows(daily_basic)
+        if "pe" not in latest_basic.columns:
             notes.append("daily_basic 缺少 pe 字段，pe_score 与 fundamental_score 可能为空。")
-        elif _column_all_missing(daily_basic, "pe"):
+        elif _column_all_missing(latest_basic, "pe"):
             notes.append("pe 全部缺失，pe_score 与 fundamental_score 可能为空。")
-        elif _column_has_missing(daily_basic, "pe"):
-            notes.append("部分股票 pe 缺失，缺失股票的 pe_score 与 fundamental_score 可能为空。")
-        if "pb" not in daily_basic.columns:
+        elif _column_has_missing(latest_basic, "pe"):
+            notes.append("最新交易日部分股票 pe 缺失，缺失股票的 pe_score 与 fundamental_score 可能为空。")
+        if "pb" not in latest_basic.columns:
             notes.append("daily_basic 缺少 pb 字段，估值相关复核信息不完整。")
-        elif _column_all_missing(daily_basic, "pb"):
+        elif _column_all_missing(latest_basic, "pb"):
             notes.append("pb 全部缺失，估值相关复核信息不完整。")
-        elif _column_has_missing(daily_basic, "pb"):
-            notes.append("部分股票 pb 缺失，缺失股票的估值相关复核信息不完整。")
+        elif _column_has_missing(latest_basic, "pb"):
+            notes.append("最新交易日部分股票 pb 缺失，缺失股票的估值相关复核信息不完整。")
+        if (
+            not _column_has_missing(latest_basic, "pe")
+            and not _column_has_missing(latest_basic, "pb")
+            and (_column_has_missing(daily_basic, "pe") or _column_has_missing(daily_basic, "pb"))
+        ):
+            notes.append("PE/PB 当前仅补全最新交易日，历史区间估值字段可能为空。")
     if data_provider == "akshare":
         notes.append("AKShare fallback 当前只用于少量股票真实数据试运行。")
         if _column_all_missing(daily_basic, "pe") or _column_all_missing(daily_basic, "pb"):
@@ -315,6 +322,17 @@ def _data_quality_notes(data_provider: str, daily_basic: pd.DataFrame, adj_facto
             if not values.empty and bool((values == 1.0).all()):
                 notes.append("AKShare fallback 的 adj_factor 当前简化为 1.0。")
     return notes
+
+
+def _latest_trade_date_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Return rows for the latest trade_date in a DataFrame."""
+    if df.empty or "trade_date" not in df.columns:
+        return df.copy()
+    values = df["trade_date"].dropna().astype(str)
+    if values.empty:
+        return df.copy()
+    latest = str(values.max())
+    return df[df["trade_date"].astype(str) == latest].copy()
 
 
 def _fundamental_missing_notes(daily_basic: pd.DataFrame, factor_scores: pd.DataFrame) -> list[str]:
