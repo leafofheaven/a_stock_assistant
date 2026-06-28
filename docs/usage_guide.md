@@ -180,10 +180,16 @@ python -m core.jobs.export_watchlist_tracking_report --format all
 
 ## 一键日常工作流
 
+运行前体检：
+
+```bash
+python -m core.jobs.doctor_daily_run --pre-run
+```
+
 推荐日常运行：
 
 ```bash
-python -m core.jobs.run_daily_workflow --backup-before-run --format all
+python -m core.jobs.run_daily_workflow --doctor-before-run --backup-before-run --format all
 ```
 
 只使用本地库、不更新真实数据：
@@ -195,6 +201,20 @@ python -m core.jobs.run_daily_workflow --skip-update --format all
 输出位于 `reports/daily_workflow_*.md/json/csv`，包含 Top 候选、观察池、观察池变化、PE/PB 完整率和下一步建议。`run_real_workflow` 仍保留用于底层真实数据流程诊断。
 
 PE/PB 当前优先补全最新交易日。日常判断请优先看日报中的最新交易日口径、当前候选口径和观察池口径；全历史完整率低不代表当前候选股票缺少 PE/PB。
+
+运行后复查：
+
+```bash
+python -m core.jobs.doctor_daily_run --post-run
+```
+
+安全修复本地目录和 `reports/.gitkeep`：
+
+```bash
+python -m core.jobs.doctor_daily_run --fix-safe
+```
+
+`--fix-safe` 不会删除或覆盖 DuckDB，不会修改 `.env`。
 
 手动调整复核状态：
 

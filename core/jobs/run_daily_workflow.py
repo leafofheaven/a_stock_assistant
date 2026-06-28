@@ -12,6 +12,7 @@ from core.jobs.backup_local_data import backup_local_data
 from core.jobs.diagnose_data_quality import diagnose_data_quality
 from core.jobs.diagnose_factors import diagnose_factors
 from core.jobs.diagnose_watchlist import diagnose_watchlist
+from core.jobs.doctor_daily_run import doctor_daily_run
 from core.jobs.export_selection_review import export_selection_review
 from core.jobs.export_watchlist import export_watchlist
 from core.jobs.export_watchlist_tracking_report import export_watchlist_tracking_report
@@ -37,6 +38,9 @@ def run_daily_workflow(
     report_format: str = "all",
     report_dir: Path | str = "reports",
     watchlist_tracking: bool = True,
+    doctor_before_run: bool = False,
+    doctor_after_run: bool = False,
+    stop_on_doctor_failure: bool = False,
     quiet: bool = False,
     settings: Settings | None = None,
     store: DuckDBStore | None = None,
@@ -48,6 +52,29 @@ def run_daily_workflow(
     overrides = step_overrides or {}
     started_at = datetime.now()
     steps: dict[str, dict[str, Any]] = {}
+
+    if doctor_before_run:
+        steps["doctor_before_run"] = _run_step(
+            "doctor_before_run",
+            overrides.get(
+                "doctor_before_run",
+                lambda: doctor_daily_run(pre_run=True, settings=resolved_settings, store=resolved_store),
+            ),
+        )
+        if stop_on_doctor_failure and steps["doctor_before_run"]["status"] == "failed":
+            finished_at = datetime.now()
+            return _finish_workflow(
+                started_at=started_at,
+                finished_at=finished_at,
+                settings=resolved_settings,
+                steps=steps,
+                top_n=top_n,
+                report_dir=report_dir,
+                report_format=report_format,
+                quiet=quiet,
+            )
+    else:
+        steps["doctor_before_run"] = _skipped("--doctor-before-run not enabled.")
 
     if backup_before_run:
         steps["backup_local_data"] = _run_step(
@@ -137,12 +164,47 @@ def run_daily_workflow(
         steps["track_watchlist"] = _skipped("--no-watchlist-tracking enabled.")
         steps["export_watchlist_tracking"] = _skipped("--no-watchlist-tracking enabled.")
 
+    if doctor_after_run:
+        steps["doctor_after_run"] = _run_step(
+            "doctor_after_run",
+            overrides.get(
+                "doctor_after_run",
+                lambda: doctor_daily_run(post_run=True, settings=resolved_settings, store=resolved_store),
+            ),
+        )
+    else:
+        steps["doctor_after_run"] = _skipped("--doctor-after-run not enabled.")
+
     finished_at = datetime.now()
+    return _finish_workflow(
+        started_at=started_at,
+        finished_at=finished_at,
+        settings=resolved_settings,
+        steps=steps,
+        top_n=top_n,
+        report_dir=report_dir,
+        report_format=report_format,
+        quiet=quiet,
+    )
+
+
+def _finish_workflow(
+    *,
+    started_at: datetime,
+    finished_at: datetime,
+    settings: Settings,
+    steps: dict[str, dict[str, Any]],
+    top_n: int,
+    report_dir: Path | str,
+    report_format: str,
+    quiet: bool,
+) -> dict[str, Any]:
+    """Build, save, and optionally print the daily workflow report."""
     overall_status = _overall_status(steps)
     report = build_daily_workflow_report(
         started_at=started_at,
         finished_at=finished_at,
-        settings=resolved_settings,
+        settings=settings,
         steps=steps,
         overall_status=overall_status,
         generated_files={},
@@ -169,6 +231,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--format", choices=["markdown", "json", "csv", "all"], default="all", help="Daily/report export format.")
     parser.add_argument("--report-dir", default="reports", help="Report output directory.")
     parser.add_argument("--no-watchlist-tracking", action="store_true", help="Skip watchlist tracking snapshot and report.")
+    parser.add_argument("--doctor-before-run", action="store_true", help="Run doctor_daily_run before the workflow.")
+    parser.add_argument("--doctor-after-run", action="store_true", help="Run doctor_daily_run after the workflow.")
+    parser.add_argument("--stop-on-doctor-failure", action="store_true", help="Stop if the pre-run doctor fails.")
     parser.add_argument("--quiet", action="store_true", help="Reduce console output.")
     args = parser.parse_args(argv)
     run_daily_workflow(
@@ -178,6 +243,9 @@ def main(argv: list[str] | None = None) -> None:
         report_format=args.format,
         report_dir=args.report_dir,
         watchlist_tracking=not args.no_watchlist_tracking,
+        doctor_before_run=args.doctor_before_run,
+        doctor_after_run=args.doctor_after_run,
+        stop_on_doctor_failure=args.stop_on_doctor_failure,
         quiet=args.quiet,
     )
 
@@ -210,6 +278,8 @@ def _infer_status(name: str, result: dict[str, Any]) -> str:
         return str(result.get("status", "success"))
     if name == "diagnose_watchlist":
         return "success"
+    if name in {"doctor_before_run", "doctor_after_run"}:
+        return str(result.get("status", "success"))
     return "success"
 
 
@@ -217,6 +287,8 @@ def _overall_status(steps: dict[str, dict[str, Any]]) -> str:
     statuses = [step.get("status", "failed") for step in steps.values()]
     if any(status == "failed" for status in statuses):
         return "partial_success" if any(status in SUCCESS_STATUSES for status in statuses) else "failed"
+    if any(status == "warning" for status in statuses):
+        return "partial_success"
     if any(status == "partial_success" for status in statuses):
         return "partial_success"
     return "success"

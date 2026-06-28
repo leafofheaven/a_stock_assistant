@@ -32,6 +32,7 @@ def build_daily_workflow_report(
     watchlist_export = _step_result(steps, "export_watchlist")
     tracking = _step_result(steps, "track_watchlist")
     tracking_export = _step_result(steps, "export_watchlist_tracking")
+    doctor_summary = _doctor_summary(steps)
 
     top_candidates = _top_candidates(selection, selection_review, top_n)
     watch_items = _watchlist_items(watchlist, refresh)
@@ -63,6 +64,7 @@ def build_daily_workflow_report(
             "snapshot_count": tracking.get("result", {}).get("snapshot_count", 0),
             "items": tracking_items,
         },
+        "doctor_summary": doctor_summary,
         "data_quality_notes": data_quality_notes,
         "generated_files": files,
         "steps": _jsonable(steps),
@@ -94,6 +96,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"- 候选股票 PE/PB 缺失数量: {report['data_quality_scope'].get('candidate_pe_missing_count', 0)} / {report['data_quality_scope'].get('candidate_pb_missing_count', 0)}",
         f"- 观察池 PE/PB 缺失数量: {report['data_quality_scope'].get('watchlist_pe_missing_count', 0)} / {report['data_quality_scope'].get('watchlist_pb_missing_count', 0)}",
         f"- 综合评分非空股票数量: {report.get('total_score_non_null_count', 0)}",
+        f"- 体检状态: {report.get('doctor_summary', {}).get('overall_status', 'skipped')}",
         "",
         "## Top 候选股票",
         "",
@@ -118,6 +121,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "## 数据质量提示",
         "",
         *_notes_lines(report["data_quality_notes"]),
+        "",
+        "## 日常运行体检",
+        "",
+        *_doctor_lines(report.get("doctor_summary", {})),
         "",
         "## 生成文件",
         "",
@@ -218,6 +225,7 @@ def build_console_summary(report: dict[str, Any], files: dict[str, str]) -> str:
             f"- 最新行情日期: {report.get('latest_price_date') or '暂无'}",
             f"- Top 候选数量: {len(report.get('top_candidates', []))}",
             f"- active watch 数量: {report['watchlist_summary'].get('active_watch_count', 0)}",
+            f"- 体检状态: {report.get('doctor_summary', {}).get('overall_status', 'skipped')}",
             f"- 报告文件: {', '.join(files.values())}",
         ]
     )
@@ -386,6 +394,52 @@ def _valuation_quality(data_quality_step: dict[str, Any]) -> dict[str, Any]:
         "pe_non_null_rate": summary.get("pe_non_null_rate", _field_rate(result, "daily_basic", "pe")),
         "pb_non_null_rate": summary.get("pb_non_null_rate", _field_rate(result, "daily_basic", "pb")),
     }
+
+
+def _doctor_summary(steps: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Return a compact doctor summary from pre/post workflow checks."""
+    entries: dict[str, Any] = {}
+    statuses: list[str] = []
+    for key in ["doctor_before_run", "doctor_after_run"]:
+        step = steps.get(key, {})
+        result = step.get("result", {})
+        if step.get("status") == "skipped":
+            entries[key] = {"status": "skipped", "summary": {}, "next_steps": []}
+            continue
+        status = str(result.get("status") or step.get("status") or "skipped")
+        statuses.append(status)
+        entries[key] = {
+            "status": status,
+            "summary": result.get("summary", {}),
+            "next_steps": result.get("next_steps", []),
+        }
+    overall = "skipped"
+    if "failed" in statuses:
+        overall = "failed"
+    elif "warning" in statuses:
+        overall = "warning"
+    elif "success" in statuses:
+        overall = "success"
+    return {"overall_status": overall, **entries}
+
+
+def _doctor_lines(summary: dict[str, Any]) -> list[str]:
+    """Render daily doctor lines for Markdown."""
+    if not summary or summary.get("overall_status") == "skipped":
+        return ["- 未启用。"]
+    lines = [f"- 整体状态: {summary.get('overall_status')}"]
+    for key, label in [("doctor_before_run", "运行前体检"), ("doctor_after_run", "运行后体检")]:
+        item = summary.get(key, {})
+        if not item or item.get("status") == "skipped":
+            continue
+        counts = item.get("summary", {})
+        lines.append(
+            f"- {label}: {item.get('status')} "
+            f"(OK {counts.get('ok', 0)}, WARNING {counts.get('warning', 0)}, FAILED {counts.get('failed', 0)})"
+        )
+        for step in item.get("next_steps", [])[:3]:
+            lines.append(f"  - 建议: {step}")
+    return lines
 
 
 def _field_rate(result: dict[str, Any], group: str, field: str) -> float | None:

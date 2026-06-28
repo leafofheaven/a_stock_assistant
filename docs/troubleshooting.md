@@ -273,6 +273,66 @@ python -m core.jobs.run_daily_workflow --skip-update --format all
 
 处理：优先看 `latest_date_pe_non_null_rate`、`latest_date_pb_non_null_rate`、候选股票 PE/PB 缺失数量和观察池 PE/PB 缺失数量。
 
+## 日常运行前不知道环境是否正常
+
+现象：不确定 `.env`、DuckDB、reports、backups、当前分支和工作区是否适合运行。
+
+检查命令：
+
+```bash
+python -m core.jobs.doctor_daily_run --pre-run
+```
+
+处理命令：
+
+```bash
+python -m core.jobs.doctor_daily_run --fix-safe
+```
+
+说明：`--fix-safe` 只创建缺失目录和 `reports/.gitkeep`，不会删除或覆盖 DuckDB，也不会修改 `.env`。
+
+## reports/.gitkeep 缺失
+
+现象：`git status` 里 reports 目录表现异常，或 Task 检查提示 `reports/.gitkeep` 缺失。
+
+检查命令：
+
+```bash
+python -m core.jobs.doctor_daily_run
+```
+
+处理命令：
+
+```bash
+python -m core.jobs.doctor_daily_run --fix-safe
+```
+
+不要使用：
+
+```bash
+rm -rf reports
+```
+
+推荐清理生成报告：
+
+```bash
+python -m core.jobs.clean_generated_reports --force
+find reports -type f ! -name ".gitkeep" -delete
+```
+
+## 一键工作流某一步失败，不知道重跑什么
+
+现象：`run_daily_workflow` 输出 `partial_success` 或某一步 failed。
+
+检查命令：
+
+```bash
+python -m core.jobs.run_daily_workflow --doctor-before-run --skip-update --format all
+python -m core.jobs.doctor_daily_run --post-run
+```
+
+处理：先看 `reports/daily_workflow_*.md` 的“日常运行体检”和“下一步建议”。DuckDB 缺失时先运行 `update_real_data` 或 `restore_local_data`；报告占位文件缺失时运行 `doctor_daily_run --fix-safe`。
+
 原因：忽略规则异常或文件已被跟踪。
 
 检查命令：
