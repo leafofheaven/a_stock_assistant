@@ -112,7 +112,7 @@ def test_describe_dashboard_data_source_marks_sample_and_real_data() -> None:
     assert "最新交易日期：20240103" in real["message"]
 
 
-def test_render_dashboard_creates_title_and_five_tabs_for_empty_data(monkeypatch) -> None:
+def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> None:
     """Dashboard render should show title and tabs even when no real data exists."""
     fake_streamlit = FakeStreamlit()
     monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
@@ -129,7 +129,7 @@ def test_render_dashboard_creates_title_and_five_tabs_for_empty_data(monkeypatch
     )
 
     assert fake_streamlit.title_text == "A 股选股辅助"
-    assert fake_streamlit.tab_names == ["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态", "本地控制台"]
+    assert fake_streamlit.tab_names == ["今日选股", "个股详情", "因子排名", "选股逻辑", "策略回测", "数据更新状态", "本地控制台"]
     assert fake_streamlit.info_messages
 
 

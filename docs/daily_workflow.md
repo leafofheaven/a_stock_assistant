@@ -76,6 +76,7 @@ python -m core.jobs.doctor_daily_run --fix-safe
 ```bash
 python -m core.jobs.update_real_data
 python -m core.jobs.run_daily_selection
+python -m core.jobs.explain_selection_logic --format markdown
 python -m core.jobs.export_selection_review --top-n 10 --format all
 python -m core.jobs.export_review_template --top-n 10
 python -m core.jobs.import_review_decisions --file reports/review_template_xxx.csv
@@ -83,6 +84,8 @@ python -m core.jobs.refresh_watchlist_scores
 python -m core.jobs.diagnose_watchlist
 python -m core.jobs.track_watchlist --export-report --format all
 ```
+
+需要查看“为什么这些股票排在前面”时，可以运行 `python -m core.jobs.explain_selection_logic --format markdown`，或在 Streamlit 的“选股逻辑”Tab 查看公式、因子权重、主要贡献因子和弱项。
 
 ## 每天/每周怎么用
 

@@ -9,6 +9,8 @@ from typing import Any
 
 import pandas as pd
 
+from core.explain.selection_logic import explain_candidate
+
 RISK_DISCLAIMER = (
     "个人研究工具，结果需自行复核，不自动交易。"
 )
@@ -41,6 +43,8 @@ WATCHLIST_COLUMNS = [
     "volatility_score",
     "score_missing_reason",
     "data_quality_note",
+    "top_reasons",
+    "weak_points",
 ]
 
 
@@ -115,6 +119,8 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- 最新行情日期: {item.get('latest_trade_date') or '暂无'}",
                 f"- 最新收盘价: {_display(item.get('latest_close'))}",
                 f"- 当前评分: {_display(item.get('total_score'))}",
+                f"- 主要贡献因子: {'；'.join(item.get('top_reasons', [])) or '暂无'}",
+                f"- 弱项 / 复核要点: {'；'.join(item.get('weak_points', [])) or '暂无明显低分项'}",
                 f"- 缺评分原因: {item.get('score_missing_reason') or '无'}",
                 f"- 数据质量提示: {item.get('data_quality_note') or '暂无'}",
                 "",
@@ -194,7 +200,17 @@ def build_console_summary(report: dict[str, Any], files: dict[str, str]) -> str:
 
 
 def _records(df: pd.DataFrame) -> list[dict[str, Any]]:
-    return [_jsonable(row) for row in df.to_dict("records")]
+    records: list[dict[str, Any]] = []
+    for row in df.to_dict("records"):
+        record = _jsonable(row)
+        explanation = explain_candidate(record)
+        record["factor_contributions"] = explanation.factor_contributions
+        record["top_reasons"] = explanation.top_reasons
+        record["weak_points"] = explanation.weak_points
+        record["logic_version"] = explanation.logic_version
+        record["formula_summary"] = explanation.formula_summary
+        records.append(record)
+    return records
 
 
 def _markdown_row(item: dict[str, Any]) -> dict[str, Any]:

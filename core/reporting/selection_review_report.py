@@ -9,6 +9,13 @@ from typing import Any
 
 import pandas as pd
 
+from core.explain.selection_logic import (
+    LOGIC_VERSION,
+    explain_candidate,
+    explanation_to_dict,
+    formula_summary,
+)
+
 SCORE_COLUMNS = [
     "trend_score",
     "momentum_score",
@@ -51,6 +58,9 @@ CSV_COLUMNS = [
     "pb_missing",
     "data_quality_note",
     "selection_reason",
+    "top_reasons",
+    "weak_points",
+    "logic_version",
 ]
 
 REVIEW_CHECKLIST = [
@@ -98,6 +108,8 @@ def build_selection_review_report(
             "top_n": top_n,
         },
         "candidates": candidates,
+        "logic_version": LOGIC_VERSION,
+        "formula_summary": formula_summary(),
         "generated_files": {},
         "risk_disclaimer": RISK_DISCLAIMER,
     }
@@ -120,6 +132,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"- 评分股票数量: {summary.get('scored_stock_count', 0)}",
         f"- 候选股票数量: {summary.get('candidate_count', 0)}",
         f"- 导出候选股票数量: {summary.get('exported_candidate_count', 0)}",
+        f"- 综合评分公式: `{report.get('formula_summary')}`",
         "",
         "## Top N 候选股票总表",
         "",
@@ -201,6 +214,9 @@ def candidates_to_dataframe(candidates: list[dict[str, Any]]) -> pd.DataFrame:
             "data_quality_note": candidate.get("data_quality_note"),
             "pe_missing": candidate.get("missing_fields", {}).get("pe", True),
             "pb_missing": candidate.get("missing_fields", {}).get("pb", True),
+            "top_reasons": "；".join(candidate.get("top_reasons", [])),
+            "weak_points": "；".join(candidate.get("weak_points", [])),
+            "logic_version": candidate.get("logic_version"),
         }
         row.update(candidate.get("factor_scores", {}))
         row.update(candidate.get("raw_factors", {}))
@@ -280,6 +296,12 @@ def _candidate_record(
     factor_scores = {column: _optional_float(row.get(column)) for column in SCORE_COLUMNS}
     raw_factors = {column: _optional_float(row.get(column)) for column in RAW_FACTOR_COLUMNS}
     data_quality_note = _candidate_quality_note(missing, data_quality_notes, factor_scores)
+    explanation_input = {
+        **row,
+        "pe": latest_basic.get("pe"),
+        "pb": latest_basic.get("pb"),
+    }
+    explanation = explain_candidate(explanation_input)
     return {
         "ts_code": ts_code,
         "name": row.get("name"),
@@ -296,6 +318,12 @@ def _candidate_record(
         "raw_factors": raw_factors,
         "missing_fields": missing,
         "selection_reason": _selection_reason(row, missing),
+        "factor_contributions": explanation.factor_contributions,
+        "top_reasons": explanation.top_reasons,
+        "weak_points": explanation.weak_points,
+        "logic_version": explanation.logic_version,
+        "formula_summary": explanation.formula_summary,
+        "selection_logic": explanation_to_dict(explanation),
         "review_checklist": REVIEW_CHECKLIST,
         "data_quality_note": data_quality_note,
         "select_reason": row.get("select_reason"),
@@ -406,6 +434,16 @@ def _candidate_markdown(candidate: dict[str, Any]) -> list[str]:
         f"- pb 是否缺失: {'是' if missing.get('pb') else '否'}",
         f"- 数据质量提示: {candidate.get('data_quality_note') or '暂无'}",
         f"- 入选原因摘要: {candidate.get('selection_reason')}",
+        f"- 当前选股逻辑版本: {candidate.get('logic_version')}",
+        f"- 综合评分公式: `{candidate.get('formula_summary')}`",
+        f"- 主要贡献因子: {'；'.join(candidate.get('top_reasons', [])) or '暂无'}",
+        f"- 弱项 / 复核要点: {'；'.join(candidate.get('weak_points', [])) or '暂无明显低分项'}",
+        "",
+        "因子加权贡献：",
+        *[
+            f"- {column}: {_display(value)}"
+            for column, value in candidate.get("factor_contributions", {}).items()
+        ],
         "",
         "人工复核要点：",
         *[f"- {item}" for item in candidate["review_checklist"]],
