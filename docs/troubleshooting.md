@@ -222,6 +222,7 @@ python -m core.jobs.diagnose_factors
 
 ```bash
 python -m core.jobs.diagnose_factors
+python -m core.jobs.refresh_watchlist_scores --dry-run
 python -m core.jobs.diagnose_watchlist
 ```
 
@@ -229,8 +230,11 @@ python -m core.jobs.diagnose_watchlist
 
 ```bash
 python -m core.jobs.run_daily_selection
+python -m core.jobs.refresh_watchlist_scores
 python -m core.jobs.track_watchlist
 ```
+
+`diagnose_watchlist` 中的 `score_missing_reason` 会说明是缺少行情、缺少 `daily_basic`、交易日不足，还是当前股票不在最新可交易股票池或本地评分结果中。
 
 ## reports/ 或 backups/ 出现在 git status
 

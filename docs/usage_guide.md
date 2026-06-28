@@ -168,11 +168,15 @@ python -m core.jobs.import_review_decisions --file reports/review_template_xxx.c
 ## 观察池
 
 ```bash
+python -m core.jobs.refresh_watchlist_scores --dry-run
+python -m core.jobs.refresh_watchlist_scores
 python -m core.jobs.diagnose_watchlist
 python -m core.jobs.export_watchlist --format all
 python -m core.jobs.track_watchlist --export-report --format all
 python -m core.jobs.export_watchlist_tracking_report --format all
 ```
+
+`refresh_watchlist_scores` 会从本地 DuckDB 的最新行情、估值和评分结果刷新 active watch 股票；没有评分时会给出 `score_missing_reason`，不会修改人工复核决策。
 
 手动调整复核状态：
 

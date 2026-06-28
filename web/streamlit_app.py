@@ -479,6 +479,7 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame) -> None:
     if watchlist_df.empty:
         st.info("暂无 active watch 股票。人工复核导入 watch 决策后会显示在这里。")
         return
+    st.caption("刷新观察池评分：python -m core.jobs.refresh_watchlist_scores")
     display_columns = [
         "ts_code",
         "name",
@@ -488,10 +489,13 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame) -> None:
         "latest_trade_date",
         "latest_close",
         "industry",
+        "market",
         "list_date",
         "pe",
         "pb",
+        "fundamental_score",
         "total_score",
+        "score_missing_reason",
         "data_quality_note",
     ]
     available = [column for column in display_columns if column in watchlist_df.columns]

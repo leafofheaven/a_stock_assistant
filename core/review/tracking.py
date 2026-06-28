@@ -9,7 +9,7 @@ import uuid
 import pandas as pd
 
 from app.config import Settings
-from core.review.decisions import read_review_decisions
+from core.review.decisions import build_watchlist_dataframe
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 SNAPSHOT_COLUMNS = [
@@ -20,8 +20,13 @@ SNAPSHOT_COLUMNS = [
     "selection_date",
     "review_date",
     "decision",
+    "industry",
+    "market",
+    "list_date",
     "latest_trade_date",
     "latest_close",
+    "pe",
+    "pb",
     "total_score",
     "trend_score",
     "momentum_score",
@@ -32,6 +37,7 @@ SNAPSHOT_COLUMNS = [
     "avg_amount_20d",
     "avg_turnover_20d",
     "volatility_20d",
+    "score_missing_reason",
     "data_quality_note",
     "created_at",
 ]
@@ -45,9 +51,10 @@ def create_watchlist_snapshots(
 ) -> dict[str, Any]:
     """Create or update watchlist snapshots from local DuckDB data only."""
     store.initialize()
-    decisions = _active_watch_decisions(store)
+    _ensure_snapshot_columns(store)
+    watchlist = build_watchlist_dataframe(store, active_only=True)
     resolved_snapshot_date = snapshot_date or _latest_trade_date(store)
-    if decisions.empty:
+    if watchlist.empty:
         return {
             "status": "skipped",
             "data_provider": settings.data_provider,
@@ -61,11 +68,9 @@ def create_watchlist_snapshots(
             "next_steps": ["python -m core.jobs.import_review_decisions --file reports/review_template_xxx.csv"],
         }
 
-    daily_price = _safe_read_table(store, "daily_price")
-    score_df = _score_dataframe(settings, store)
     rows = [
-        _snapshot_row(decision, daily_price, score_df, resolved_snapshot_date)
-        for decision in decisions.to_dict("records")
+        _snapshot_row(item, resolved_snapshot_date)
+        for item in watchlist.to_dict("records")
     ]
     snapshot_df = pd.DataFrame(rows, columns=SNAPSHOT_COLUMNS)
     written = store.upsert_dataframe("watchlist_snapshots", snapshot_df)
@@ -75,7 +80,7 @@ def create_watchlist_snapshots(
         "status": "success",
         "data_provider": settings.data_provider,
         "duckdb_path": str(store.db_path),
-        "active_watch_count": int(len(decisions)),
+        "active_watch_count": int(len(watchlist)),
         "snapshot_count": int(len(snapshot_df)),
         "written_rows": int(written),
         "missing_price_count": missing_price,
@@ -104,16 +109,6 @@ def latest_tracking_snapshot(store: DuckDBStore) -> pd.DataFrame:
     return snapshots[snapshots["snapshot_date"].astype(str) == latest].reset_index(drop=True)
 
 
-def _active_watch_decisions(store: DuckDBStore) -> pd.DataFrame:
-    decisions = read_review_decisions(store)
-    if decisions.empty:
-        return decisions
-    return decisions[
-        (decisions["decision"].astype(str) == "watch")
-        & (decisions["review_status"].fillna("active").astype(str) == "active")
-    ].reset_index(drop=True)
-
-
 def _latest_trade_date(store: DuckDBStore) -> str:
     daily_price = _safe_read_table(store, "daily_price")
     if not daily_price.empty and "trade_date" in daily_price.columns:
@@ -123,48 +118,40 @@ def _latest_trade_date(store: DuckDBStore) -> str:
     return datetime.now().strftime("%Y%m%d")
 
 
-def _score_dataframe(settings: Settings, store: DuckDBStore) -> pd.DataFrame:
-    scores = _safe_read_table(store, "factor_scores")
-    if not scores.empty:
-        return scores
-    strategy = _safe_read_table(store, "strategy_result")
-    if not strategy.empty:
-        return strategy
-    return pd.DataFrame()
-
-
 def _snapshot_row(
-    decision: dict[str, Any],
-    daily_price: pd.DataFrame,
-    scores: pd.DataFrame,
+    item: dict[str, Any],
     snapshot_date: str,
 ) -> dict[str, Any]:
-    ts_code = str(decision.get("ts_code", ""))
-    latest_price = _latest_row(daily_price, ts_code, "trade_date", snapshot_date)
-    latest_score = _latest_row(scores, ts_code, "trade_date", snapshot_date)
-    latest_close = _optional_float(latest_price.get("close"))
-    total_score = _optional_float(latest_score.get("total_score"))
-    note = _quality_note(decision.get("data_quality_note"), latest_close, total_score)
+    ts_code = str(item.get("ts_code", ""))
+    latest_close = _optional_float(item.get("latest_close"))
+    total_score = _optional_float(item.get("total_score"))
+    note = _quality_note(item.get("data_quality_note"), latest_close, total_score)
     return {
         "snapshot_id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{ts_code}:{snapshot_date}")),
         "ts_code": ts_code,
-        "name": decision.get("name"),
+        "name": item.get("name"),
         "snapshot_date": snapshot_date,
-        "selection_date": decision.get("selection_date"),
-        "review_date": decision.get("review_date"),
-        "decision": decision.get("decision"),
-        "latest_trade_date": latest_price.get("trade_date"),
+        "selection_date": item.get("selection_date"),
+        "review_date": item.get("review_date"),
+        "decision": item.get("decision"),
+        "industry": item.get("industry"),
+        "market": item.get("market"),
+        "list_date": item.get("list_date"),
+        "latest_trade_date": item.get("latest_trade_date"),
         "latest_close": latest_close,
+        "pe": _optional_float(item.get("pe")),
+        "pb": _optional_float(item.get("pb")),
         "total_score": total_score,
-        "trend_score": _optional_float(latest_score.get("trend_score")),
-        "momentum_score": _optional_float(latest_score.get("momentum_score")),
-        "liquidity_score": _optional_float(latest_score.get("liquidity_score")),
-        "volatility_score": _optional_float(latest_score.get("volatility_score")),
-        "fundamental_score": _optional_float(latest_score.get("fundamental_score")),
-        "return_20d": _optional_float(latest_score.get("return_20d")),
-        "avg_amount_20d": _optional_float(latest_score.get("avg_amount_20d")),
-        "avg_turnover_20d": _optional_float(latest_score.get("avg_turnover_20d")),
-        "volatility_20d": _optional_float(latest_score.get("volatility_20d")),
+        "trend_score": _optional_float(item.get("trend_score")),
+        "momentum_score": _optional_float(item.get("momentum_score")),
+        "liquidity_score": _optional_float(item.get("liquidity_score")),
+        "volatility_score": _optional_float(item.get("volatility_score")),
+        "fundamental_score": _optional_float(item.get("fundamental_score")),
+        "return_20d": _optional_float(item.get("return_20d")),
+        "avg_amount_20d": _optional_float(item.get("avg_amount_20d")),
+        "avg_turnover_20d": _optional_float(item.get("avg_turnover_20d")),
+        "volatility_20d": _optional_float(item.get("volatility_20d")),
+        "score_missing_reason": item.get("score_missing_reason"),
         "data_quality_note": note,
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
@@ -193,6 +180,24 @@ def _quality_note(existing: Any, latest_close: float | None, total_score: float 
     if total_score is None:
         notes.append("当前无可用综合评分")
     return "；".join(dict.fromkeys(note for note in notes if note))
+
+
+def _ensure_snapshot_columns(store: DuckDBStore) -> None:
+    """Add Task 29 snapshot columns to older local DuckDB files."""
+    column_defs = {
+        "industry": "VARCHAR",
+        "market": "VARCHAR",
+        "list_date": "VARCHAR",
+        "pe": "DOUBLE",
+        "pb": "DOUBLE",
+        "score_missing_reason": "VARCHAR",
+    }
+    try:
+        with store.connect() as connection:
+            for column, data_type in column_defs.items():
+                connection.execute(f"ALTER TABLE watchlist_snapshots ADD COLUMN IF NOT EXISTS {column} {data_type}")
+    except Exception:
+        return
 
 
 def _optional_float(value: Any) -> float | None:

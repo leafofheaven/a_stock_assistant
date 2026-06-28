@@ -10,6 +10,7 @@ import uuid
 import pandas as pd
 
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+from core.review.watchlist_scores import enrich_watchlist_latest_fields
 
 ALLOWED_DECISIONS = {"watch", "pass", "exclude", "needs_data", "pending"}
 ALLOWED_REVIEW_STATUS = {"active", "archived"}
@@ -122,18 +123,8 @@ def build_watchlist_dataframe(store: DuckDBStore, active_only: bool = True) -> p
         df = df[df["review_status"].fillna("active") == "active"]
     if "decision" in df.columns:
         df = df[df["decision"] == "watch"]
-    price = _safe_read_table(store, "daily_price")
-    stock_basic = _safe_read_table(store, "stock_basic")
-    daily_basic = _safe_read_table(store, "daily_basic")
-    scores = _safe_read_table(store, "factor_scores")
-    strategy = _safe_read_table(store, "strategy_result")
-    score_source = scores if not scores.empty else strategy
     history = read_review_decision_history(store)
-    enriched = [
-        _enrich_watch(row, price, score_source, stock_basic, daily_basic)
-        for row in df.to_dict("records")
-    ]
-    result = pd.DataFrame(enriched)
+    result = enrich_watchlist_latest_fields(df, store=store)
     return _attach_history_summary(result, history)
 
 

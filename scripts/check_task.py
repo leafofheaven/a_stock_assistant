@@ -39,6 +39,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task26": check_task26,
         "task27": check_task27,
         "task28": check_task28,
+        "task29": check_task29,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1257,6 +1258,58 @@ def check_task28(root: Path) -> list[str]:
     return failures
 
 
+def check_task29(root: Path) -> list[str]:
+    """Check Task 29 watchlist latest score refresh."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/refresh_watchlist_scores.py",
+            "core/review/watchlist_scores.py",
+            "tests/test_watchlist_score_refresh.py",
+            "README.md",
+            "docs/commands_reference.md",
+            "docs/daily_workflow.md",
+        ],
+    )
+    refresh_source = read_source(root / "core/jobs/refresh_watchlist_scores.py")
+    for phrase in ["refresh_watchlist_scores", "--dry-run", "--export-report", "score_missing_reason"]:
+        if phrase not in refresh_source:
+            failures.append(f"refresh_watchlist_scores.py is missing {phrase}.")
+
+    score_source = read_source(root / "core/review/watchlist_scores.py")
+    for phrase in ["factor_scores", "strategy_result", "_calculate_minimal_real_scores", "score_missing_reason"]:
+        if phrase not in score_source:
+            failures.append(f"watchlist_scores.py is missing {phrase}.")
+
+    tracking_source = read_source(root / "core/reporting/watchlist_tracking_report.py")
+    for phrase in ["score_change", "pe_change", "pb_change"]:
+        if phrase not in tracking_source:
+            failures.append(f"watchlist_tracking_report.py is missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_watchlist_score_refresh.py").lower()
+    for phrase in ["temporary duckdb", "dry_run", "total_score", "pe", "pb", "score_change"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_watchlist_score_refresh.py should cover {phrase}.")
+
+    readme = read_source(root / "README.md")
+    commands = read_source(root / "docs/commands_reference.md")
+    workflow = read_source(root / "docs/daily_workflow.md")
+    for path_name, source in {
+        "README.md": readme,
+        "docs/commands_reference.md": commands,
+        "docs/daily_workflow.md": workflow,
+    }.items():
+        if "refresh_watchlist_scores" not in source:
+            failures.append(f"{path_name} is missing refresh_watchlist_scores.")
+
+    valuation_source = read_source(root / "core/data_sources/valuation_enrichment.py")
+    if "ValuationEnricher" not in valuation_source:
+        failures.append("Task 28 valuation enrichment must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1316,6 +1369,7 @@ def main(argv: list[str] | None = None) -> int:
             "task26",
             "task27",
             "task28",
+            "task29",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

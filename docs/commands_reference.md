@@ -123,11 +123,14 @@ python -m core.jobs.import_review_decisions --file reports/review_template_xxx.c
 命令：
 
 ```bash
+python -m core.jobs.refresh_watchlist_scores --dry-run
+python -m core.jobs.refresh_watchlist_scores
+python -m core.jobs.refresh_watchlist_scores --export-report
 python -m core.jobs.diagnose_watchlist
 python -m core.jobs.export_watchlist --format all
 ```
 
-作用：查看 active watch 股票和导出观察池报告。重点看 `history_count`、`reason`、`notes`。
+作用：刷新 active watch 股票的最新本地评分、PE/PB、基础信息，查看并导出观察池报告。重点看 `total_score`、`score_missing_reason`、`history_count`、`reason`、`notes`。`--dry-run` 只预览，不写入 snapshot。
 
 ## 观察池跟踪
 
@@ -139,7 +142,7 @@ python -m core.jobs.track_watchlist --export-report --format all
 python -m core.jobs.export_watchlist_tracking_report --format all
 ```
 
-作用：生成观察池 snapshot，并导出价格和评分变化报告。重点看 `缺少行情股票数量`、`缺少评分股票数量`。
+作用：生成观察池 snapshot，并导出价格、评分、PE/PB 变化报告。重点看 `缺少行情股票数量`、`缺少评分股票数量`、`score_change`、`pe_change`、`pb_change`。
 
 ## 复核状态调整
 

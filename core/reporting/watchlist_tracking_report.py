@@ -21,8 +21,12 @@ TRACKING_COLUMNS = [
     "pe",
     "pb",
     "total_score",
+    "fundamental_score",
     "close_change_pct",
+    "score_change",
     "total_score_change",
+    "pe_change",
+    "pb_change",
     "trend_score_change",
     "momentum_score_change",
     "liquidity_score_change",
@@ -31,10 +35,7 @@ TRACKING_COLUMNS = [
     "review_prompt",
 ]
 
-RISK_DISCLAIMER = (
-    "观察池变化报告仅用于人工复核，不构成投资建议，不提供交易方向判断，"
-    "不提供价格预期，不作收益承诺，不包含自动交易执行指令。"
-)
+RISK_DISCLAIMER = "个人研究工具，结果需自行复核，不自动交易。"
 
 
 def build_watchlist_tracking_report(
@@ -73,10 +74,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "",
         "## 当前状态与变化",
         "",
-        "| ts_code | name | industry | market | list_date | latest_close | total_score | close_change_pct | total_score_change | data_quality_note |",
-        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
+        "| ts_code | name | industry | market | list_date | pe | pb | latest_close | total_score | close_change_pct | score_change | pe_change | pb_change | data_quality_note |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
         *[
-            "| {ts_code} | {name} | {industry} | {market} | {list_date} | {latest_close} | {total_score} | {close_change_pct} | {total_score_change} | {data_quality_note} |".format(
+            "| {ts_code} | {name} | {industry} | {market} | {list_date} | {pe} | {pb} | {latest_close} | {total_score} | {close_change_pct} | {score_change} | {pe_change} | {pb_change} | {data_quality_note} |".format(
                 **_markdown_row(item)
             )
             for item in report["items"]
@@ -95,8 +96,11 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- list_date: {item.get('list_date') or '缺失'}",
                 f"- pe: {_display(item.get('pe'))}",
                 f"- pb: {_display(item.get('pb'))}",
+                f"- fundamental_score: {_display(item.get('fundamental_score'))}",
                 f"- 加入观察后价格变化: {_display(item.get('close_change_pct'))}",
-                f"- 综合评分变化: {_display(item.get('total_score_change'))}",
+                f"- 综合评分变化: {_display(item.get('score_change'))}",
+                f"- pe 变化: {_display(item.get('pe_change'))}",
+                f"- pb 变化: {_display(item.get('pb_change'))}",
                 f"- 趋势分变化: {_display(item.get('trend_score_change'))}",
                 f"- 动量分变化: {_display(item.get('momentum_score_change'))}",
                 f"- 流动性分变化: {_display(item.get('liquidity_score_change'))}",
@@ -207,11 +211,16 @@ def _tracking_record(row: dict[str, Any], baseline: dict[str, dict[str, Any]]) -
     base = baseline.get(str(row.get("ts_code")), {})
     close_change = _pct_change(row.get("latest_close"), base.get("latest_close"))
     total_change = _diff(row.get("total_score"), base.get("total_score"))
+    pe_change = _diff(row.get("pe"), base.get("pe"))
+    pb_change = _diff(row.get("pb"), base.get("pb"))
     data_quality_note = _quality_note(row.get("data_quality_note"), row.get("total_score"))
     return {
         **_jsonable(row),
         "close_change_pct": close_change,
+        "score_change": total_change,
         "total_score_change": total_change,
+        "pe_change": pe_change,
+        "pb_change": pb_change,
         "trend_score_change": _diff(row.get("trend_score"), base.get("trend_score")),
         "momentum_score_change": _diff(row.get("momentum_score"), base.get("momentum_score")),
         "liquidity_score_change": _diff(row.get("liquidity_score"), base.get("liquidity_score")),
@@ -273,10 +282,15 @@ def _markdown_row(item: dict[str, Any]) -> dict[str, Any]:
         "industry": str(item.get("industry") or "").replace("|", "/"),
         "market": str(item.get("market") or "").replace("|", "/"),
         "list_date": str(item.get("list_date") or "").replace("|", "/"),
+        "pe": _display(item.get("pe")),
+        "pb": _display(item.get("pb")),
         "latest_close": _display(item.get("latest_close")),
         "total_score": _display(item.get("total_score")),
         "close_change_pct": _display_percent(item.get("close_change_pct")),
+        "score_change": _display(item.get("score_change")),
         "total_score_change": _display(item.get("total_score_change")),
+        "pe_change": _display(item.get("pe_change")),
+        "pb_change": _display(item.get("pb_change")),
         "data_quality_note": str(item.get("data_quality_note", "")).replace("|", "/"),
     }
 

@@ -57,7 +57,9 @@ def main() -> None:
                 f"latest_action_at={item.get('latest_action_at') or '暂无'} "
                 f"history_count={item.get('history_count', 0)} "
                 f"latest_trade_date={item.get('latest_trade_date') or '暂无'} "
-                f"latest_close={item.get('latest_close')} total_score={item.get('total_score')} "
+                f"latest_close={item.get('latest_close')} pe={item.get('pe')} pb={item.get('pb')} "
+                f"fundamental_score={item.get('fundamental_score')} total_score={item.get('total_score')} "
+                f"score_missing_reason={item.get('score_missing_reason') or '无'} "
                 f"data_quality_note={item.get('data_quality_note') or '暂无'}"
             )
     else:
@@ -70,7 +72,7 @@ def main() -> None:
 def _next_steps(active_watch_count: int) -> list[str]:
     if active_watch_count == 0:
         return ["python -m core.jobs.export_review_template", "python -m core.jobs.import_review_decisions --file reports/review_template_xxx.csv"]
-    return ["python -m core.jobs.export_watchlist", "streamlit run web/streamlit_app.py"]
+    return ["python -m core.jobs.refresh_watchlist_scores", "python -m core.jobs.export_watchlist", "streamlit run web/streamlit_app.py"]
 
 
 if __name__ == "__main__":
