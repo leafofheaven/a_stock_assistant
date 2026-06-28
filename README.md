@@ -138,6 +138,7 @@ open scripts/mac/A股选股助手.command
 - [命令参考](docs/commands_reference.md)
 - [日常流程](docs/daily_workflow.md)
 - [选股逻辑说明](docs/selection_logic.md)
+- [Task 35-39 状态与交接说明](docs/task_35_39_handoff.md)
 - [常见问题排查](docs/troubleshooting.md)
 - [数据与备份](docs/data_and_backup.md)
 

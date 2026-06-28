@@ -87,6 +87,7 @@ find reports -type f ! -name ".gitkeep" -delete
 - 增强估值字段历史补全。
 - 增加更多数据质量可视化。
 - 优化 Streamlit 页面交互和报告阅读体验。
+- Task 35-39 的当前状态和交接说明见 [task_35_39_handoff.md](task_35_39_handoff.md)。
 - 合并后如需打版本标签，可由用户手动执行：
 
 ```bash

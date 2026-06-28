@@ -115,6 +115,8 @@ python -m core.jobs.explain_selection_logic --format markdown
 
 也可以在 Streamlit 的“选股逻辑”Tab 查看。
 
+Task 35-39 的参数设置、选股逻辑说明、实时进度、AKShare 基础信息兼容修复和检查项交接说明见 [task_35_39_handoff.md](task_35_39_handoff.md)。
+
 ## 5. 人工复核
 
 导出可编辑模板：

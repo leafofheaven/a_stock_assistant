@@ -261,6 +261,9 @@ streamlit run web/streamlit_app.py
 python -m pytest
 python scripts/check_project.py
 python scripts/check_task.py task27
+python scripts/check_task.py task39
 ```
 
 输出 `passed` 表示通过。
+
+`task39` 用于检查 Task 35-39 状态交接文档、Chrome 本地控制台流程、选股逻辑说明、实时进度说明和 AKShare 基础增强 warning 解释是否仍然存在。
