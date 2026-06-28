@@ -32,6 +32,7 @@ from core.reporting.daily_workflow_report import load_latest_daily_workflow_repo
 from core.config.env_file import masked_env_values, parse_stock_symbols, read_env_file, update_env_file
 from core.runtime.command_runner import open_project_path, run_command_streaming
 from core.runtime.progress import parse_progress_line
+from core.technical.elder import build_elder_review
 
 SELECTION_COLUMNS = [
     "rank",
@@ -407,7 +408,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     st.info(f"数据来源：{data_source_status['data_source']}。{data_source_status['message']}")
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
-    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "策略回测", "数据更新状态", "本地控制台"])
+    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
         _render_selection_tab(st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[1]:
@@ -426,10 +427,16 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     with tabs[3]:
         _render_selection_logic_tab(st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[4]:
-        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
+        _render_elder_review_tab(
+            st,
+            dashboard_data.get("selection", pd.DataFrame()),
+            dashboard_data.get("price", pd.DataFrame()),
+        )
     with tabs[5]:
-        _render_status_tab(st, dashboard_data.get("tables", {}))
+        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
     with tabs[6]:
+        _render_status_tab(st, dashboard_data.get("tables", {}))
+    with tabs[7]:
         _render_local_console_tab(st, dashboard_data.get("tables", {}))
 
 
@@ -648,6 +655,40 @@ def _render_selection_logic_tab(st: Any, selection_df: pd.DataFrame) -> None:
     for item in summary.limitations:
         st.write(f"- {item}")
     st.caption("个人研究工具，结果需自行复核。")
+
+
+def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.DataFrame) -> None:
+    st.subheader("埃尔德复核")
+    st.caption("二次技术复核层，不覆盖 total_score，不改变今日选股原始排序。")
+    review_df = build_elder_review(selection_df, price_df)
+    if review_df.empty:
+        st.info("暂无埃尔德复核结果。请先运行每日选股并确保本地 daily_price 有足够行情。")
+        return
+    display_columns = [
+        "rank",
+        "ts_code",
+        "name",
+        "industry",
+        "total_score",
+        "elder_score",
+        "action_hint",
+        "elder_reason",
+        "ema13",
+        "ema22",
+        "macd_histogram",
+        "macd_histogram_slope",
+        "force_index_2d",
+        "force_index_13d",
+        "bull_power",
+        "bear_power",
+        "close_to_ema13_pct",
+        "close_to_ema22_pct",
+    ]
+    available = [column for column in display_columns if column in review_df.columns]
+    st.dataframe(review_df[available], use_container_width=True)
+    st.write("状态分布")
+    st.dataframe(review_df["action_hint"].value_counts(dropna=False).rename_axis("action_hint").reset_index(name="count"), use_container_width=True)
+    st.caption("命令行：python -m core.jobs.run_elder_review 或 python -m core.jobs.run_elder_review --format markdown")
 
 
 def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:

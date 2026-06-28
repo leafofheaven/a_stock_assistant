@@ -129,7 +129,7 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
     )
 
     assert fake_streamlit.title_text == "A 股选股辅助"
-    assert fake_streamlit.tab_names == ["今日选股", "个股详情", "因子排名", "选股逻辑", "策略回测", "数据更新状态", "本地控制台"]
+    assert fake_streamlit.tab_names == ["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "策略回测", "数据更新状态", "本地控制台"]
     assert fake_streamlit.info_messages
 
 
