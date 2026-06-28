@@ -2,6 +2,14 @@
 
 v0.1 推荐流程已经整理到 [v0.1 日常使用手册](v0_1_handbook.md)。本页保留日常流程拆解。
 
+如果希望少敲命令，可使用 Chrome 本地控制台：
+
+```bash
+streamlit run web/streamlit_app.py
+```
+
+打开 `http://localhost:8501` 后进入“参数设置 / 本地控制台”。Mac 上也可双击 `scripts/mac/A股选股助手.command` 启动。该启动器不做完整原生 Swift App、不做菜单栏常驻、不做自动后台更新、不做 dmg、不做云同步。
+
 所有命令默认先执行：
 
 ```bash

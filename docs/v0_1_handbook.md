@@ -34,6 +34,15 @@ cp .env.example .env
 
 ## 2. 每天推荐流程
 
+如果希望用 Chrome 本地控制台操作，可以双击 Mac 启动器：
+
+```bash
+chmod +x scripts/mac/A股选股助手.command
+open scripts/mac/A股选股助手.command
+```
+
+浏览器打开 `http://localhost:8501` 后，进入“参数设置 / 本地控制台”。这里可以修改股票池、日期、批量参数，运行 doctor、一键运行、只用本地数据运行，并打开 reports 文件夹。
+
 运行前体检：
 
 ```bash
@@ -236,3 +245,13 @@ python -m core.jobs.doctor_daily_run --post-run
 ### 粘贴命令带上终端提示符
 
 只复制命令本身，不复制 `$`、`%` 或路径提示符。文件名中的 `xxx` 是占位符，要替换成真实文件名。
+
+### Mac 启动器无法打开
+
+先确认执行权限：
+
+```bash
+chmod +x scripts/mac/A股选股助手.command
+```
+
+如果 macOS 阻止打开，右键 `.command` 文件选择“打开”，或到“系统设置 > 隐私与安全性”允许本次运行。这个启动器不是完整原生 Swift App，不做菜单栏常驻，不做自动后台更新，不做 dmg，不做云同步。
