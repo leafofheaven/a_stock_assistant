@@ -49,6 +49,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task36": check_task36,
         "task37": check_task37,
         "task38": check_task38,
+        "task39": check_task39,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1728,6 +1729,72 @@ def check_task38(root: Path) -> list[str]:
     return failures
 
 
+def check_task39(root: Path) -> list[str]:
+    """Check Task 39 documentation handoff and task check coverage."""
+    required_paths = [
+        "README.md",
+        "docs/task_35_39_handoff.md",
+        "docs/v0_1_handbook.md",
+        "docs/v0_1_release_notes.md",
+        "docs/commands_reference.md",
+        "docs/selection_logic.md",
+        "scripts/check_task.py",
+    ]
+    failures = check_paths(root, required_paths)
+
+    handoff = read_source(root / "docs/task_35_39_handoff.md")
+    for phrase in [
+        "Task 35",
+        "Task 36",
+        "Task 37",
+        "Task 38",
+        "Task 39",
+        "保存参数",
+        "保存并本地重算",
+        "保存并更新数据",
+        "选股逻辑",
+        "[progress]",
+        "AKShare 基础增强字段缺失",
+        "不修改选股公式",
+        "不修改因子权重",
+        "不改变候选排序",
+    ]:
+        if phrase not in handoff:
+            failures.append(f"docs/task_35_39_handoff.md is missing {phrase}.")
+
+    combined_docs = "\n".join(
+        read_source(root / path)
+        for path in [
+            "README.md",
+            "docs/v0_1_handbook.md",
+            "docs/v0_1_release_notes.md",
+            "docs/commands_reference.md",
+            "docs/task_35_39_handoff.md",
+        ]
+    )
+    for phrase in [
+        "task_35_39_handoff.md",
+        "python scripts/check_task.py task39",
+        "Chrome",
+        "参数设置",
+        "实时进度",
+        "AKShare",
+    ]:
+        if phrase not in combined_docs:
+            failures.append(f"Task 39 docs are missing {phrase}.")
+
+    check_source = read_source(root / "scripts/check_task.py")
+    for phrase in ['"task39": check_task39', "def check_task39", '"task39"']:
+        if phrase not in check_source:
+            failures.append(f"scripts/check_task.py is missing {phrase}.")
+
+    if "total_score =" in read_source(root / "core/factors/scoring.py"):
+        pass
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1797,6 +1864,7 @@ def main(argv: list[str] | None = None) -> int:
             "task36",
             "task37",
             "task38",
+            "task39",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
