@@ -133,10 +133,12 @@ python -m core.jobs.diagnose_data_quality
 ```bash
 python -m core.jobs.diagnose_factors
 python -m core.jobs.run_daily_selection
+python -m core.jobs.explain_selection_logic
 python -m core.jobs.diagnose_backtest
 ```
 
 `run_daily_selection` 会优先使用本地真实数据；真实数据不足时会清楚说明是否回退 sample。
+`explain_selection_logic` 会显示当前 `total_score` 公式、因子权重、源码位置和候选股票的主要贡献因子。详细说明见 [selection_logic.md](selection_logic.md)。
 
 如果 `fundamental_score` 为空或偏低，先运行：
 
@@ -258,6 +260,7 @@ streamlit run web/streamlit_app.py
 - 数据状态；
 - 今日选股；
 - 因子排名；
+- 选股逻辑；
 - 回测诊断；
 - 候选复核；
 - 观察池；

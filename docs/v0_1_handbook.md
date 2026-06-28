@@ -107,6 +107,14 @@ python -m core.jobs.run_daily_workflow --doctor-before-run --skip-update --forma
 python -m core.jobs.export_selection_review --top-n 10 --format all
 ```
 
+想看选股逻辑、`total_score` 公式和每只候选的主要贡献因子：
+
+```bash
+python -m core.jobs.explain_selection_logic --format markdown
+```
+
+也可以在 Streamlit 的“选股逻辑”Tab 查看。
+
 ## 5. 人工复核
 
 导出可编辑模板：

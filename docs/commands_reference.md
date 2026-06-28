@@ -82,9 +82,12 @@ python -m core.jobs.diagnose_factors
 
 ```bash
 python -m core.jobs.run_daily_selection
+python -m core.jobs.explain_selection_logic
+python -m core.jobs.explain_selection_logic --format markdown
+python -m core.jobs.explain_selection_logic --ts-code 002475.SZ
 ```
 
-作用：基于本地数据生成候选股票摘要。重点看数据来源、是否回退 sample、候选股票数量。
+作用：`run_daily_selection` 基于本地数据生成候选股票摘要；`explain_selection_logic` 查看当前 `total_score` 公式、因子权重、候选排名原因和主要贡献因子。解释命令只读取本地数据或 sample，不改变选股结果。
 
 ## 回测
 
@@ -248,7 +251,7 @@ python -m core.jobs.clean_generated_reports --force
 streamlit run web/streamlit_app.py
 ```
 
-作用：启动本地页面。页面显示数据状态、今日选股、因子排名、回测诊断、观察池和本地备份提示。
+作用：启动本地页面。页面显示数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地备份提示。
 
 ## 测试与检查
 

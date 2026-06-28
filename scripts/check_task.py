@@ -46,6 +46,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task33": check_task33,
         "task34": check_task34,
         "task35": check_task35,
+        "task36": check_task36,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1598,6 +1599,47 @@ def check_task35(root: Path) -> list[str]:
     return failures
 
 
+def check_task36(root: Path) -> list[str]:
+    """Check Task 36 selection logic explainer."""
+    failures = check_paths(
+        root,
+        [
+            "core/explain/selection_logic.py",
+            "core/jobs/explain_selection_logic.py",
+            "docs/selection_logic.md",
+            "tests/test_selection_logic_explainer.py",
+            "tests/test_explain_selection_logic_job.py",
+        ],
+    )
+    explain_source = read_source(root / "core/explain/selection_logic.py")
+    for name in [
+        "get_selection_logic_summary",
+        "get_factor_definitions",
+        "explain_candidate",
+        "factor_contributions",
+        "formula_summary",
+    ]:
+        if name not in explain_source:
+            failures.append(f"core/explain/selection_logic.py is missing {name}.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["选股逻辑", "综合评分公式", "因子说明", "主要贡献因子", "排名原因"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing {phrase}.")
+    docs = (
+        read_source(root / "README.md")
+        + read_source(root / "docs/selection_logic.md")
+        + read_source(root / "docs/commands_reference.md")
+    )
+    for phrase in ["选股逻辑", "total_score", "explain_selection_logic"]:
+        if phrase not in docs:
+            failures.append(f"docs are missing {phrase}.")
+    if "保存并更新数据" not in streamlit_source:
+        failures.append("Task 35 simplified settings workflow must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1664,6 +1706,7 @@ def main(argv: list[str] | None = None) -> int:
             "task33",
             "task34",
             "task35",
+            "task36",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

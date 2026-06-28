@@ -10,6 +10,7 @@
 - AKShare + 东方财富 curl fallback 小范围真实数据更新。
 - DuckDB 本地存储、真实数据诊断和批量更新诊断。
 - 股票池过滤、基础因子计算、综合评分和每日选股。
+- 选股逻辑说明、因子权重、候选排名原因和主要贡献因子解释。
 - 回测诊断、工作流报告和 Streamlit 页面。
 - 候选股票复核报告、人工复核模板导出和复核结果导入。
 - 观察池管理、观察池跟踪、观察池变化报告、状态调整与历史记录。
@@ -47,6 +48,7 @@ python -m core.jobs.diagnose_real_data
 python -m core.jobs.diagnose_update_batch
 python -m core.jobs.diagnose_data_quality
 python -m core.jobs.diagnose_factors
+python -m core.jobs.explain_selection_logic
 python -m core.jobs.run_daily_selection
 python -m core.jobs.diagnose_backtest
 python -m core.jobs.run_real_workflow --backup-before-run
@@ -95,6 +97,7 @@ python -m core.jobs.doctor_daily_run --post-run
 - 真实回测结果校验：`python -m core.jobs.diagnose_backtest`
 - 真实股票样本扩容与批量更新：`REAL_UNIVERSE_PRESET=small`，`python -m core.jobs.diagnose_update_batch`
 - 基础信息与 PE/PB 估值字段补全：`ENABLE_REAL_BASIC_ENRICHMENT=true`，`ENABLE_REAL_VALUATION_ENRICHMENT=true`，`python -m core.jobs.diagnose_data_quality`
+- 选股逻辑说明：`python -m core.jobs.explain_selection_logic`，`python -m core.jobs.explain_selection_logic --format markdown`，详见 `docs/selection_logic.md`
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
@@ -116,7 +119,7 @@ python -m core.jobs.doctor_daily_run --post-run
 streamlit run web/streamlit_app.py
 ```
 
-页面用于查看数据状态、今日选股、因子排名、回测诊断、观察池和本地状态提示。“参数设置 / 本地控制台”提供简化设置向导：切换自定义股票池或预设股票池，修改开始/结束日期，查看“参数日期 vs 数据库日期”，并使用“保存参数”“保存并本地重算”“保存并更新数据”。修改日期后数据库日期不会立刻变化，需要点击“保存并更新数据”才会联网拉取新行情。
+页面用于查看数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地状态提示。“选股逻辑”Tab 会显示 `total_score` 公式、因子权重、候选排名原因和主要贡献因子。“参数设置 / 本地控制台”提供简化设置向导：切换自定义股票池或预设股票池，修改开始/结束日期，查看“参数日期 vs 数据库日期”，并使用“保存参数”“保存并本地重算”“保存并更新数据”。修改日期后数据库日期不会立刻变化，需要点击“保存并更新数据”才会联网拉取新行情。
 
 Mac 双击启动器：
 
@@ -134,6 +137,7 @@ open scripts/mac/A股选股助手.command
 - [v0.1 发布说明](docs/v0_1_release_notes.md)
 - [命令参考](docs/commands_reference.md)
 - [日常流程](docs/daily_workflow.md)
+- [选股逻辑说明](docs/selection_logic.md)
 - [常见问题排查](docs/troubleshooting.md)
 - [数据与备份](docs/data_and_backup.md)
 

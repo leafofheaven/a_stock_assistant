@@ -14,6 +14,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.sample_data import get_sample_dashboard_data
+from core.explain.selection_logic import (
+    explain_candidates,
+    explanations_to_dataframe,
+    get_selection_logic_summary,
+)
 from core.jobs.diagnose_local_state import diagnose_local_state
 from core.reporting.selection_review_report import (
     REVIEW_CHECKLIST,
@@ -401,7 +406,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     st.info(f"数据来源：{data_source_status['data_source']}。{data_source_status['message']}")
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
-    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态", "本地控制台"])
+    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
         _render_selection_tab(st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[1]:
@@ -418,10 +423,12 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
             dashboard_data.get("daily_basic", pd.DataFrame()),
         )
     with tabs[3]:
-        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
+        _render_selection_logic_tab(st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[4]:
-        _render_status_tab(st, dashboard_data.get("tables", {}))
+        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
     with tabs[5]:
+        _render_status_tab(st, dashboard_data.get("tables", {}))
+    with tabs[6]:
         _render_local_console_tab(st, dashboard_data.get("tables", {}))
 
 
@@ -592,6 +599,54 @@ def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame, daily_basic: pd
     factor_col = st.selectbox("因子", [column for column in FACTOR_SCORE_COLUMNS if column in factor_df.columns])
     ranking = filter_factor_ranking(factor_df, trade_date, industry, factor_col)
     st.dataframe(ranking, use_container_width=True)
+
+
+def _render_selection_logic_tab(st: Any, selection_df: pd.DataFrame) -> None:
+    st.subheader("选股逻辑")
+    summary = get_selection_logic_summary()
+    st.write("综合评分公式")
+    st.code(summary.formula_summary)
+    st.write("因子说明")
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "因子": item.display_name,
+                    "字段": item.factor_name,
+                    "权重": item.weight,
+                    "说明": item.meaning,
+                    "主要输入": item.input_fields,
+                }
+                for item in summary.factor_definitions
+            ]
+        ),
+        use_container_width=True,
+    )
+    st.write("流程说明")
+    for step in summary.workflow_steps:
+        st.write(f"- {step}")
+    st.write("主要贡献因子 / 排名原因")
+    explanations = explain_candidates(selection_df, top_n=10)
+    if explanations:
+        st.dataframe(explanations_to_dataframe(explanations), use_container_width=True)
+        for item in explanations[:5]:
+            with st.expander(f"{item.rank or '-'} {item.ts_code} {item.name or ''}"):
+                st.write(
+                    {
+                        "total_score": item.total_score,
+                        "factor_contributions": item.factor_contributions,
+                        "top_reasons": item.top_reasons,
+                        "weak_points": item.weak_points,
+                        "data_quality_note": item.data_quality_note,
+                        "logic_version": item.logic_version,
+                    }
+                )
+    else:
+        st.info("暂无候选股票解释。请先运行每日选股或导出候选复核报告。")
+    st.write("当前限制")
+    for item in summary.limitations:
+        st.write(f"- {item}")
+    st.caption("个人研究工具，结果需自行复核。")
 
 
 def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:

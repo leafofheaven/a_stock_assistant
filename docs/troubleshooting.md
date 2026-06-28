@@ -279,6 +279,17 @@ python -m core.jobs.track_watchlist
 
 `diagnose_watchlist` 中的 `score_missing_reason` 会说明是缺少行情、缺少 `daily_basic`、交易日不足，还是当前股票不在最新可交易股票池或本地评分结果中。
 
+## 想知道某只股票为什么入选
+
+检查命令：
+
+```bash
+python -m core.jobs.explain_selection_logic
+python -m core.jobs.explain_selection_logic --ts-code 002475.SZ
+```
+
+也可以打开 Streamlit 的“选股逻辑”Tab。这里会显示 `total_score` 公式、因子权重、主要贡献因子和弱项。解释层只读取当前评分结果，不改变选股排序。
+
 ## reports/ 或 backups/ 出现在 git status
 
 现象：`git status` 显示运行生成文件。
