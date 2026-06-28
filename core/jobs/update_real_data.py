@@ -13,6 +13,7 @@ from core.data_sources.base import DataSourceError, StockDataSource
 from core.data_sources.basic_info_presets import enrich_with_basic_info_presets
 from core.data_sources.provider import select_data_provider
 from core.data_sources.universe_presets import get_universe_preset, to_akshare_symbol
+from core.runtime.progress import ProgressCallback, emit_progress, print_progress
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 
@@ -38,6 +39,7 @@ def update_real_data(
     store: DuckDBStore | None = None,
     client: StockDataSource | None = None,
     fallback_client: StockDataSource | None = None,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Fetch a small configured provider sample and upsert it into DuckDB.
 
@@ -53,6 +55,12 @@ def update_real_data(
     sample_symbols = _sample_symbols_for_provider(resolved_settings, selection.provider_name)
 
     if selection.provider_name == "sample":
+        emit_progress(
+            progress,
+            step="update_real_data",
+            skipped=len(sample_symbols),
+            message="DATA_PROVIDER=sample，跳过真实数据更新。",
+        )
         return {
             "status": "skipped",
             "message": "DATA_PROVIDER=sample，跳过真实数据更新；sample smoke test 仍可运行。",
@@ -69,6 +77,12 @@ def update_real_data(
 
     if selection.provider_name == "tushare" and not resolved_settings.tushare_token and client is None:
         if selection.fallback is None:
+            emit_progress(
+                progress,
+                step="update_real_data",
+                skipped=len(sample_symbols),
+                message="TUSHARE_TOKEN 为空，跳过真实数据更新。",
+            )
             return {
                 "status": "skipped",
                 "message": "TUSHARE_TOKEN 为空，跳过真实 Tushare 数据更新；sample smoke test 仍可运行。",
@@ -90,6 +104,7 @@ def update_real_data(
             start_date=start_date,
             end_date=end_date,
             message_prefix="TUSHARE_TOKEN 为空，已尝试 AKShare fallback。",
+            progress=progress,
         )
 
     result = _run_provider_update(
@@ -99,6 +114,7 @@ def update_real_data(
         settings=resolved_settings,
         start_date=start_date,
         end_date=end_date,
+        progress=progress,
     )
     if result["status"] == "failed" and selection.fallback is not None:
         return _run_provider_update(
@@ -109,6 +125,7 @@ def update_real_data(
             start_date=start_date,
             end_date=end_date,
             message_prefix=f"{result['message']} 已尝试 AKShare fallback。",
+            progress=progress,
         )
     return result
 
@@ -121,6 +138,7 @@ def _run_provider_update(
     start_date: str,
     end_date: str,
     message_prefix: str = "",
+    progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Fetch and upsert one provider's configured sample data."""
     if client is None:
@@ -140,10 +158,17 @@ def _run_provider_update(
 
     sample_symbols = _sample_symbols_for_provider(settings, provider_name)
     resolved_store = store or DuckDBStore(settings.duckdb_path)
+    emit_progress(
+        progress,
+        step="update_real_data",
+        current=provider_name,
+        message=f"开始更新 {len(sample_symbols)} 只样本股票，日期 {start_date}-{end_date}。",
+    )
 
     try:
         resolved_store.initialize()
         before_rows = _table_row_counts(resolved_store)
+        emit_progress(progress, step="stock_basic", current="stock_basic", message="读取股票基础信息。")
         stock_basic = _filter_stock_basic(client.get_stock_basic(), sample_symbols)
         if provider_name == "akshare":
             stock_basic = _merge_existing_stock_basic(stock_basic, resolved_store)
@@ -163,6 +188,7 @@ def _run_provider_update(
                 )
         if provider_name == "akshare" and getattr(settings, "enable_real_basic_enrichment", True):
             stock_basic = _apply_local_basic_info_presets(client, stock_basic)
+        emit_progress(progress, step="trade_calendar", current="trade_calendar", message="读取交易日历。")
         frames = {
             "stock_basic": stock_basic,
             "trade_calendar": _filter_date_range(
@@ -178,6 +204,8 @@ def _run_provider_update(
                 end_date,
                 sample_symbols,
                 settings,
+                table_name="daily_price",
+                progress=progress,
             ),
             "daily_basic": _fetch_symbol_table_in_batches(
                 client.get_daily_basic,
@@ -186,6 +214,8 @@ def _run_provider_update(
                 end_date,
                 sample_symbols,
                 settings,
+                table_name="daily_basic",
+                progress=progress,
             ),
             "adj_factor": _fetch_symbol_table_in_batches(
                 client.get_adj_factor,
@@ -194,6 +224,8 @@ def _run_provider_update(
                 end_date,
                 sample_symbols,
                 settings,
+                table_name="adj_factor",
+                progress=progress,
             ),
         }
         normalized_frames = {
@@ -205,6 +237,7 @@ def _run_provider_update(
             and getattr(settings, "enable_real_valuation_enrichment", True)
             and hasattr(client, "enrich_daily_basic_valuation")
         ):
+            emit_progress(progress, step="valuation_enrichment", current="daily_basic", message="尝试补全估值字段。")
             normalized_frames["daily_basic"] = _apply_valuation_enrichment(
                 client,
                 normalized_frames["daily_basic"],
@@ -234,10 +267,15 @@ def _run_provider_update(
                 **enrichment_summary,
                 "next_steps": ["检查 AKShare 网络、版本或样本股票配置后重试。"],
             }
-        written_rows = {
-            table_name: resolved_store.upsert_dataframe(table_name, frame)
-            for table_name, frame in normalized_frames.items()
-        }
+        written_rows = {}
+        for table_name, frame in normalized_frames.items():
+            emit_progress(
+                progress,
+                step="write_table",
+                current=table_name,
+                message=f"写入 {table_name}，待写入行数 {len(frame)}。",
+            )
+            written_rows[table_name] = resolved_store.upsert_dataframe(table_name, frame)
         after_rows = _table_row_counts(resolved_store)
     except (DataSourceError, DuckDBStoreError) as exc:
         return {
@@ -257,6 +295,15 @@ def _run_provider_update(
     batch_summary = _batch_summary(provider_name, sample_symbols, normalized_frames, client)
     enrichment_summary = _enrichment_summary(sample_symbols, normalized_frames, client, settings)
     status = _status_from_batch_summary(batch_summary)
+    emit_progress(
+        progress,
+        step="update_real_data",
+        current=provider_name,
+        success=batch_summary.get("success_symbols", 0),
+        failed=batch_summary.get("failed_symbols", 0),
+        skipped=len(empty_tables),
+        message=f"真实数据更新完成，状态 {status}。",
+    )
     return {
         "status": status,
         "message": f"{message_prefix} 真实 {provider_name} 数据更新完成。".strip(),
@@ -280,7 +327,7 @@ def _run_provider_update(
 
 def main() -> None:
     """Run the minimal real data update and print a concise summary."""
-    result = update_real_data()
+    result = update_real_data(progress=print_progress)
     print("真实数据更新摘要")
     print(f"- 状态: {result['status']}")
     print(f"- 说明: {result['message']}")
@@ -492,6 +539,8 @@ def _fetch_symbol_table_in_batches(
     end_date: str,
     symbols: list[str],
     settings: Settings,
+    table_name: str,
+    progress: ProgressCallback | None = None,
 ) -> pd.DataFrame:
     """Fetch a symbol table in configured batches with simple retries."""
     if not symbols:
@@ -502,7 +551,19 @@ def _fetch_symbol_table_in_batches(
     max_retries = max(1, int(getattr(settings, "real_max_retries", 1) or 1))
     sleep_seconds = max(0.0, float(getattr(settings, "real_batch_sleep_seconds", 0.0) or 0.0))
     batches = list(_chunks(symbols, batch_size))
+    success_symbols: set[str] = set()
+    failed_symbols: set[str] = set()
     for batch_index, batch in enumerate(batches):
+        current = ",".join(_to_ts_code(symbol) for symbol in batch)
+        emit_progress(
+            progress,
+            step=table_name,
+            current=current,
+            success=len(success_symbols),
+            failed=len(failed_symbols),
+            skipped=0,
+            message=f"开始处理第 {batch_index + 1}/{len(batches)} 批。",
+        )
         frame = pd.DataFrame()
         for attempt in range(max_retries):
             try:
@@ -514,6 +575,19 @@ def _fetch_symbol_table_in_batches(
                     frame = pd.DataFrame()
         if not frame.empty:
             frames.append(frame)
+            if "ts_code" in frame.columns:
+                success_symbols.update(frame["ts_code"].dropna().astype(str).unique())
+        else:
+            failed_symbols.update(_to_ts_code(symbol) for symbol in batch)
+        emit_progress(
+            progress,
+            step=table_name,
+            current=current,
+            success=len(success_symbols),
+            failed=len(failed_symbols),
+            skipped=0,
+            message=f"完成第 {batch_index + 1}/{len(batches)} 批，返回行数 {len(frame)}。",
+        )
         if sleep_seconds and batch_index < len(batches) - 1:
             time.sleep(sleep_seconds)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()

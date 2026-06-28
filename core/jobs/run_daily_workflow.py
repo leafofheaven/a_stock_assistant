@@ -25,6 +25,7 @@ from core.reporting.daily_workflow_report import (
     build_daily_workflow_report,
     save_daily_workflow_report,
 )
+from core.runtime.progress import ProgressCallback, emit_progress, print_progress
 from core.storage.duckdb_store import DuckDBStore
 
 SUCCESS_STATUSES = {"success", "skipped", "dry_run"}
@@ -45,6 +46,7 @@ def run_daily_workflow(
     settings: Settings | None = None,
     store: DuckDBStore | None = None,
     step_overrides: dict[str, Callable[[], dict[str, Any]]] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run the daily local workflow and export a summary report."""
     resolved_settings = settings or get_settings()
@@ -52,14 +54,16 @@ def run_daily_workflow(
     overrides = step_overrides or {}
     started_at = datetime.now()
     steps: dict[str, dict[str, Any]] = {}
+    emit_progress(progress, step="run_daily_workflow", current="start", message="开始一键日常工作流。")
 
     if doctor_before_run:
-        steps["doctor_before_run"] = _run_step(
+        steps["doctor_before_run"] = _run_progress_step(
             "doctor_before_run",
             overrides.get(
                 "doctor_before_run",
                 lambda: doctor_daily_run(pre_run=True, settings=resolved_settings, store=resolved_store),
             ),
+            progress=progress,
         )
         if stop_on_doctor_failure and steps["doctor_before_run"]["status"] == "failed":
             finished_at = datetime.now()
@@ -72,14 +76,16 @@ def run_daily_workflow(
                 report_dir=report_dir,
                 report_format=report_format,
                 quiet=quiet,
+                progress=progress,
             )
     else:
         steps["doctor_before_run"] = _skipped("--doctor-before-run not enabled.")
 
     if backup_before_run:
-        steps["backup_local_data"] = _run_step(
+        steps["backup_local_data"] = _run_progress_step(
             "backup_local_data",
             overrides.get("backup_local_data", lambda: backup_local_data(label="before_daily_workflow", settings=resolved_settings)),
+            progress=progress,
         )
     else:
         steps["backup_local_data"] = _skipped("--backup-before-run not enabled.")
@@ -87,24 +93,28 @@ def run_daily_workflow(
     if skip_update:
         steps["update_real_data"] = _skipped("--skip-update enabled.")
     else:
-        steps["update_real_data"] = _run_step(
+        steps["update_real_data"] = _run_progress_step(
             "update_real_data",
-            overrides.get("update_real_data", lambda: update_real_data(settings=resolved_settings, store=resolved_store)),
+            overrides.get("update_real_data", lambda: update_real_data(settings=resolved_settings, store=resolved_store, progress=progress)),
+            progress=progress,
         )
 
-    steps["diagnose_data_quality"] = _run_step(
+    steps["diagnose_data_quality"] = _run_progress_step(
         "diagnose_data_quality",
         overrides.get("diagnose_data_quality", lambda: diagnose_data_quality(settings=resolved_settings, store=resolved_store)),
+        progress=progress,
     )
-    steps["diagnose_factors"] = _run_step(
+    steps["diagnose_factors"] = _run_progress_step(
         "diagnose_factors",
         overrides.get("diagnose_factors", lambda: diagnose_factors(settings=resolved_settings, store=resolved_store)),
+        progress=progress,
     )
-    steps["run_daily_selection"] = _run_step(
+    steps["run_daily_selection"] = _run_progress_step(
         "run_daily_selection",
         overrides.get("run_daily_selection", lambda: run_daily_selection(settings=resolved_settings, store=resolved_store)),
+        progress=progress,
     )
-    steps["export_selection_review"] = _run_step(
+    steps["export_selection_review"] = _run_progress_step(
         "export_selection_review",
         overrides.get(
             "export_selection_review",
@@ -117,19 +127,22 @@ def run_daily_workflow(
                 store=resolved_store,
             ),
         ),
+        progress=progress,
     )
-    steps["refresh_watchlist_scores"] = _run_step(
+    steps["refresh_watchlist_scores"] = _run_progress_step(
         "refresh_watchlist_scores",
         overrides.get(
             "refresh_watchlist_scores",
             lambda: refresh_watchlist_scores(quiet=True, settings=resolved_settings, store=resolved_store),
         ),
+        progress=progress,
     )
-    steps["diagnose_watchlist"] = _run_step(
+    steps["diagnose_watchlist"] = _run_progress_step(
         "diagnose_watchlist",
         overrides.get("diagnose_watchlist", lambda: diagnose_watchlist(settings=resolved_settings, store=resolved_store)),
+        progress=progress,
     )
-    steps["export_watchlist"] = _run_step(
+    steps["export_watchlist"] = _run_progress_step(
         "export_watchlist",
         overrides.get(
             "export_watchlist",
@@ -141,13 +154,15 @@ def run_daily_workflow(
                 store=resolved_store,
             ),
         ),
+        progress=progress,
     )
     if watchlist_tracking:
-        steps["track_watchlist"] = _run_step(
+        steps["track_watchlist"] = _run_progress_step(
             "track_watchlist",
             overrides.get("track_watchlist", lambda: track_watchlist(quiet=True, settings=resolved_settings, store=resolved_store)),
+            progress=progress,
         )
-        steps["export_watchlist_tracking"] = _run_step(
+        steps["export_watchlist_tracking"] = _run_progress_step(
             "export_watchlist_tracking",
             overrides.get(
                 "export_watchlist_tracking",
@@ -159,18 +174,20 @@ def run_daily_workflow(
                     store=resolved_store,
                 ),
             ),
+            progress=progress,
         )
     else:
         steps["track_watchlist"] = _skipped("--no-watchlist-tracking enabled.")
         steps["export_watchlist_tracking"] = _skipped("--no-watchlist-tracking enabled.")
 
     if doctor_after_run:
-        steps["doctor_after_run"] = _run_step(
+        steps["doctor_after_run"] = _run_progress_step(
             "doctor_after_run",
             overrides.get(
                 "doctor_after_run",
                 lambda: doctor_daily_run(post_run=True, settings=resolved_settings, store=resolved_store),
             ),
+            progress=progress,
         )
     else:
         steps["doctor_after_run"] = _skipped("--doctor-after-run not enabled.")
@@ -185,6 +202,7 @@ def run_daily_workflow(
         report_dir=report_dir,
         report_format=report_format,
         quiet=quiet,
+        progress=progress,
     )
 
 
@@ -198,6 +216,7 @@ def _finish_workflow(
     report_dir: Path | str,
     report_format: str,
     quiet: bool,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Build, save, and optionally print the daily workflow report."""
     overall_status = _overall_status(steps)
@@ -211,6 +230,15 @@ def _finish_workflow(
         top_n=top_n,
     )
     daily_files = save_daily_workflow_report(report, output_dir=report_dir, report_format=report_format)
+    emit_progress(
+        progress,
+        step="run_daily_workflow",
+        current="finish",
+        success=sum(1 for step in steps.values() if step.get("status") in SUCCESS_STATUSES),
+        failed=sum(1 for step in steps.values() if step.get("status") == "failed"),
+        skipped=sum(1 for step in steps.values() if step.get("status") == "skipped"),
+        message=f"工作流完成，状态 {overall_status}，报告 {', '.join(daily_files.values())}。",
+    )
     result = {
         "status": overall_status,
         "report": report,
@@ -247,7 +275,30 @@ def main(argv: list[str] | None = None) -> None:
         doctor_after_run=args.doctor_after_run,
         stop_on_doctor_failure=args.stop_on_doctor_failure,
         quiet=args.quiet,
+        progress=print_progress,
     )
+
+
+def _run_progress_step(
+    name: str,
+    func: Callable[[], dict[str, Any]],
+    *,
+    progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """Run one workflow step and emit start/finish progress lines."""
+    emit_progress(progress, step=name, current=name, message=f"开始执行 {name}。")
+    result = _run_step(name, func)
+    status = result.get("status", "failed")
+    emit_progress(
+        progress,
+        step=name,
+        current=name,
+        success=1 if status in SUCCESS_STATUSES else 0,
+        failed=1 if status == "failed" else 0,
+        skipped=1 if status == "skipped" else 0,
+        message=f"完成 {name}，状态 {status}。",
+    )
+    return result
 
 
 def _run_step(name: str, func: Callable[[], dict[str, Any]]) -> dict[str, Any]:

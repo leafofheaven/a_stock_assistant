@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -59,6 +59,9 @@ class CommandResult:
         }
 
 
+StreamLineCallback = Callable[[str], None]
+
+
 def run_allowed_command(
     command_key: str,
     args: list[str] | None = None,
@@ -94,6 +97,55 @@ def run_allowed_command(
         returncode=completed.returncode,
         stdout=completed.stdout,
         stderr=completed.stderr,
+    )
+
+
+def run_command_streaming(
+    command_key: str,
+    args: list[str] | None = None,
+    *,
+    timeout_seconds: int = 600,
+    cwd: Path | str = PROJECT_ROOT,
+    on_line: StreamLineCallback | None = None,
+) -> CommandResult:
+    """Run a whitelisted command and stream merged stdout/stderr line by line."""
+    if command_key not in ALLOWED_COMMANDS:
+        raise ValueError(f"Command is not allowed: {command_key}")
+    safe_args = _safe_args(args or [])
+    command = [*ALLOWED_COMMANDS[command_key], *safe_args]
+    output_lines: list[str] = []
+    process = subprocess.Popen(
+        command,
+        cwd=Path(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    timed_out = False
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            clean = line.rstrip("\n")
+            output_lines.append(clean)
+            if on_line is not None:
+                on_line(clean)
+        returncode = process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        returncode = 124
+        timeout_line = f"命令超时：{timeout_seconds} 秒。"
+        output_lines.append(timeout_line)
+        if on_line is not None:
+            on_line(timeout_line)
+    return CommandResult(
+        command_key=command_key,
+        args=safe_args,
+        returncode=returncode,
+        stdout="\n".join(output_lines),
+        stderr="",
+        timed_out=timed_out,
     )
 
 
