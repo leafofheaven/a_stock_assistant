@@ -478,17 +478,57 @@ def _data_quality_note(
         notes.append("当前无可用综合评分")
     stock_info = stock_info or {}
     latest_basic = latest_basic or {}
+    pe_missing = _optional_float(latest_basic.get("pe")) is None
+    pb_missing = _optional_float(latest_basic.get("pb")) is None
+    notes = _filter_existing_quality_notes(notes, valuation_missing=pe_missing or pb_missing, score_missing=total_score is None)
     if not _clean_text(stock_info.get("industry")):
         notes.append("industry 缺失")
     if not _clean_text(stock_info.get("market")):
         notes.append("market 缺失")
     if not _clean_text(stock_info.get("list_date")):
         notes.append("list_date 缺失")
-    if _optional_float(latest_basic.get("pe")) is None:
+    if pe_missing:
         notes.append("pe 缺失")
-    if _optional_float(latest_basic.get("pb")) is None:
+    if pb_missing:
         notes.append("pb 缺失")
     return "；".join(dict.fromkeys(notes))
+
+
+def _filter_existing_quality_notes(
+    notes: list[str],
+    *,
+    valuation_missing: bool,
+    score_missing: bool,
+) -> list[str]:
+    """Drop stale valuation/fundamental missing prompts that no longer apply."""
+    filtered: list[str] = []
+    valuation_phrases = [
+        "pe 全部缺失",
+        "pb 全部缺失",
+        "部分股票 pe 缺失",
+        "部分股票 pb 缺失",
+        "pe/pb 可能为空",
+        "pe/pb 缺失",
+        "pe 缺失",
+        "pb 缺失",
+        "估值相关复核信息不完整",
+    ]
+    score_phrases = [
+        "fundamental_score 可能为空",
+        "fundamental_score 为空原因",
+        "基本面分项可能偏低或为空",
+        "pe_score 与 fundamental_score 可能为空",
+    ]
+    for note in notes:
+        text = _clean_text(note)
+        if not text:
+            continue
+        if not valuation_missing and any(phrase in text for phrase in valuation_phrases):
+            continue
+        if not score_missing and any(phrase in text for phrase in score_phrases):
+            continue
+        filtered.append(text)
+    return filtered
 
 
 def _clean_text(value: Any) -> str:

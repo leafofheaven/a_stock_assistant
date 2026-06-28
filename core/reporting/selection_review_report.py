@@ -277,9 +277,9 @@ def _candidate_record(
         "market": _is_missing(row.get("market")),
         "list_date": _is_missing(row.get("list_date")),
     }
-    data_quality_note = _candidate_quality_note(missing, data_quality_notes)
     factor_scores = {column: _optional_float(row.get(column)) for column in SCORE_COLUMNS}
     raw_factors = {column: _optional_float(row.get(column)) for column in RAW_FACTOR_COLUMNS}
+    data_quality_note = _candidate_quality_note(missing, data_quality_notes, factor_scores)
     return {
         "ts_code": ts_code,
         "name": row.get("name"),
@@ -327,8 +327,18 @@ def _selection_reason(row: dict[str, Any], missing: dict[str, bool]) -> str:
     return "；".join(dict.fromkeys(reasons))
 
 
-def _candidate_quality_note(missing: dict[str, bool], notes: list[str]) -> str:
-    values = list(notes)
+def _candidate_quality_note(
+    missing: dict[str, bool],
+    notes: list[str],
+    factor_scores: dict[str, float | None],
+) -> str:
+    valuation_missing = bool(missing.get("pe") or missing.get("pb"))
+    fundamental_missing = _is_missing(factor_scores.get("fundamental_score"))
+    values = [
+        note
+        for note in notes
+        if _keep_global_quality_note(note, valuation_missing, fundamental_missing)
+    ]
     if missing.get("pe") or missing.get("pb"):
         values.append("pe/pb 缺失，估值相关结论需人工补充核查。")
     if missing.get("industry"):
@@ -338,6 +348,33 @@ def _candidate_quality_note(missing: dict[str, bool], notes: list[str]) -> str:
     if missing.get("list_date"):
         values.append("list_date 缺失，上市时长需结合行情历史判断。")
     return "；".join(dict.fromkeys(str(value) for value in values if value))
+
+
+def _keep_global_quality_note(note: Any, valuation_missing: bool, fundamental_missing: bool) -> bool:
+    """Keep global notes only when they still apply to the current candidate."""
+    text = str(note or "").strip()
+    if not text:
+        return False
+    valuation_phrases = [
+        "pe 全部缺失",
+        "pb 全部缺失",
+        "部分股票 pe 缺失",
+        "部分股票 pb 缺失",
+        "pe/pb 可能为空",
+        "pe/pb 缺失",
+        "估值相关复核信息不完整",
+    ]
+    fundamental_phrases = [
+        "fundamental_score 可能为空",
+        "fundamental_score 为空原因",
+        "基本面分项可能偏低或为空",
+        "pe_score 与 fundamental_score 可能为空",
+    ]
+    if not valuation_missing and any(phrase in text for phrase in valuation_phrases):
+        return False
+    if not fundamental_missing and any(phrase in text for phrase in fundamental_phrases):
+        return False
+    return True
 
 
 def _candidate_markdown(candidate: dict[str, Any]) -> list[str]:

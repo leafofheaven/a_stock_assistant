@@ -273,7 +273,18 @@ def test_selection_review_and_watchlist_reports_include_pe_pb(tmp_path: Path, mo
             "candidate_count": 1,
         },
     )
-    monkeypatch.setattr(export_module, "diagnose_factors", lambda settings, store: {"factor_scores_df": factor_scores, "data_quality_notes": []})
+    monkeypatch.setattr(
+        export_module,
+        "diagnose_factors",
+        lambda settings, store: {
+            "factor_scores_df": factor_scores,
+            "data_quality_notes": [
+                "部分股票 pe 缺失，缺失股票的 pe_score 与 fundamental_score 可能为空。",
+                "部分股票 pb 缺失，缺失股票的估值相关复核信息不完整。",
+                "AKShare fallback 的 adj_factor 当前简化为 1.0。",
+            ],
+        },
+    )
 
     review = export_module.export_selection_review(
         top_n=1,
@@ -297,9 +308,50 @@ def test_selection_review_and_watchlist_reports_include_pe_pb(tmp_path: Path, mo
     assert review_payload["candidates"][0]["pe"] == 6.8
     assert review_payload["candidates"][0]["pb"] == 0.68
     assert "pe/pb 缺失" not in review_payload["candidates"][0]["data_quality_note"]
+    assert "部分股票 pe 缺失" not in review_payload["candidates"][0]["data_quality_note"]
+    assert "部分股票 pb 缺失" not in review_payload["candidates"][0]["data_quality_note"]
+    assert "fundamental_score 可能为空" not in review_payload["candidates"][0]["data_quality_note"]
+    assert "基本面数据缺失" not in review_payload["candidates"][0]["selection_reason"]
+    assert "adj_factor 当前简化为 1.0" in review_payload["candidates"][0]["data_quality_note"]
     assert watch_payload["watchlist"][0]["pe"] == 6.8
     assert watch_payload["watchlist"][0]["pb"] == 0.68
     assert "pe 缺失" not in watch_payload["watchlist"][0]["data_quality_note"]
+    assert "pb 缺失" not in watch_payload["watchlist"][0]["data_quality_note"]
+
+
+def test_selection_review_keeps_missing_pe_pb_prompt_for_missing_candidate() -> None:
+    """A candidate missing PE/PB should still get candidate-level valuation prompts."""
+    selection = pd.DataFrame(
+        {
+            "trade_date": ["20240104"],
+            "rank": [1],
+            "ts_code": ["000001.SZ"],
+            "name": ["平安银行"],
+            "industry": ["银行"],
+            "market": ["深交所"],
+            "list_date": ["19910403"],
+            "total_score": [88.0],
+            "trend_score": [80.0],
+            "momentum_score": [80.0],
+            "liquidity_score": [80.0],
+            "volatility_score": [80.0],
+            "fundamental_score": [None],
+        }
+    )
+    report = export_module.build_selection_review_report(
+        metadata={"generated_at": "2026-06-28", "data_provider": "akshare", "duckdb_path": "temporary duckdb"},
+        selection_summary={"is_real_data": True, "fallback_to_sample": False, "latest_price_date": "20240104", "stock_pool_count": 1, "scored_stock_count": 1, "candidate_count": 1},
+        selection_df=selection,
+        factor_df=selection,
+        price_df=pd.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20240104"], "close": [10.2]}),
+        daily_basic_df=pd.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20240104"], "pe": [None], "pb": [None]}),
+        data_quality_notes=["部分股票 pe 缺失，缺失股票的 pe_score 与 fundamental_score 可能为空。"],
+        top_n=1,
+    )
+
+    candidate = report["candidates"][0]
+    assert "pe/pb 缺失" in candidate["data_quality_note"]
+    assert "基本面数据缺失" in candidate["selection_reason"]
 
 
 def _seed_factor_ready_store(store: DuckDBStore) -> None:
@@ -337,6 +389,17 @@ def _seed_report_store(store: DuckDBStore) -> None:
     store.upsert_dataframe("daily_basic", pd.DataFrame([{"ts_code": "000001.SZ", "trade_date": "20240104", "turnover_rate": 1.0, "volume_ratio": 1.2, "pe": 6.8, "pb": 0.68, "ps": None, "total_mv": 1000.0, "circ_mv": 900.0}]))
     store.upsert_dataframe("factor_scores", pd.DataFrame([{"ts_code": "000001.SZ", "trade_date": "20240104", "trend_score": 80.0, "momentum_score": 80.0, "liquidity_score": 80.0, "volatility_score": 80.0, "fundamental_score": 70.0, "total_score": 88.0}]))
     import_review_decisions(
-        pd.DataFrame({"ts_code": ["000001.SZ"], "name": ["平安银行"], "selection_date": ["20240104"], "decision": ["watch"], "reason": ["观察理由"], "notes": [""], "reviewer": ["me"]}),
+        pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "name": ["平安银行"],
+                "selection_date": ["20240104"],
+                "decision": ["watch"],
+                "reason": ["观察理由"],
+                "notes": [""],
+                "reviewer": ["me"],
+                "data_quality_note": ["部分股票 pe 缺失，缺失股票的 pe_score 与 fundamental_score 可能为空。；部分股票 pb 缺失，缺失股票的估值相关复核信息不完整。"],
+            }
+        ),
         store=store,
     )
