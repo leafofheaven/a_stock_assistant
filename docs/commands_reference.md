@@ -35,6 +35,8 @@ python -m core.jobs.diagnose_data_quality
 
 常用参数：真实数据范围由 `.env` 中 `REAL_DATA_START_DATE`、`REAL_DATA_END_DATE`、`AKSHARE_SAMPLE_SYMBOLS` 或 `REAL_UNIVERSE_PRESET` 控制。
 
+`update_real_data` 会输出 `[progress]` 进度行，显示当前阶段、当前股票、成功/失败/跳过数量。AKShare 基础信息增强字段缺失时，会使用基础字段或本地 preset 兜底，不影响主行情写入。
+
 ## 基础信息与估值字段
 
 命令：
@@ -169,6 +171,8 @@ python -m core.jobs.doctor_daily_run --post-run
 
 日报中的 PE/PB 质量优先看最新交易日、当前候选和当前观察池口径。全历史完整率低不一定表示当前候选缺估值。
 
+命令行会逐步输出 `[progress]` 行。Streamlit 本地控制台会把这些行解析成当前步骤、当前子任务、成功/失败/跳过数量、实时日志和最终报告路径。
+
 ## 日常体检与安全修复
 
 命令：
@@ -197,6 +201,8 @@ streamlit run web/streamlit_app.py
 - 保存并本地重算：运行 `run_daily_workflow --doctor-before-run --skip-update --format all`，只用本地已有数据；
 - 保存并更新数据：运行 `run_daily_workflow --doctor-before-run --backup-before-run --format all`，会联网更新真实行情。
 
+运行命令时页面会实时追加日志，并展示当前运行步骤、当前处理股票或子任务、成功/失败/跳过数量和最终报告路径。
+
 自定义股票池会写入 `AKSHARE_SAMPLE_SYMBOLS`，它不为空时 `REAL_UNIVERSE_PRESET` 不生效。使用预设股票池会清空 `AKSHARE_SAMPLE_SYMBOLS` 并保存 `REAL_UNIVERSE_PRESET=small` 或 `medium`。结束日期留空表示尽量拉取到最新可得日期；修改结束日期后，只有“保存并更新数据”会让数据库最新行情日期变化。
 
 Mac 双击启动器：
@@ -207,6 +213,8 @@ open scripts/mac/A股选股助手.command
 ```
 
 这不是完整原生 Swift App，不做菜单栏常驻、不做自动后台更新、不做 dmg、不做云同步。
+
+Task 35-38 的交接说明见 [task_35_38_handoff.md](task_35_38_handoff.md)。
 
 ## 复核状态调整
 
