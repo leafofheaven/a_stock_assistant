@@ -25,6 +25,22 @@ python -m core.jobs.run_real_workflow --skip-update
 
 ## C. 完整复核流程
 
+推荐日常一键命令：
+
+```bash
+python -m core.jobs.run_daily_workflow --backup-before-run --format all
+```
+
+不更新数据、只使用本地 DuckDB：
+
+```bash
+python -m core.jobs.run_daily_workflow --skip-update --format all
+```
+
+该命令会生成 `reports/daily_workflow_*.md`、`reports/daily_workflow_*.json`，`--format all` 还会生成 CSV 摘要。清理运行生成文件时优先使用 `python -m core.jobs.clean_generated_reports --force`，不要删除 `reports/.gitkeep`。
+
+手动拆分流程如下：
+
 ```bash
 python -m core.jobs.update_real_data
 python -m core.jobs.run_daily_selection

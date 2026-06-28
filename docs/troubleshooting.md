@@ -240,6 +240,24 @@ python -m core.jobs.track_watchlist
 
 现象：`git status` 显示运行生成文件。
 
+处理：不要用 `rm -rf reports` 直接删除目录，避免误删 `reports/.gitkeep`。可以运行：
+
+```bash
+python -m core.jobs.clean_generated_reports --force
+```
+
+或只删除普通报告文件：
+
+```bash
+find reports -type f ! -name ".gitkeep" -delete
+```
+
+日常流程生成日报可使用：
+
+```bash
+python -m core.jobs.run_daily_workflow --skip-update --format all
+```
+
 原因：忽略规则异常或文件已被跟踪。
 
 检查命令：
