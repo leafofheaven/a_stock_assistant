@@ -44,6 +44,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task31": check_task31,
         "task32": check_task32,
         "task33": check_task33,
+        "task34": check_task34,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1520,6 +1521,57 @@ def check_task33(root: Path) -> list[str]:
     return failures
 
 
+def check_task34(root: Path) -> list[str]:
+    """Check Task 34 Mac local console and settings support."""
+    failures = check_paths(
+        root,
+        [
+            "core/config/env_file.py",
+            "core/runtime/command_runner.py",
+            "web/streamlit_app.py",
+            "scripts/mac/A股选股助手.command",
+            "scripts/mac/README.md",
+            "tests/test_env_file_config.py",
+            "tests/test_command_runner.py",
+            "tests/test_mac_local_console_docs.py",
+            "README.md",
+            "docs/v0_1_handbook.md",
+            "docs/troubleshooting.md",
+        ],
+    )
+    env_source = read_source(root / "core/config/env_file.py")
+    for phrase in ["read_env_file", "update_env_file", "masked_env_values", "clean_stock_symbols", "TUSHARE_TOKEN"]:
+        if phrase not in env_source:
+            failures.append(f"env_file.py is missing {phrase}.")
+
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    for phrase in ["ALLOWED_COMMANDS", "subprocess.run", "open_project_path", "shell", "doctor_daily_run"]:
+        if phrase not in command_source:
+            failures.append(f"command_runner.py is missing {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    if "参数设置" not in streamlit_source and "本地控制台" not in streamlit_source:
+        failures.append("web/streamlit_app.py must include 参数设置 or 本地控制台.")
+
+    readme = read_source(root / "README.md")
+    for phrase in ["Chrome", "localhost:8501", "参数设置", "A股选股助手.command"]:
+        if phrase not in readme:
+            failures.append(f"README.md is missing {phrase}.")
+
+    handbook = read_source(root / "docs/v0_1_handbook.md")
+    if "参数设置" not in handbook:
+        failures.append("docs/v0_1_handbook.md must mention 参数设置.")
+    troubleshooting = read_source(root / "docs/troubleshooting.md")
+    if "Mac 启动器" not in troubleshooting:
+        failures.append("docs/troubleshooting.md must mention Mac 启动器.")
+
+    if not (root / "docs/v0_1_release_notes.md").exists() or not (root / "docs/v0_1_handbook.md").exists():
+        failures.append("Task 33 v0.1 docs must remain available.")
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1584,6 +1636,7 @@ def main(argv: list[str] | None = None) -> int:
             "task31",
             "task32",
             "task33",
+            "task34",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

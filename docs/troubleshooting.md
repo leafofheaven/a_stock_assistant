@@ -25,6 +25,38 @@ ls -la .env .env.example
 cp .env.example .env
 ```
 
+## Mac 启动器无法打开
+
+现象：双击 `scripts/mac/A股选股助手.command` 没有启动，或 macOS 提示无法打开。
+
+检查命令：
+
+```bash
+chmod +x scripts/mac/A股选股助手.command
+```
+
+处理：右键 `.command` 文件选择“打开”，或到“系统设置 > 隐私与安全性”允许本次运行。启动后用 Chrome / 默认浏览器打开 `http://localhost:8501`，进入“参数设置 / 本地控制台”。
+
+说明：这个启动器不做完整原生 Swift App，不做菜单栏常驻，不做自动后台更新，不做 dmg，不做云同步。
+
+## 参数设置页保存后没生效
+
+现象：在“参数设置 / 本地控制台”修改股票池或日期后，数据没有立刻变化。
+
+原因：页面保存的是 `.env`，需要重新运行工作流。
+
+处理命令：
+
+```bash
+python -m core.jobs.run_daily_workflow --doctor-before-run --skip-update --format all
+```
+
+如需重新拉取真实数据，点击页面里的“更新真实数据”，或运行：
+
+```bash
+python -m core.jobs.update_real_data
+```
+
 ## DATA_PROVIDER 仍然是 tushare
 
 现象：想用 AKShare，但命令输出 `DATA_PROVIDER: tushare`。

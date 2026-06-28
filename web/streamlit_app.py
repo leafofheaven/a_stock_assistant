@@ -24,6 +24,8 @@ from core.reporting.watchlist_report import load_latest_watchlist_report
 from core.reporting.watchlist_tracking_report import load_latest_watchlist_tracking_report
 from core.reporting.workflow_report import load_latest_workflow_report
 from core.reporting.daily_workflow_report import load_latest_daily_workflow_report
+from core.config.env_file import masked_env_values, read_env_file, update_env_file
+from core.runtime.command_runner import open_project_path, run_allowed_command
 
 SELECTION_COLUMNS = [
     "rank",
@@ -399,7 +401,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     st.info(f"数据来源：{data_source_status['data_source']}。{data_source_status['message']}")
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
-    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态"])
+    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
         _render_selection_tab(st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[1]:
@@ -419,6 +421,8 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
         _render_backtest_tab(st, dashboard_data.get("backtest", {}))
     with tabs[4]:
         _render_status_tab(st, dashboard_data.get("tables", {}))
+    with tabs[5]:
+        _render_local_console_tab(st, dashboard_data.get("tables", {}))
 
 
 def main() -> None:
@@ -775,6 +779,178 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         available = [column for column in display_columns if column in snapshot_df.columns]
         st.dataframe(snapshot_df[available], use_container_width=True)
     st.info(status["last_job_status"])
+
+
+def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
+    """Render local settings and command console."""
+    st.subheader("参数设置 / 本地控制台")
+    st.caption("仅供个人研究使用，不自动交易。页面只执行预设白名单命令。")
+    env_path = PROJECT_ROOT / ".env"
+    env_values = read_env_file(env_path)
+    display_values = masked_env_values(env_values)
+    status = summarize_update_status(tables)
+
+    st.write("当前运行状态")
+    st.write(
+        {
+            "当前 DATA_PROVIDER": env_values.get("DATA_PROVIDER", "未设置"),
+            "DuckDB 路径": env_values.get("DUCKDB_PATH", "./data/a_stock_assistant.duckdb"),
+            "最新行情日期": status.get("latest_price_date") or "暂无",
+            "最新交易日 PE/PB 完整率": _latest_pe_pb_text(tables),
+            "当前配置股票数量": _configured_symbol_count(env_values),
+            "当前已有行情股票数量": status.get("priced_symbol_count", 0),
+            "最近日报路径": (status.get("latest_daily_workflow_report") or {}).get("path") if isinstance(status.get("latest_daily_workflow_report"), dict) else "暂无",
+            "最近观察池报告路径": (status.get("latest_watchlist_report") or {}).get("path") if isinstance(status.get("latest_watchlist_report"), dict) else "暂无",
+            "TUSHARE_TOKEN": display_values.get("TUSHARE_TOKEN", "未设置"),
+        }
+    )
+
+    st.write("参数设置")
+    with st.form("local_console_settings"):
+        provider = st.selectbox(
+            "DATA_PROVIDER",
+            ["sample", "tushare", "akshare"],
+            index=_option_index(["sample", "tushare", "akshare"], env_values.get("DATA_PROVIDER", "akshare")),
+        )
+        pool_mode = st.radio("股票池模式", ["自定义股票代码", "使用 REAL_UNIVERSE_PRESET"], horizontal=True)
+        symbols = st.text_input("AKSHARE_SAMPLE_SYMBOLS", value=env_values.get("AKSHARE_SAMPLE_SYMBOLS", "000001,600000,000002"))
+        preset = st.selectbox(
+            "REAL_UNIVERSE_PRESET",
+            ["mini", "small", "medium"],
+            index=_option_index(["mini", "small", "medium"], env_values.get("REAL_UNIVERSE_PRESET", "mini")),
+        )
+        st.caption("AKSHARE_SAMPLE_SYMBOLS 不为空时优先使用自定义股票池；输入示例：000001,600000,002475。")
+        start_date = st.text_input("REAL_DATA_START_DATE", value=env_values.get("REAL_DATA_START_DATE", "20240101"))
+        end_date = st.text_input("REAL_DATA_END_DATE", value=env_values.get("REAL_DATA_END_DATE", ""))
+        st.caption("REAL_DATA_END_DATE 留空表示尽量拉到最新可得日期。")
+        basic_enrichment = st.checkbox("ENABLE_REAL_BASIC_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_REAL_BASIC_ENRICHMENT", "true")))
+        valuation_enrichment = st.checkbox("ENABLE_REAL_VALUATION_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_REAL_VALUATION_ENRICHMENT", "true")))
+        batch_size = st.number_input("REAL_BATCH_SIZE", min_value=1, value=int(env_values.get("REAL_BATCH_SIZE", "10") or 10), step=1)
+        batch_sleep = st.number_input("REAL_BATCH_SLEEP_SECONDS", min_value=0.0, value=float(env_values.get("REAL_BATCH_SLEEP_SECONDS", "0") or 0.0), step=0.1)
+        max_retries = st.number_input("REAL_MAX_RETRIES", min_value=0, value=int(env_values.get("REAL_MAX_RETRIES", "1") or 1), step=1)
+        timeout_seconds = st.number_input("REAL_REQUEST_TIMEOUT_SECONDS", min_value=1, value=int(env_values.get("REAL_REQUEST_TIMEOUT_SECONDS", "30") or 30), step=1)
+        data_dir = st.text_input("DATA_DIR", value=env_values.get("DATA_DIR", "./data"))
+        duckdb_path = st.text_input("DUCKDB_PATH", value=env_values.get("DUCKDB_PATH", "./data/a_stock_assistant.duckdb"))
+        save_clicked = st.form_submit_button("保存参数")
+    if save_clicked:
+        updates = {
+            "DATA_PROVIDER": provider,
+            "AKSHARE_SAMPLE_SYMBOLS": "" if pool_mode == "使用 REAL_UNIVERSE_PRESET" else symbols,
+            "REAL_UNIVERSE_PRESET": preset,
+            "REAL_DATA_START_DATE": start_date,
+            "REAL_DATA_END_DATE": end_date,
+            "ENABLE_REAL_BASIC_ENRICHMENT": basic_enrichment,
+            "ENABLE_REAL_VALUATION_ENRICHMENT": valuation_enrichment,
+            "REAL_BATCH_SIZE": batch_size,
+            "REAL_BATCH_SLEEP_SECONDS": batch_sleep,
+            "REAL_MAX_RETRIES": max_retries,
+            "REAL_REQUEST_TIMEOUT_SECONDS": timeout_seconds,
+            "DATA_DIR": data_dir,
+            "DUCKDB_PATH": duckdb_path,
+        }
+        try:
+            result = update_env_file(env_path, updates)
+            st.success(f"参数已保存：{', '.join(result['updated_keys'])}。重新运行工作流后生效。")
+        except Exception as exc:
+            st.error(f"保存失败：{exc}")
+
+    st.write("运行选项")
+    doctor_before = st.checkbox("运行前 doctor", value=True, key="console_doctor_before")
+    backup_before = st.checkbox("运行前备份", value=True, key="console_backup_before")
+    skip_update = st.checkbox("跳过数据更新", value=False, key="console_skip_update")
+    output_format = st.selectbox("输出格式", ["all", "markdown", "json", "csv"], index=0)
+
+    st.write("操作")
+    workflow_args = []
+    if doctor_before:
+        workflow_args.append("--doctor-before-run")
+    if backup_before and not skip_update:
+        workflow_args.append("--backup-before-run")
+    if skip_update:
+        workflow_args.append("--skip-update")
+    workflow_args.extend(["--format", output_format])
+    _command_button(st, "运行 doctor 体检", "doctor_daily_run")
+    _command_button(st, "一键运行", "run_daily_workflow", workflow_args)
+    _command_button(st, "只用本地数据运行", "run_daily_workflow", ["--doctor-before-run", "--skip-update", "--format", output_format])
+    _command_button(st, "更新真实数据", "update_real_data")
+    _command_button(st, "生成候选", "run_daily_selection")
+    _command_button(st, "刷新观察池", "refresh_watchlist_scores")
+    _command_button(st, "查看观察池", "diagnose_watchlist")
+    _command_button(st, "清理报告", "clean_generated_reports", ["--force"])
+    _open_button(st, "打开 reports 文件夹", PROJECT_ROOT / "reports")
+    _open_button(st, "打开项目文件夹", PROJECT_ROOT)
+
+
+def _command_button(st: Any, label: str, command_key: str, args: list[str] | None = None) -> None:
+    """Render a whitelisted command button."""
+    if not st.button(label, key=f"cmd_{label}"):
+        return
+    with st.spinner(f"正在执行：{label}"):
+        try:
+            result = run_allowed_command(command_key, args or [])
+        except Exception as exc:
+            st.error(f"执行失败：{exc}")
+            st.info("请先运行 doctor 体检，或查看 docs/troubleshooting.md。")
+            return
+    if result.status == "success":
+        st.success("命令执行成功。")
+    else:
+        st.error(f"命令执行失败：{result.status}，returncode={result.returncode}")
+        st.info("可查看 stderr，并按提示重跑对应命令。")
+    with st.expander("stdout"):
+        st.code(result.stdout or "无输出")
+    with st.expander("stderr"):
+        st.code(result.stderr or "无输出")
+
+
+def _open_button(st: Any, label: str, path: Path) -> None:
+    """Render a button that opens a project-local folder."""
+    if not st.button(label, key=f"open_{label}"):
+        return
+    try:
+        result = open_project_path(path)
+    except Exception as exc:
+        st.error(f"打开失败：{exc}")
+        return
+    if result.status == "success":
+        st.success(f"已打开：{path}")
+    else:
+        st.error(result.stderr or "打开失败。")
+
+
+def _latest_pe_pb_text(tables: dict[str, pd.DataFrame]) -> str:
+    daily_basic = tables.get("daily_basic", pd.DataFrame())
+    if not isinstance(daily_basic, pd.DataFrame) or daily_basic.empty or "trade_date" not in daily_basic.columns:
+        return "暂无"
+    latest = str(daily_basic["trade_date"].dropna().astype(str).max())
+    latest_rows = daily_basic[daily_basic["trade_date"].astype(str) == latest]
+    pe = _present_rate(latest_rows, "pe")
+    pb = _present_rate(latest_rows, "pb")
+    return f"{latest}: PE {pe:.2%} / PB {pb:.2%}"
+
+
+def _present_rate(df: pd.DataFrame, column: str) -> float:
+    if df.empty or column not in df.columns:
+        return 0.0
+    return float(df[column].apply(lambda value: not _is_missing(value)).sum() / len(df))
+
+
+def _configured_symbol_count(values: dict[str, str]) -> int:
+    symbols = values.get("AKSHARE_SAMPLE_SYMBOLS", "")
+    if symbols.strip():
+        return len([item for item in symbols.split(",") if item.strip()])
+    return 0
+
+
+def _bool_value(value: str) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _option_index(options: list[str], value: str) -> int:
+    try:
+        return options.index(str(value))
+    except ValueError:
+        return 0
 
 
 def _load_watchlist_for_dashboard(store: Any) -> pd.DataFrame:

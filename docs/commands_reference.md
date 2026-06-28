@@ -180,6 +180,25 @@ python -m core.jobs.doctor_daily_run --json
 
 作用：检查当前分支、工作区、`.env`、DATA_PROVIDER、样本配置、DuckDB、核心表、最新行情日期、最新交易日 PE/PB 完整率、`reports/.gitkeep`、最近备份、最近日报和 Git 误提交风险。`--fix-safe` 只创建缺失的 `reports/`、`backups/`、`data/` 和 `reports/.gitkeep`，不会删除或覆盖 DuckDB，也不会修改 `.env`。
 
+## Chrome 本地控制台 / 参数设置页
+
+命令：
+
+```bash
+streamlit run web/streamlit_app.py
+```
+
+打开 `http://localhost:8501` 后进入“参数设置 / 本地控制台”。页面支持修改 DATA_PROVIDER、AKSHARE_SAMPLE_SYMBOLS、REAL_UNIVERSE_PRESET、日期、补全开关、批量参数、DATA_DIR 和 DUCKDB_PATH；也支持点击运行 doctor、一键运行、只用本地数据运行、更新真实数据、刷新观察池、清理报告、打开 reports 文件夹。
+
+Mac 双击启动器：
+
+```bash
+chmod +x scripts/mac/A股选股助手.command
+open scripts/mac/A股选股助手.command
+```
+
+这不是完整原生 Swift App，不做菜单栏常驻、不做自动后台更新、不做 dmg、不做云同步。
+
 ## 复核状态调整
 
 命令：

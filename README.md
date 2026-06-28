@@ -14,6 +14,7 @@
 - 候选股票复核报告、人工复核模板导出和复核结果导入。
 - 观察池管理、观察池跟踪、观察池变化报告、状态调整与历史记录。
 - 本地 DuckDB 备份、恢复 dry-run、报告清理和本地状态诊断。
+- Chrome 本地控制台：Streamlit 页面内可修改常用 `.env` 参数、运行白名单命令、查看 doctor 体检并打开 reports 文件夹。
 
 ## 快速开始
 
@@ -115,7 +116,16 @@ python -m core.jobs.doctor_daily_run --post-run
 streamlit run web/streamlit_app.py
 ```
 
-页面用于查看数据状态、今日选股、因子排名、回测诊断、观察池和本地状态提示。个人研究工具，结果需自行复核。
+页面用于查看数据状态、今日选股、因子排名、回测诊断、观察池和本地状态提示。新增“参数设置 / 本地控制台”可修改股票池、日期、批量参数，点击运行 doctor、一键运行、只用本地数据运行、更新真实数据、清理报告，并打开 reports 文件夹。
+
+Mac 双击启动器：
+
+```bash
+chmod +x scripts/mac/A股选股助手.command
+open scripts/mac/A股选股助手.command
+```
+
+也可以双击 `scripts/mac/A股选股助手.command`，它会启动 Streamlit 并打开 Chrome / 默认浏览器访问 `http://localhost:8501`。这不是完整原生 Swift App，不做菜单栏常驻、不做自动后台更新、不做 dmg、不做云同步。
 
 ## 文档目录
 

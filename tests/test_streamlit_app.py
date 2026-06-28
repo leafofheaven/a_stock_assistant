@@ -129,7 +129,7 @@ def test_render_dashboard_creates_title_and_five_tabs_for_empty_data(monkeypatch
     )
 
     assert fake_streamlit.title_text == "A 股选股辅助"
-    assert fake_streamlit.tab_names == ["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态"]
+    assert fake_streamlit.tab_names == ["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态", "本地控制台"]
     assert fake_streamlit.info_messages
 
 
@@ -161,6 +161,13 @@ class FakeTab:
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         return None
+
+
+class FakeForm(FakeTab):
+    """Minimal form context manager."""
+
+    def form_submit_button(self, label: str) -> bool:
+        return False
 
 
 class FakeStreamlit:
@@ -208,11 +215,41 @@ class FakeStreamlit:
     def selectbox(self, label: str, options, **kwargs):
         return list(options)[0] if options else None
 
-    def checkbox(self, label: str, value: bool = False) -> bool:
+    def radio(self, label: str, options, **kwargs):
+        return list(options)[0] if options else None
+
+    def checkbox(self, label: str, value: bool = False, **kwargs) -> bool:
         return value
 
     def text_input(self, label: str, value: str = "") -> str:
         return value
+
+    def number_input(self, label: str, **kwargs):
+        return kwargs.get("value", 0)
+
+    def form(self, key: str) -> FakeForm:
+        return FakeForm()
+
+    def form_submit_button(self, label: str) -> bool:
+        return False
+
+    def button(self, label: str, **kwargs) -> bool:
+        return False
+
+    def success(self, text: str) -> None:
+        return None
+
+    def error(self, text: str) -> None:
+        return None
+
+    def spinner(self, text: str) -> FakeTab:
+        return FakeTab()
+
+    def expander(self, text: str) -> FakeTab:
+        return FakeTab()
+
+    def code(self, text: str) -> None:
+        return None
 
     def download_button(self, *args, **kwargs) -> None:
         return None
