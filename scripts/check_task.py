@@ -47,6 +47,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task34": check_task34,
         "task35": check_task35,
         "task36": check_task36,
+        "task37": check_task37,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1640,6 +1641,49 @@ def check_task36(root: Path) -> list[str]:
     return failures
 
 
+def check_task37(root: Path) -> list[str]:
+    """Check Task 37 live progress reporting for local commands."""
+    failures = check_paths(
+        root,
+        [
+            "core/runtime/progress.py",
+            "core/runtime/command_runner.py",
+            "core/jobs/update_real_data.py",
+            "core/jobs/run_daily_workflow.py",
+            "web/streamlit_app.py",
+            "tests/test_progress_reporting.py",
+        ],
+    )
+    progress_source = read_source(root / "core/runtime/progress.py")
+    for phrase in ["[progress]", "ProgressState", "format_progress_line", "parse_progress_line"]:
+        if phrase not in progress_source:
+            failures.append(f"progress.py is missing {phrase}.")
+    runner_source = read_source(root / "core/runtime/command_runner.py")
+    for phrase in ["run_command_streaming", "subprocess.Popen", "on_line", "STDOUT"]:
+        if phrase not in runner_source:
+            failures.append(f"command_runner.py is missing streaming support: {phrase}.")
+    update_source = read_source(root / "core/jobs/update_real_data.py")
+    workflow_source = read_source(root / "core/jobs/run_daily_workflow.py")
+    for path, source in {
+        "core/jobs/update_real_data.py": update_source,
+        "core/jobs/run_daily_workflow.py": workflow_source,
+    }.items():
+        for phrase in ["emit_progress", "print_progress"]:
+            if phrase not in source:
+                failures.append(f"{path} is missing {phrase}.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["run_command_streaming", "实时日志", "当前运行步骤", "已成功数量", "最终报告路径", "一键运行"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing {phrase}.")
+    tests_source = read_source(root / "tests/test_progress_reporting.py")
+    for phrase in ["mock", "run_command_streaming", "returncode", "ProgressState"]:
+        if phrase.lower() not in tests_source.lower():
+            failures.append(f"tests/test_progress_reporting.py should cover {phrase}.")
+    if "保存并更新数据" not in streamlit_source:
+        failures.append("Task 35 simplified settings workflow must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1707,6 +1751,7 @@ def main(argv: list[str] | None = None) -> int:
             "task34",
             "task35",
             "task36",
+            "task37",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

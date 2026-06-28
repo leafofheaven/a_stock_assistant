@@ -30,7 +30,8 @@ from core.reporting.watchlist_tracking_report import load_latest_watchlist_track
 from core.reporting.workflow_report import load_latest_workflow_report
 from core.reporting.daily_workflow_report import load_latest_daily_workflow_report
 from core.config.env_file import masked_env_values, parse_stock_symbols, read_env_file, update_env_file
-from core.runtime.command_runner import open_project_path, run_allowed_command
+from core.runtime.command_runner import open_project_path, run_command_streaming
+from core.runtime.progress import parse_progress_line
 
 SELECTION_COLUMNS = [
     "rank",
@@ -966,6 +967,7 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
                 _run_console_action(st, "保存并更新数据", "run_daily_workflow", ["--doctor-before-run", "--backup-before-run", "--format", "all"])
 
     st.write("一键操作区")
+    _command_button(st, "一键运行", "run_daily_workflow", ["--doctor-before-run", "--backup-before-run", "--format", "all"])
     _command_button(st, "运行体检", "doctor_daily_run")
     _open_button(st, "打开报告文件夹", PROJECT_ROOT / "reports")
     _command_button(st, "清理旧报告", "clean_generated_reports", ["--force"])
@@ -1083,42 +1085,74 @@ def _save_console_settings(st: Any, env_path: Path, updates: dict[str, Any]) -> 
 
 
 def _run_console_action(st: Any, label: str, command_key: str, args: list[str]) -> None:
-    with st.spinner(f"正在执行：{label}"):
-        try:
-            result = run_allowed_command(command_key, args)
-        except Exception as exc:
-            st.error(f"执行失败：{exc}")
-            return
-    if result.status == "success":
-        st.success("执行完成。请点击页面右上角刷新，或按 R 重新加载页面。")
-    else:
-        st.error(f"执行失败：{result.status}，returncode={result.returncode}")
-    with st.expander("stdout"):
-        st.code(result.stdout or "无输出")
-    with st.expander("stderr"):
-        st.code(result.stderr or "无输出")
+    _run_streaming_console_action(st, label, command_key, args, success_message="执行完成。请点击页面右上角刷新，或按 R 重新加载页面。")
 
 
 def _command_button(st: Any, label: str, command_key: str, args: list[str] | None = None) -> None:
     """Render a whitelisted command button."""
     if not st.button(label, key=f"cmd_{label}"):
         return
+    _run_streaming_console_action(st, label, command_key, args or [], success_message="命令执行成功。")
+
+
+def _run_streaming_console_action(
+    st: Any,
+    label: str,
+    command_key: str,
+    args: list[str],
+    *,
+    success_message: str,
+) -> None:
+    """Run a local command and stream progress/log lines into Streamlit."""
+    status_box = st.empty()
+    log_box = st.empty()
+    progress_bar = st.progress(0)
+    logs: list[str] = []
+    latest_progress: dict[str, Any] = {
+        "当前运行步骤": "准备开始",
+        "当前处理股票或子任务": label,
+        "已成功数量": 0,
+        "已失败数量": 0,
+        "已跳过数量": 0,
+        "最终报告路径": "暂无",
+    }
+
+    def on_line(line: str) -> None:
+        logs.append(line)
+        state = parse_progress_line(line)
+        if state is not None:
+            latest_progress.update(
+                {
+                    "当前运行步骤": state.step or "暂无",
+                    "当前处理股票或子任务": state.current or "暂无",
+                    "已成功数量": state.success,
+                    "已失败数量": state.failed,
+                    "已跳过数量": state.skipped,
+                }
+            )
+            if "报告 " in state.message:
+                latest_progress["最终报告路径"] = state.message.split("报告 ", 1)[-1].strip("。")
+            progress_bar.progress(min(0.95, max(0.05, len(logs) / 80)))
+        status_box.write(latest_progress)
+        log_box.code("\n".join(logs[-300:]) or "等待输出...")
+
+    status_box.write(latest_progress)
+    log_box.code("等待输出...")
     with st.spinner(f"正在执行：{label}"):
         try:
-            result = run_allowed_command(command_key, args or [])
+            result = run_command_streaming(command_key, args, on_line=on_line)
         except Exception as exc:
             st.error(f"执行失败：{exc}")
             st.info("请先运行 doctor 体检，或查看 docs/troubleshooting.md。")
             return
     if result.status == "success":
-        st.success("命令执行成功。")
+        progress_bar.progress(1.0)
+        st.success(success_message)
     else:
         st.error(f"命令执行失败：{result.status}，returncode={result.returncode}")
         st.info("可查看 stderr，并按提示重跑对应命令。")
-    with st.expander("stdout"):
+    with st.expander("实时日志 / stdout"):
         st.code(result.stdout or "无输出")
-    with st.expander("stderr"):
-        st.code(result.stderr or "无输出")
 
 
 def _open_button(st: Any, label: str, path: Path) -> None:
