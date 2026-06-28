@@ -354,10 +354,10 @@ def main() -> None:
         )
         if enrichment.get("warnings"):
             print("- 补全提示:")
-            for item in enrichment["warnings"]:
+            for item in _group_enrichment_warnings(enrichment["warnings"]):
                 print(
-                    f"  {item['symbol']} stage={item['failed_stage']} "
-                    f"message={item['error_message']}"
+                    f"  {item['symbols']} stage={item['failed_stage']} "
+                    f"count={item['count']} message={item['error_message']}"
                 )
             print("- 补全失败不影响主行情更新。")
     print("- 写入行数:")
@@ -387,6 +387,29 @@ def _filter_stock_basic(df: pd.DataFrame, symbols: list[str]) -> pd.DataFrame:
         return df
     ts_codes = {_to_ts_code(symbol) for symbol in symbols}
     return df[df["ts_code"].isin(ts_codes)].reset_index(drop=True)
+
+
+def _group_enrichment_warnings(warnings: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """Group repeated optional enrichment warnings for concise CLI output."""
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for item in warnings:
+        key = (str(item.get("failed_stage", "unknown")), str(item.get("error_message", "")))
+        grouped.setdefault(key, []).append(str(item.get("symbol", "")))
+    rows: list[dict[str, Any]] = []
+    for (stage, message), symbols in grouped.items():
+        unique_symbols = list(dict.fromkeys(symbol for symbol in symbols if symbol))
+        preview = ",".join(unique_symbols[:5])
+        if len(unique_symbols) > 5:
+            preview = f"{preview},..."
+        rows.append(
+            {
+                "failed_stage": stage,
+                "error_message": message,
+                "symbols": preview or "ALL",
+                "count": len(unique_symbols),
+            }
+        )
+    return rows
 
 
 def _merge_existing_stock_basic(stock_basic: pd.DataFrame, store: DuckDBStore) -> pd.DataFrame:

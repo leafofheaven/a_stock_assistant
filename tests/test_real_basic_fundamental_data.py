@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-from core.data_sources.akshare_client import AKShareClient
+from core.data_sources.akshare_client import AKShareClient, normalize_basic_enrichment_frame
 from core.data_sources.universe_presets import get_universe_preset, to_ts_code
 from core.jobs.diagnose_data_quality import diagnose_data_quality
 from core.jobs.diagnose_factors import diagnose_factors
@@ -128,6 +128,41 @@ class WeirdBasicInfoAKShareModule(MockAKShareModule):
         return pd.DataFrame({"a": ["x"], "b": ["y"], "c": ["z"]})
 
 
+class ThreeColumnBasicInfoAKShareModule(MockAKShareModule):
+    """Mock module where basic enrichment returns item/value plus an extra column."""
+
+    def stock_individual_info_em(self, symbol: str) -> pd.DataFrame:
+        """Return a compatible 3-column structure."""
+        return pd.DataFrame(
+            {
+                "item": ["行业", "上市日期", "地区"],
+                "value": ["银行", "19910403" if symbol == "000001" else "19991110", "深圳"],
+                "extra": ["ignore", "ignore", "ignore"],
+            }
+        )
+
+
+class TwoColumnBasicInfoAKShareModule(MockAKShareModule):
+    """Mock module where basic enrichment returns Chinese two-column structure."""
+
+    def stock_individual_info_em(self, symbol: str) -> pd.DataFrame:
+        """Return a compatible 2-column Chinese structure."""
+        return pd.DataFrame(
+            {
+                "项目": ["所属行业", "上市时间", "地域"],
+                "值": ["银行", "19910403" if symbol == "000001" else "19991110", "深圳"],
+            }
+        )
+
+
+class EmptyBasicInfoAKShareModule(MockAKShareModule):
+    """Mock module where basic enrichment returns empty data."""
+
+    def stock_individual_info_em(self, symbol: str) -> pd.DataFrame:
+        """Return empty optional enrichment data."""
+        return pd.DataFrame()
+
+
 class NoValuationAKShareModule(MockAKShareModule):
     """Mock module without stock_a_lg_indicator."""
 
@@ -153,6 +188,103 @@ def test_stock_basic_enrichment_writes_industry_and_list_date(tmp_path: Path) ->
     row = stock_basic[stock_basic["ts_code"] == "000001.SZ"].iloc[0]
     assert row["industry"] == "银行"
     assert row["list_date"] == "19910403"
+
+
+def test_normalize_basic_enrichment_frame_accepts_two_columns() -> None:
+    """Two-column AKShare basic info should normalize to item/value."""
+    normalized = normalize_basic_enrichment_frame(pd.DataFrame({"项目": ["行业"], "值": ["银行"]}))
+
+    assert normalized[["item", "value"]].to_dict("records") == [{"item": "行业", "value": "银行"}]
+    assert "source_columns" in normalized.columns
+
+
+def test_normalize_basic_enrichment_frame_accepts_three_columns() -> None:
+    """Three-column AKShare basic info should preserve extra without renaming errors."""
+    normalized = normalize_basic_enrichment_frame(
+        pd.DataFrame({"字段": ["上市日期"], "内容": ["19910403"], "备注": ["A股"]})
+    )
+
+    assert normalized.loc[0, "item"] == "上市日期"
+    assert normalized.loc[0, "value"] == "19910403"
+    assert normalized.loc[0, "extra"] == "A股"
+
+
+def test_normalize_basic_enrichment_frame_handles_empty_and_unrecognizable() -> None:
+    """Empty or unusable basic info should return an empty standard frame."""
+    empty = normalize_basic_enrichment_frame(pd.DataFrame())
+    unusable = normalize_basic_enrichment_frame(pd.DataFrame({"only": ["行业"]}))
+
+    assert list(empty.columns) == ["item", "value", "extra", "source_columns"]
+    assert empty.empty
+    assert unusable.empty
+
+
+def test_stock_basic_enrichment_parses_three_column_shape(tmp_path: Path) -> None:
+    """AKShare 3-column individual info should parse item/value and ignore extras."""
+    store = DuckDBStore(tmp_path / "three-column.duckdb")
+    client = AKShareClient(akshare_module=ThreeColumnBasicInfoAKShareModule())
+
+    result = update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
+
+    stock_basic = store.read_table("stock_basic")
+    assert result["status"] == "success"
+    assert stock_basic[stock_basic["ts_code"] == "000001.SZ"].iloc[0]["industry"] == "银行"
+    assert stock_basic[stock_basic["ts_code"] == "000001.SZ"].iloc[0]["list_date"] == "19910403"
+
+
+def test_stock_basic_enrichment_parses_two_column_shape(tmp_path: Path) -> None:
+    """AKShare 2-column individual info should parse available fields."""
+    store = DuckDBStore(tmp_path / "two-column.duckdb")
+    client = AKShareClient(akshare_module=TwoColumnBasicInfoAKShareModule())
+
+    result = update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
+
+    stock_basic = store.read_table("stock_basic")
+    assert result["status"] == "success"
+    assert stock_basic[stock_basic["ts_code"] == "000001.SZ"].iloc[0]["industry"] == "银行"
+    assert stock_basic[stock_basic["ts_code"] == "600000.SH"].iloc[0]["list_date"] == "19991110"
+    assert not result["enrichment_warnings"]
+
+
+def test_stock_basic_enrichment_value_error_warning_is_sanitized(tmp_path: Path) -> None:
+    """AKShare internal Length mismatch should not leak raw ValueError to user warnings."""
+    store = DuckDBStore(tmp_path / "sanitized-basic.duckdb")
+    client = AKShareClient(akshare_module=MockAKShareModule(fail_basic={"000001", "600000"}))
+
+    result = update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
+    warning_text = " ".join(item["error_message"] for item in result["enrichment_warnings"])
+
+    assert result["status"] == "success"
+    assert "Length mismatch" not in warning_text
+    assert "ValueError" not in warning_text
+    assert "AKShare 基础增强字段缺失" in warning_text
+
+
+def test_stock_basic_enrichment_value_error_log_is_sanitized(tmp_path: Path, caplog: Any) -> None:
+    """Normal logs should not include raw AKShare Length mismatch details."""
+    store = DuckDBStore(tmp_path / "sanitized-log.duckdb")
+    client = AKShareClient(akshare_module=MockAKShareModule(fail_basic={"000001", "600000"}))
+
+    update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
+    logs = caplog.text
+
+    assert "Length mismatch" not in logs
+    assert "ValueError" not in logs
+    assert "AKShare 基础增强字段缺失" in logs
+
+
+def test_empty_stock_individual_info_keeps_basic_fields_and_records_warning(tmp_path: Path) -> None:
+    """Empty optional basic enrichment should not crash or clear stock_basic rows."""
+    store = DuckDBStore(tmp_path / "empty-basic.duckdb")
+    client = AKShareClient(akshare_module=EmptyBasicInfoAKShareModule())
+
+    result = update_real_data(settings=Task27Settings(duckdb_path=store.db_path), store=store, client=client)
+
+    stock_basic = store.read_table("stock_basic")
+    assert result["status"] == "success"
+    assert set(stock_basic["ts_code"]) == {"000001.SZ", "600000.SH"}
+    assert result["enrichment_warnings"]
+    assert all(item["failed_stage"] == "stock_basic_enrichment" for item in result["enrichment_warnings"])
 
 
 def test_daily_basic_enrichment_writes_pe_pb(tmp_path: Path) -> None:

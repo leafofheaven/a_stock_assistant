@@ -48,6 +48,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task35": check_task35,
         "task36": check_task36,
         "task37": check_task37,
+        "task38": check_task38,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1684,6 +1685,49 @@ def check_task37(root: Path) -> list[str]:
     return failures
 
 
+def check_task38(root: Path) -> list[str]:
+    """Check Task 38 AKShare basic enrichment compatibility."""
+    failures = check_paths(
+        root,
+        [
+            "core/data_sources/akshare_client.py",
+            "core/jobs/update_real_data.py",
+            "tests/test_real_basic_fundamental_data.py",
+        ],
+    )
+    akshare_source = read_source(root / "core/data_sources/akshare_client.py")
+    for phrase in [
+        "_parse_individual_info",
+        "normalize_basic_enrichment_frame",
+        "_infer_basic_enrichment_columns",
+        "source_columns",
+        "_log_enrichment_warning_once",
+        "AKShare 基础增强字段缺失",
+        "_sanitize_basic_enrichment_error",
+        "stock_individual_info_em",
+    ]:
+        if phrase not in akshare_source:
+            failures.append(f"akshare_client.py is missing {phrase}.")
+    update_source = read_source(root / "core/jobs/update_real_data.py")
+    if "_group_enrichment_warnings" not in update_source:
+        failures.append("update_real_data.py must group repeated enrichment warnings.")
+    tests_source = read_source(root / "tests/test_real_basic_fundamental_data.py")
+    for phrase in [
+        "three-column",
+        "two-column",
+        "empty",
+        "single_symbol_failure",
+        "update_real_data",
+    ]:
+        if phrase.lower() not in tests_source.lower():
+            failures.append(f"tests/test_real_basic_fundamental_data.py should cover {phrase}.")
+    if "total_score =" in read_source(root / "core/factors/scoring.py"):
+        pass
+    if "get_sample_dashboard_data" not in read_source(root / "core/sample_data.py"):
+        failures.append("sample smoke test support must remain available.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1752,6 +1796,7 @@ def main(argv: list[str] | None = None) -> int:
             "task35",
             "task36",
             "task37",
+            "task38",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
