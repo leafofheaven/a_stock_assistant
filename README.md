@@ -38,6 +38,7 @@ python scripts/check_task.py task27
 
 ```bash
 python -m core.jobs.diagnose_local_state
+python -m core.jobs.doctor_daily_run --pre-run
 python -m core.jobs.update_real_data
 python -m core.jobs.diagnose_real_data
 python -m core.jobs.diagnose_update_batch
@@ -46,6 +47,8 @@ python -m core.jobs.diagnose_factors
 python -m core.jobs.run_daily_selection
 python -m core.jobs.diagnose_backtest
 python -m core.jobs.run_real_workflow --backup-before-run
+python -m core.jobs.run_daily_workflow --doctor-before-run --backup-before-run --format all
+python -m core.jobs.doctor_daily_run --post-run
 streamlit run web/streamlit_app.py
 ```
 
@@ -81,12 +84,15 @@ python -m core.jobs.run_real_workflow --skip-update
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
 - 观察池评分刷新、跟踪与变化报告：`watchlist_snapshots`，`python -m core.jobs.refresh_watchlist_scores --dry-run`，`python -m core.jobs.track_watchlist`，`python -m core.jobs.export_watchlist_tracking_report`，`--track-watchlist`，`--export-watchlist-tracking`
 - 一键日常工作流与综合日报：`python -m core.jobs.run_daily_workflow --backup-before-run --format all`，`python -m core.jobs.run_daily_workflow --skip-update --format all`
+- 日常运行体检与安全恢复：`python -m core.jobs.doctor_daily_run --pre-run`，`python -m core.jobs.doctor_daily_run --post-run`，`python -m core.jobs.doctor_daily_run --fix-safe`，`python -m core.jobs.run_daily_workflow --doctor-before-run --backup-before-run --format all`
 - 观察池状态调整与复核记录管理：`python -m core.jobs.update_review_decision`，`python -m core.jobs.diagnose_review_history`，`--diagnose-review-history`
 - 本地数据备份与恢复：`python -m core.jobs.backup_local_data`，`python -m core.jobs.restore_local_data`，`python -m core.jobs.clean_generated_reports`
 
 `run_real_workflow` 偏底层真实数据流程诊断；`run_daily_workflow` 偏日常使用，会一键生成候选复核、观察池、跟踪和 `daily_workflow` 综合日报。
 
 数据质量口径：PE/PB 当前优先补全最新交易日。日报和候选/观察池报告优先看“最新交易日、当前候选、当前观察池”的完整率；全历史 `daily_basic` 完整率偏低通常只表示历史区间估值字段尚未逐日补全。
+
+日常稳定性：运行前可先执行 `python -m core.jobs.doctor_daily_run --pre-run` 检查 `.env`、DuckDB、`reports/.gitkeep`、最近备份和报告、Git 误提交风险。需要安全修复目录或 `reports/.gitkeep` 时运行 `python -m core.jobs.doctor_daily_run --fix-safe`。不要使用 `rm -rf reports`；清理生成报告请用 `python -m core.jobs.clean_generated_reports --force` 或 `find reports -type f ! -name ".gitkeep" -delete`。
 
 ## Streamlit 启动
 

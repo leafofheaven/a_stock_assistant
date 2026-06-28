@@ -149,15 +149,34 @@ python -m core.jobs.export_watchlist_tracking_report --format all
 命令：
 
 ```bash
+python -m core.jobs.doctor_daily_run --pre-run
 python -m core.jobs.run_daily_workflow --backup-before-run --format all
+python -m core.jobs.run_daily_workflow --doctor-before-run --backup-before-run --format all
 python -m core.jobs.run_daily_workflow --skip-update --format all
 python -m core.jobs.run_daily_workflow --top-n 10 --format all
 python -m core.jobs.run_daily_workflow --no-watchlist-tracking
+python -m core.jobs.doctor_daily_run --post-run
 ```
 
 作用：按日常顺序执行更新、数据质量诊断、因子诊断、选股、候选复核报告、观察池评分刷新、观察池报告、观察池跟踪，并导出 `reports/daily_workflow_*.md/json/csv`。`run_real_workflow` 偏底层诊断，`run_daily_workflow` 偏日常使用。
 
+`--doctor-before-run` 会把运行前体检摘要写入日报；如需运行后复查，可加 `--doctor-after-run`。只有加 `--stop-on-doctor-failure` 时，运行前体检失败才会阻断工作流。
+
 日报中的 PE/PB 质量优先看最新交易日、当前候选和当前观察池口径。全历史完整率低不一定表示当前候选缺估值。
+
+## 日常体检与安全修复
+
+命令：
+
+```bash
+python -m core.jobs.doctor_daily_run
+python -m core.jobs.doctor_daily_run --pre-run
+python -m core.jobs.doctor_daily_run --post-run
+python -m core.jobs.doctor_daily_run --fix-safe
+python -m core.jobs.doctor_daily_run --json
+```
+
+作用：检查当前分支、工作区、`.env`、DATA_PROVIDER、样本配置、DuckDB、核心表、最新行情日期、最新交易日 PE/PB 完整率、`reports/.gitkeep`、最近备份、最近日报和 Git 误提交风险。`--fix-safe` 只创建缺失的 `reports/`、`backups/`、`data/` 和 `reports/.gitkeep`，不会删除或覆盖 DuckDB，也不会修改 `.env`。
 
 ## 复核状态调整
 
@@ -191,6 +210,8 @@ python -m core.jobs.clean_generated_reports --force
 ```
 
 作用：诊断本地状态、备份 DuckDB、列出备份、恢复和清理生成报告。恢复默认不覆盖；`--force` 才会恢复。
+
+不要使用 `rm -rf reports`。推荐清理命令是 `python -m core.jobs.clean_generated_reports --force`，或 `find reports -type f ! -name ".gitkeep" -delete`，保留 `reports/.gitkeep`。
 
 ## Streamlit
 

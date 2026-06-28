@@ -20,6 +20,7 @@ source .venv/bin/activate
 
 ```bash
 python -m core.jobs.diagnose_local_state
+python -m core.jobs.doctor_daily_run --pre-run
 python -m core.jobs.diagnose_data_quality
 ```
 
@@ -33,6 +34,18 @@ python -m core.jobs.diagnose_data_quality
 - 是否发现本地数据路径被 Git 跟踪。
 - `stock_basic` 的行业、市场、上市日期完整率；
 - `daily_basic` 的 `pe`、`pb`、市值字段完整率。
+
+`doctor_daily_run` 还会检查当前分支、工作区、`.env`、DATA_PROVIDER、DuckDB 路径、核心表、`reports/.gitkeep`、最近备份、最近日报和 Git 误提交风险。
+
+## 安全修复
+
+```bash
+python -m core.jobs.doctor_daily_run --fix-safe
+```
+
+允许修复：创建缺失的 `reports/`、`backups/`、`data/` 和 `reports/.gitkeep`。
+
+不会做：删除或覆盖 `data/a_stock_assistant.duckdb`、修改 `.env`、自动提交、自动推送。
 
 ## 创建备份
 
@@ -85,6 +98,18 @@ python -m core.jobs.clean_generated_reports --force
 ```
 
 清理命令只匹配系统生成报告，不删除用户自定义文件。
+
+不要使用：
+
+```bash
+rm -rf reports
+```
+
+如需手动清理，保留 `reports/.gitkeep`：
+
+```bash
+find reports -type f ! -name ".gitkeep" -delete
+```
 
 ## 确认没有误提交
 
