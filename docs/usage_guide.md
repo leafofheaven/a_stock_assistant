@@ -178,6 +178,22 @@ python -m core.jobs.export_watchlist_tracking_report --format all
 
 `refresh_watchlist_scores` 会从本地 DuckDB 的最新行情、估值和评分结果刷新 active watch 股票；没有评分时会给出 `score_missing_reason`，不会修改人工复核决策。
 
+## 一键日常工作流
+
+推荐日常运行：
+
+```bash
+python -m core.jobs.run_daily_workflow --backup-before-run --format all
+```
+
+只使用本地库、不更新真实数据：
+
+```bash
+python -m core.jobs.run_daily_workflow --skip-update --format all
+```
+
+输出位于 `reports/daily_workflow_*.md/json/csv`，包含 Top 候选、观察池、观察池变化、PE/PB 完整率和下一步建议。`run_real_workflow` 仍保留用于底层真实数据流程诊断。
+
 手动调整复核状态：
 
 ```bash

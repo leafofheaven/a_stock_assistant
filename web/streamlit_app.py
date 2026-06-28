@@ -23,6 +23,7 @@ from core.reporting.review_template_report import latest_review_template_path, t
 from core.reporting.watchlist_report import load_latest_watchlist_report
 from core.reporting.watchlist_tracking_report import load_latest_watchlist_tracking_report
 from core.reporting.workflow_report import load_latest_workflow_report
+from core.reporting.daily_workflow_report import load_latest_daily_workflow_report
 
 SELECTION_COLUMNS = [
     "rank",
@@ -137,6 +138,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     coverage_rate = float(tables.get("_coverage_rate", 0.0) or 0.0)
     missing_count = int(tables.get("_missing_symbol_count", 0) or 0)
     latest_workflow_report = tables.get("_latest_workflow_report")
+    latest_daily_workflow_report = tables.get("_latest_daily_workflow_report")
     latest_selection_review_report = tables.get("_latest_selection_review_report")
     latest_review_template = tables.get("_latest_review_template")
     latest_watchlist_report = tables.get("_latest_watchlist_report")
@@ -162,6 +164,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "table_rows": {name: len(df) for name, df in tables.items() if isinstance(df, pd.DataFrame)},
         "last_job_status": _workflow_status_message(latest_workflow_report),
         "latest_workflow_report": latest_workflow_report,
+        "latest_daily_workflow_report": latest_daily_workflow_report,
         "latest_selection_review_report": latest_selection_review_report,
         "latest_review_template": latest_review_template,
         "latest_watchlist_report": latest_watchlist_report,
@@ -241,6 +244,7 @@ def load_dashboard_data() -> dict[str, Any]:
     if settings.data_provider == "sample":
         data = sample_dashboard_data()
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
@@ -255,6 +259,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实 DuckDB 文件不存在）"
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
@@ -279,6 +284,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实数据读取失败）"
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
@@ -295,6 +301,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实选股结果不足）"
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
         data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
         data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
@@ -305,6 +312,7 @@ def load_dashboard_data() -> dict[str, Any]:
         return data
 
     tables["_latest_workflow_report"] = load_latest_workflow_report()
+    tables["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
     tables["_latest_selection_review_report"] = load_latest_selection_review_report()
     tables["_latest_review_template"] = template_metadata(latest_review_template_path())
     tables["_latest_watchlist_report"] = load_latest_watchlist_report()
@@ -349,6 +357,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_coverage_rate"] = batch_diagnostic.get("coverage_rate", 0.0)
     real_tables["_missing_symbol_count"] = len(batch_diagnostic.get("missing_symbols", []))
     real_tables["_latest_workflow_report"] = load_latest_workflow_report()
+    real_tables["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
     real_tables["_latest_selection_review_report"] = load_latest_selection_review_report()
     real_tables["_latest_review_template"] = template_metadata(latest_review_template_path())
     real_tables["_latest_watchlist_report"] = load_latest_watchlist_report()
@@ -388,6 +397,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     st.caption("仅用于研究与辅助决策，不构成投资建议。")
     data_source_status = describe_dashboard_data_source(dashboard_data)
     st.info(f"数据来源：{data_source_status['data_source']}。{data_source_status['message']}")
+    st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
     tabs = st.tabs(["今日选股", "个股详情", "因子排名", "策略回测", "数据更新状态"])
     with tabs[0]:
@@ -666,6 +676,26 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
                 "报告路径": report.get("path"),
             }
         )
+    daily_report = status.get("latest_daily_workflow_report")
+    if daily_report:
+        st.write("最近 daily_workflow 日报")
+        st.write(
+            {
+                "最近运行时间": daily_report.get("run_time") or "暂无",
+                "整体状态": daily_report.get("overall_status") or "暂无",
+                "数据来源": daily_report.get("data_provider") or "暂无",
+                "最新行情日期": daily_report.get("latest_price_date") or "暂无",
+                "报告路径": daily_report.get("path"),
+            }
+        )
+        top_candidates = daily_report.get("top_candidates") or []
+        if top_candidates:
+            st.write("最近日报 Top10 候选")
+            st.dataframe(pd.DataFrame(top_candidates), use_container_width=True)
+        watchlist_items = daily_report.get("watchlist") or []
+        if watchlist_items:
+            st.write("最近日报观察池摘要")
+            st.dataframe(pd.DataFrame(watchlist_items), use_container_width=True)
     selection_review = status.get("latest_selection_review_report")
     if selection_review:
         st.write("最近 selection_review 报告")

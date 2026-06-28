@@ -144,6 +144,19 @@ python -m core.jobs.export_watchlist_tracking_report --format all
 
 作用：生成观察池 snapshot，并导出价格、评分、PE/PB 变化报告。重点看 `缺少行情股票数量`、`缺少评分股票数量`、`score_change`、`pe_change`、`pb_change`。
 
+## 一键日常工作流
+
+命令：
+
+```bash
+python -m core.jobs.run_daily_workflow --backup-before-run --format all
+python -m core.jobs.run_daily_workflow --skip-update --format all
+python -m core.jobs.run_daily_workflow --top-n 10 --format all
+python -m core.jobs.run_daily_workflow --no-watchlist-tracking
+```
+
+作用：按日常顺序执行更新、数据质量诊断、因子诊断、选股、候选复核报告、观察池评分刷新、观察池报告、观察池跟踪，并导出 `reports/daily_workflow_*.md/json/csv`。`run_real_workflow` 偏底层诊断，`run_daily_workflow` 偏日常使用。
+
 ## 复核状态调整
 
 命令：

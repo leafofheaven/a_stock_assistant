@@ -80,8 +80,11 @@ python -m core.jobs.run_real_workflow --skip-update
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
 - 观察池评分刷新、跟踪与变化报告：`watchlist_snapshots`，`python -m core.jobs.refresh_watchlist_scores --dry-run`，`python -m core.jobs.track_watchlist`，`python -m core.jobs.export_watchlist_tracking_report`，`--track-watchlist`，`--export-watchlist-tracking`
+- 一键日常工作流与综合日报：`python -m core.jobs.run_daily_workflow --backup-before-run --format all`，`python -m core.jobs.run_daily_workflow --skip-update --format all`
 - 观察池状态调整与复核记录管理：`python -m core.jobs.update_review_decision`，`python -m core.jobs.diagnose_review_history`，`--diagnose-review-history`
 - 本地数据备份与恢复：`python -m core.jobs.backup_local_data`，`python -m core.jobs.restore_local_data`，`python -m core.jobs.clean_generated_reports`
+
+`run_real_workflow` 偏底层真实数据流程诊断；`run_daily_workflow` 偏日常使用，会一键生成候选复核、观察池、跟踪和 `daily_workflow` 综合日报。
 
 ## Streamlit 启动
 
