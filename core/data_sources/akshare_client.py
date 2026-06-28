@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import pandas as pd
 
 from core.data_sources.base import DataSourceError, StockDataSource
+from core.data_sources.valuation_enrichment import ValuationEnricher, merge_latest_valuation
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,18 @@ class AKShareClient(StockDataSource):
                 result.loc[mask, "market"] = _market_from_ts_code(ts_code)
         return result
 
+    def enrich_daily_basic_valuation(self, daily_basic: pd.DataFrame, symbols: list[str] | None = None) -> pd.DataFrame:
+        """Fill PE/PB and market-cap fields on local daily_basic rows when possible."""
+        if not self.enable_valuation_enrichment or daily_basic.empty:
+            return daily_basic
+        if symbols is None:
+            symbols = daily_basic.get("ts_code", pd.Series(dtype="object")).dropna().astype(str).unique().tolist()
+        if not symbols:
+            return daily_basic
+        start_date = str(daily_basic["trade_date"].dropna().astype(str).min()) if "trade_date" in daily_basic.columns else ""
+        end_date = str(daily_basic["trade_date"].dropna().astype(str).max()) if "trade_date" in daily_basic.columns else ""
+        return self._merge_valuation_enrichment(daily_basic, symbols, start_date, end_date)
+
     def _module(self) -> Any:
         """Return the underlying AKShare module."""
         if self._akshare is not None:
@@ -220,39 +233,57 @@ class AKShareClient(StockDataSource):
         """Merge optional PE/PB and market-cap data into derived daily_basic rows."""
         if daily_basic.empty:
             return daily_basic
-        try:
-            getattr(self._module(), "stock_a_lg_indicator")
-        except AttributeError:
+        has_lg_indicator = hasattr(self._module(), "stock_a_lg_indicator")
+        if not has_lg_indicator:
             self._record_enrichment(
                 "ALL",
                 "daily_basic_valuation_enrichment_unavailable",
                 "AKShare function is unavailable: stock_a_lg_indicator",
             )
-            logger.warning("AKShare valuation enrichment skipped: stock_a_lg_indicator is unavailable.")
-            return daily_basic
+            logger.warning("AKShare stock_a_lg_indicator unavailable; trying valuation snapshot fallback.")
         frames: list[pd.DataFrame] = []
-        for symbol in symbols:
-            ts_code = _to_ts_code(symbol)
-            raw_frame, error_message = self._call_optional_raw("stock_a_lg_indicator", symbol=_normalize_symbol(symbol))
-            if error_message:
-                self._record_enrichment(ts_code, "daily_basic_valuation_enrichment", error_message)
-                logger.warning("AKShare valuation enrichment failed for %s: %s", symbol, error_message)
-                continue
-            raw = _standardize_fields("stock_a_lg_indicator", raw_frame)
-            if raw.empty:
-                self._record_enrichment(ts_code, "daily_basic_valuation_enrichment", "stock_a_lg_indicator returned empty data")
-                continue
-            if "trade_date" in raw.columns:
-                raw = raw[
-                    (raw["trade_date"].astype(str) >= start_date)
-                    & (raw["trade_date"].astype(str) <= end_date)
-                ].copy()
-            else:
-                raw["trade_date"] = end_date
-            raw["ts_code"] = ts_code
-            frames.append(raw)
+        if has_lg_indicator:
+            for symbol in symbols:
+                ts_code = _to_ts_code(symbol)
+                raw_frame, error_message = self._call_optional_raw("stock_a_lg_indicator", symbol=_normalize_symbol(symbol))
+                if error_message:
+                    self._record_enrichment(ts_code, "daily_basic_valuation_enrichment", error_message)
+                    logger.warning("AKShare valuation enrichment failed for %s: %s", symbol, error_message)
+                    continue
+                raw = _standardize_fields("stock_a_lg_indicator", raw_frame)
+                if raw.empty:
+                    self._record_enrichment(ts_code, "daily_basic_valuation_enrichment", "stock_a_lg_indicator returned empty data")
+                    continue
+                if "trade_date" in raw.columns:
+                    raw = raw[
+                        (raw["trade_date"].astype(str) >= start_date)
+                        & (raw["trade_date"].astype(str) <= end_date)
+                    ].copy()
+                else:
+                    raw["trade_date"] = end_date
+                raw["ts_code"] = ts_code
+                frames.append(raw)
         if not frames:
-            return daily_basic
+            snapshot, warnings = ValuationEnricher(
+                akshare_module=self._module(),
+                curl_runner=self._curl_runner,
+                request_timeout_seconds=self.request_timeout_seconds,
+            ).fetch_latest_valuation(symbols)
+            for warning in warnings:
+                self._record_enrichment(
+                    warning["symbol"],
+                    warning["failed_stage"],
+                    warning["error_message"],
+                )
+            if snapshot.empty:
+                return daily_basic
+            covered = set(snapshot["ts_code"].dropna().astype(str))
+            for symbol in symbols:
+                ts_code = _to_ts_code(symbol)
+                if ts_code not in covered:
+                    self._record_enrichment(ts_code, "daily_basic_valuation_enrichment_missing", "No PE/PB valuation snapshot available")
+            enriched = merge_latest_valuation(daily_basic, snapshot)
+            return enriched
         valuation = pd.concat(frames, ignore_index=True)
         merge_columns = ["ts_code", "trade_date", "pe", "pb", "ps", "total_mv", "circ_mv", "volume_ratio"]
         for column in merge_columns:
@@ -267,7 +298,7 @@ class AKShareClient(StockDataSource):
         for column in ["pe", "pb", "ps", "total_mv", "circ_mv", "volume_ratio"]:
             enriched = f"{column}_enriched"
             if enriched in merged.columns:
-                merged[column] = merged[enriched].combine_first(merged[column])
+                merged[column] = merged[column].where(merged[column].map(_not_missing_value), merged[enriched])
                 merged = merged.drop(columns=[enriched])
         return merged
 

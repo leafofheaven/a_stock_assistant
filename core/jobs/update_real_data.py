@@ -200,6 +200,17 @@ def _run_provider_update(
             table_name: _ensure_table_columns(table_name, frame)
             for table_name, frame in frames.items()
         }
+        if (
+            provider_name == "akshare"
+            and getattr(settings, "enable_real_valuation_enrichment", True)
+            and hasattr(client, "enrich_daily_basic_valuation")
+        ):
+            normalized_frames["daily_basic"] = _apply_valuation_enrichment(
+                client,
+                normalized_frames["daily_basic"],
+                normalized_frames["stock_basic"],
+                resolved_store,
+            )
         empty_tables = [
             table_name
             for table_name, frame in normalized_frames.items()
@@ -363,6 +374,64 @@ def _apply_local_basic_info_presets(client: StockDataSource, stock_basic: pd.Dat
             )
         records.extend(missing_records)
     return enriched
+
+
+def _apply_valuation_enrichment(
+    client: StockDataSource,
+    daily_basic: pd.DataFrame,
+    stock_basic: pd.DataFrame,
+    store: DuckDBStore,
+) -> pd.DataFrame:
+    """Fill valuation fields for current and existing local daily_basic rows."""
+    combined = _merge_existing_daily_basic(daily_basic, store)
+    symbols = _valuation_target_symbols(combined, stock_basic)
+    if not symbols:
+        return combined
+    try:
+        return client.enrich_daily_basic_valuation(combined, symbols)  # type: ignore[attr-defined]
+    except Exception as exc:
+        _record_client_enrichment(
+            client,
+            ["ALL"],
+            "daily_basic_valuation_enrichment",
+            f"{type(exc).__name__}: {exc}",
+        )
+        return combined
+
+
+def _merge_existing_daily_basic(daily_basic: pd.DataFrame, store: DuckDBStore) -> pd.DataFrame:
+    """Include existing daily_basic so valuation snapshots can repair prior samples."""
+    try:
+        existing = store.read_table("daily_basic")
+    except DuckDBStoreError:
+        existing = pd.DataFrame()
+    frames = [frame for frame in [existing, daily_basic] if not frame.empty]
+    if not frames:
+        return daily_basic
+    combined = pd.concat(frames, ignore_index=True)
+    if {"ts_code", "trade_date"}.issubset(combined.columns):
+        rows = []
+        for _, group in combined.groupby(["ts_code", "trade_date"], sort=False):
+            row = group.iloc[-1].copy()
+            for column in group.columns:
+                if _is_missing(row.get(column)):
+                    values = group[column].dropna()
+                    values = values[values.astype(str).str.strip() != ""]
+                    if not values.empty:
+                        row[column] = values.iloc[-1]
+            rows.append(row)
+        combined = pd.DataFrame(rows)
+    return combined.reset_index(drop=True)
+
+
+def _valuation_target_symbols(daily_basic: pd.DataFrame, stock_basic: pd.DataFrame) -> list[str]:
+    """Return target symbols from local tables for valuation snapshot repair."""
+    values: list[str] = []
+    if not stock_basic.empty and "ts_code" in stock_basic.columns:
+        values.extend(stock_basic["ts_code"].dropna().astype(str).tolist())
+    if not daily_basic.empty and "ts_code" in daily_basic.columns:
+        values.extend(daily_basic["ts_code"].dropna().astype(str).tolist())
+    return list(dict.fromkeys(_to_ts_code(symbol) for symbol in values if str(symbol).strip()))
 
 
 def _preset_filled_symbols(before: pd.DataFrame, after: pd.DataFrame) -> list[str]:
@@ -557,7 +626,7 @@ def _enrichment_summary(
         )
     if not getattr(settings, "enable_real_valuation_enrichment", True):
         valuation_status = "skipped"
-    elif any(item["failed_stage"] == "daily_basic_valuation_enrichment_unavailable" for item in warnings):
+    elif not valuation_success and any(item["failed_stage"] == "daily_basic_valuation_enrichment_unavailable" for item in warnings):
         valuation_status = "skipped"
     else:
         valuation_status = _enrichment_status(
