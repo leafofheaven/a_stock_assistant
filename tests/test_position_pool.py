@@ -93,7 +93,7 @@ def test_build_positions_dataframe_adds_latest_close_pnl_and_holding_days(tmp_pa
     assert positions.iloc[0]["latest_close"] == 12.0
     assert positions.iloc[0]["pnl_pct"] == pytest.approx(0.20)
     assert positions.iloc[0]["holding_days"] == 27
-    assert positions.iloc[0]["data_quality_note"] == "数据可用于基础持仓展示"
+    assert positions.iloc[0]["data_quality_note"] == "数据可用于持仓每日跟踪"
 
 
 def test_build_positions_dataframe_handles_missing_price_without_crashing(tmp_path: Path) -> None:
@@ -105,7 +105,7 @@ def test_build_positions_dataframe_handles_missing_price_without_crashing(tmp_pa
 
     assert pd.isna(positions.iloc[0]["latest_close"])
     assert positions.iloc[0]["pnl_pct"] is None
-    assert "最新收盘价数据不足" in positions.iloc[0]["data_quality_note"]
+    assert "行情数据不足" in positions.iloc[0]["data_quality_note"]
 
 
 def test_import_positions_from_dataframe_and_job(tmp_path: Path) -> None:

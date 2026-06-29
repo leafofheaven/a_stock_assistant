@@ -10,6 +10,7 @@ import uuid
 import pandas as pd
 
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+from core.technical.elder import build_elder_review
 
 ALLOWED_POSITION_STATUS = {"active", "reduced", "exited"}
 ALLOWED_POSITION_SOURCES = {"selection", "watchlist", "elder_review", "manual"}
@@ -237,18 +238,59 @@ def build_positions_dataframe(store: DuckDBStore, active_only: bool = False) -> 
     """Return positions enriched with latest close, PnL percentage and holding days."""
     positions = read_positions(store, active_only=active_only)
     if positions.empty:
-        return pd.DataFrame(columns=[*POSITION_COLUMNS, "latest_trade_date", "latest_close", "pnl_pct", "holding_days", "data_quality_note"])
-    latest = _latest_price_frame(store)
-    result = positions.copy()
-    if not latest.empty:
-        result = result.merge(latest, on="ts_code", how="left")
-    else:
-        result["latest_trade_date"] = pd.NA
-        result["latest_close"] = pd.NA
-    result["pnl_pct"] = result.apply(_calculate_pnl_pct, axis=1)
-    result["holding_days"] = result.apply(_calculate_holding_days, axis=1)
-    result["data_quality_note"] = result.apply(_position_quality_note, axis=1)
-    return result.reset_index(drop=True)
+        return pd.DataFrame(columns=position_tracking_columns())
+    return enrich_positions_with_tracking(positions, store=store).reset_index(drop=True)
+
+
+def track_active_positions(store: DuckDBStore) -> pd.DataFrame:
+    """Track active positions with local price and Elder review state."""
+    positions = read_positions(store, active_only=True)
+    if positions.empty:
+        return pd.DataFrame(columns=position_tracking_columns())
+    return enrich_positions_with_tracking(positions, store=store).reset_index(drop=True)
+
+
+def enrich_positions_with_tracking(positions: pd.DataFrame, *, store: DuckDBStore) -> pd.DataFrame:
+    """Add daily tracking fields to a positions frame without mutating storage."""
+    if positions.empty:
+        return pd.DataFrame(columns=position_tracking_columns())
+    try:
+        price = store.read_table("daily_price")
+    except DuckDBStoreError:
+        price = pd.DataFrame()
+    rows: list[dict[str, Any]] = []
+    for _, row in positions.iterrows():
+        record = row.to_dict()
+        tracked = _track_one_position(record, price)
+        rows.append({**record, **tracked})
+    result = pd.DataFrame(rows)
+    for column in position_tracking_columns():
+        if column not in result.columns:
+            result[column] = pd.NA
+    return result
+
+
+def position_tracking_columns() -> list[str]:
+    """Return the full set of position and tracking columns."""
+    return [
+        *POSITION_COLUMNS,
+        "latest_trade_date",
+        "latest_close",
+        "pnl_pct",
+        "holding_days",
+        "max_gain_pct",
+        "max_drawdown_pct",
+        "close_to_entry_pct",
+        "latest_elder_score",
+        "weekly_trend",
+        "daily_pullback",
+        "force_signal",
+        "elder_ray_signal",
+        "technical_state",
+        "position_hint",
+        "position_reason",
+        "data_quality_note",
+    ]
 
 
 def find_active_position(store: DuckDBStore, ts_code: str) -> dict[str, Any]:
@@ -286,6 +328,132 @@ def _latest_price_frame(store: DuckDBStore) -> pd.DataFrame:
         return pd.DataFrame(columns=["ts_code", "latest_trade_date", "latest_close"])
     latest = price.sort_values("trade_date").groupby("ts_code", as_index=False).tail(1)
     return latest[["ts_code", "trade_date", "close"]].rename(columns={"trade_date": "latest_trade_date", "close": "latest_close"})
+
+
+def _track_one_position(position: dict[str, Any], price_df: pd.DataFrame) -> dict[str, Any]:
+    code = _clean_text(position.get("ts_code")).upper()
+    entry_date = _normalize_date(position.get("entry_date"))
+    entry_price = _to_float(position.get("entry_price"))
+    empty_result = _empty_tracking_result("数据不足", "持仓买入日期之后行情数据不足。")
+    if not code or not entry_date or price_df.empty or not {"ts_code", "trade_date", "close"}.issubset(price_df.columns):
+        return empty_result
+    history = price_df[price_df["ts_code"].astype(str) == code].copy()
+    if history.empty:
+        return empty_result
+    history["trade_date"] = history["trade_date"].astype(str)
+    history = history.sort_values("trade_date")
+    held = history[history["trade_date"] >= entry_date].copy()
+    if held.empty:
+        return empty_result
+    close = pd.to_numeric(held["close"], errors="coerce")
+    if close.dropna().empty:
+        return empty_result
+    latest = held.iloc[-1]
+    latest_close = _to_float(latest.get("close"))
+    latest_trade_date = _clean_text(latest.get("trade_date"))
+    if latest_close is None or entry_price is None or entry_price == 0:
+        result = _empty_tracking_result("数据不足", "最新收盘价或买入价数据不足。")
+        result.update({"latest_trade_date": latest_trade_date or None, "latest_close": latest_close})
+        return result
+    pnl_pct = latest_close / entry_price - 1
+    max_gain_pct = float(close.max() / entry_price - 1)
+    max_drawdown_pct = float(close.min() / entry_price - 1)
+    elder = _latest_elder_for_position(position, history)
+    technical_state = _technical_state(elder)
+    hint, reason = _position_hint(
+        pnl_pct=pnl_pct,
+        max_drawdown_pct=max_drawdown_pct,
+        latest_elder_score=_to_float(elder.get("elder_score")),
+        technical_state=technical_state,
+    )
+    return {
+        "latest_trade_date": latest_trade_date,
+        "latest_close": latest_close,
+        "pnl_pct": pnl_pct,
+        "holding_days": _calculate_holding_days(pd.Series({**position, "latest_trade_date": latest_trade_date})),
+        "max_gain_pct": max_gain_pct,
+        "max_drawdown_pct": max_drawdown_pct,
+        "close_to_entry_pct": pnl_pct,
+        "latest_elder_score": _to_float(elder.get("elder_score")),
+        "weekly_trend": elder.get("weekly_trend") or "数据不足",
+        "daily_pullback": elder.get("daily_pullback") or "数据不足",
+        "force_signal": elder.get("force_signal") or "数据不足",
+        "elder_ray_signal": elder.get("elder_ray_signal") or "数据不足",
+        "technical_state": technical_state,
+        "position_hint": hint,
+        "position_reason": reason,
+        "data_quality_note": "数据可用于持仓每日跟踪",
+    }
+
+
+def _latest_elder_for_position(position: dict[str, Any], history: pd.DataFrame) -> dict[str, Any]:
+    candidate = pd.DataFrame(
+        [
+            {
+                "rank": 1,
+                "ts_code": position.get("ts_code"),
+                "name": position.get("name"),
+                "trade_date": history["trade_date"].astype(str).max() if "trade_date" in history.columns else "",
+                "total_score": position.get("entry_total_score"),
+            }
+        ]
+    )
+    review = build_elder_review(candidate, history)
+    if review.empty:
+        return {}
+    return review.iloc[-1].to_dict()
+
+
+def _technical_state(elder: dict[str, Any]) -> str:
+    action_hint = _clean_text(elder.get("action_hint"))
+    if not action_hint:
+        return "数据不足"
+    if action_hint == "趋势确认，进入人工复核":
+        return "技术节奏正常"
+    if action_hint == "趋势尚可，等待回调":
+        return "节奏观察"
+    if action_hint == "短线过热，不追":
+        return "短线过热"
+    if action_hint == "趋势偏弱，暂缓":
+        return "技术偏弱"
+    return action_hint
+
+
+def _position_hint(
+    *,
+    pnl_pct: float | None,
+    max_drawdown_pct: float | None,
+    latest_elder_score: float | None,
+    technical_state: str,
+) -> tuple[str, str]:
+    if pnl_pct is None or max_drawdown_pct is None:
+        return "数据不足", "最新行情或买入价不足，暂不能生成持仓跟踪提示。"
+    if max_drawdown_pct <= -0.10 or technical_state in {"技术偏弱", "短线过热"}:
+        return "波动加大，需人工复核", "持仓以来回撤或技术状态波动加大，需要人工复核，不构成交易指令。"
+    if pnl_pct < 0 or max_drawdown_pct <= -0.05 or (latest_elder_score is not None and latest_elder_score < 45):
+        return "持有观察", "当前持仓表现或技术节奏需要继续观察，不构成交易指令。"
+    return "持仓正常", "当前本地行情和技术节奏未触发异常提示。"
+
+
+def _empty_tracking_result(hint: str, reason: str) -> dict[str, Any]:
+    return {
+        "latest_trade_date": None,
+        "latest_close": None,
+        "pnl_pct": None,
+        "holding_days": None,
+        "max_gain_pct": None,
+        "max_drawdown_pct": None,
+        "close_to_entry_pct": None,
+        "latest_elder_score": None,
+        "weekly_trend": "数据不足",
+        "daily_pullback": "数据不足",
+        "force_signal": "数据不足",
+        "elder_ray_signal": "数据不足",
+        "technical_state": "数据不足",
+        "position_hint": hint,
+        "position_reason": reason,
+        "data_quality_note": reason,
+    }
 
 
 def _calculate_pnl_pct(row: pd.Series) -> float | None:
