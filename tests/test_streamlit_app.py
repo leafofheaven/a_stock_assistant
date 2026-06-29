@@ -129,7 +129,7 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
     )
 
     assert fake_streamlit.title_text == "A 股选股辅助"
-    assert fake_streamlit.tab_names == ["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "策略回测", "数据更新状态", "本地控制台"]
+    assert fake_streamlit.tab_names == ["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "持仓池", "策略回测", "数据更新状态", "本地控制台"]
     assert fake_streamlit.info_messages
 
 
@@ -224,11 +224,14 @@ class FakeStreamlit:
     def checkbox(self, label: str, value: bool = False, **kwargs) -> bool:
         return value
 
-    def text_input(self, label: str, value: str = "") -> str:
+    def text_input(self, label: str, value: str = "", **kwargs) -> str:
         return value
 
     def number_input(self, label: str, **kwargs):
         return kwargs.get("value", 0)
+
+    def text_area(self, label: str, value: str = "", **kwargs) -> str:
+        return value
 
     def form(self, key: str) -> FakeForm:
         return FakeForm()

@@ -54,6 +54,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task41": check_task41,
         "task42": check_task42,
         "task43": check_task43,
+        "task44": check_task44,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2001,6 +2002,64 @@ def check_task43(root: Path) -> list[str]:
     return failures
 
 
+def check_task44(root: Path) -> list[str]:
+    """Check Task 44 position pool foundation."""
+    failures = check_paths(
+        root,
+        [
+            "core/positions/position_pool.py",
+            "core/jobs/import_positions.py",
+            "core/jobs/export_positions.py",
+            "core/reporting/positions_report.py",
+            "docs/position_pool.md",
+            "docs/templates/positions_import_template.csv",
+            "tests/test_position_pool.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    schema_source = read_source(root / "core/storage/schema.sql")
+    for phrase in ["CREATE TABLE IF NOT EXISTS positions", "entry_price", "entry_total_score", "entry_elder_score", "initial_stop", "status"]:
+        if phrase not in schema_source:
+            failures.append(f"schema.sql is missing positions field: {phrase}.")
+
+    source = read_source(root / "core/positions/position_pool.py")
+    for phrase in [
+        "create_position",
+        "import_positions",
+        "update_position_status",
+        "build_positions_dataframe",
+        "active position",
+        "pnl_pct",
+        "holding_days",
+        "active",
+        "reduced",
+        "exited",
+    ]:
+        if phrase not in source:
+            failures.append(f"core/positions/position_pool.py is missing {phrase}.")
+
+    jobs_source = read_source(root / "core/jobs/import_positions.py") + read_source(root / "core/jobs/export_positions.py")
+    for phrase in ["import_positions", "export_positions", "--file", "--format", "markdown"]:
+        if phrase not in jobs_source:
+            failures.append(f"Task 44 jobs are missing {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["持仓池", "entry_price", "latest_close", "pnl_pct", "holding_days"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 44 phrase: {phrase}.")
+
+    docs = read_source(root / "docs/position_pool.md") + read_source(root / "README.md") + read_source(root / "docs/commands_reference.md")
+    for phrase in ["python -m core.jobs.import_positions", "python -m core.jobs.export_positions", "active / reduced / exited", "不自动交易"]:
+        if phrase not in docs:
+            failures.append(f"Task 44 docs are missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_position_pool.py")
+    for phrase in ["create_position", "active position", "update_position_status", "latest_close", "pnl_pct", "export_positions", "total_score"]:
+        if phrase.lower() not in tests_source.lower():
+            failures.append(f"tests/test_position_pool.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2075,6 +2134,7 @@ def main(argv: list[str] | None = None) -> int:
             "task41",
             "task42",
             "task43",
+            "task44",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
