@@ -20,6 +20,17 @@ POSITION_REPORT_COLUMNS = [
     "latest_close",
     "pnl_pct",
     "holding_days",
+    "max_gain_pct",
+    "max_drawdown_pct",
+    "close_to_entry_pct",
+    "latest_elder_score",
+    "weekly_trend",
+    "daily_pullback",
+    "force_signal",
+    "elder_ray_signal",
+    "technical_state",
+    "position_hint",
+    "position_reason",
     "source",
     "entry_reason",
     "status",
@@ -96,24 +107,27 @@ def render_positions_markdown(report: dict[str, Any]) -> str:
         return "\n".join(lines)
     lines.extend(
         [
-            "| 股票代码 | 股票名称 | 买入日期 | 买入价 | 最新收盘价 | 当前盈亏% | 持仓天数 | 来源 | 买入理由 | 状态 | 数据提示 |",
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |",
+            "| 股票代码 | 股票名称 | 买入日期 | 买入价 | 最新收盘价 | 当前盈亏% | 最大浮盈% | 最大回撤% | 持仓天数 | 最新Elder | 技术状态 | 持仓提示 | 状态 | 原因 |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |",
         ]
     )
     for item in positions:
         lines.append(
-            "| {ts_code} | {name} | {entry_date} | {entry_price} | {latest_close} | {pnl_pct} | {holding_days} | {source} | {entry_reason} | {status} | {note} |".format(
+            "| {ts_code} | {name} | {entry_date} | {entry_price} | {latest_close} | {pnl_pct} | {max_gain} | {max_drawdown} | {holding_days} | {elder_score} | {technical_state} | {position_hint} | {status} | {reason} |".format(
                 ts_code=item.get("ts_code") or "",
                 name=item.get("name") or "",
                 entry_date=item.get("entry_date") or "",
                 entry_price=_fmt_number(item.get("entry_price")),
                 latest_close=_fmt_number(item.get("latest_close")),
                 pnl_pct=_fmt_pct(item.get("pnl_pct")),
+                max_gain=_fmt_pct(item.get("max_gain_pct")),
+                max_drawdown=_fmt_pct(item.get("max_drawdown_pct")),
                 holding_days=item.get("holding_days") if item.get("holding_days") is not None else "暂无",
-                source=item.get("source") or "",
-                entry_reason=item.get("entry_reason") or "",
+                elder_score=_fmt_number(item.get("latest_elder_score")),
+                technical_state=item.get("technical_state") or "",
+                position_hint=item.get("position_hint") or "",
                 status=item.get("status") or "",
-                note=item.get("data_quality_note") or "",
+                reason=item.get("position_reason") or item.get("data_quality_note") or "",
             )
         )
     return "\n".join(lines)
@@ -124,6 +138,7 @@ def build_console_summary(report: dict[str, Any], files: dict[str, str]) -> str:
     lines = [
         "持仓池导出摘要",
         f"- 持仓记录数量: {report.get('position_count', 0)}",
+        "- 已包含每日跟踪字段: latest_close, pnl_pct, max_gain_pct, max_drawdown_pct, latest_elder_score, position_hint。",
         f"- 生成文件: {', '.join(files.values()) if files else '无'}",
         f"- 提示: {report.get('note', '仅供个人研究使用，不自动交易。')}",
     ]

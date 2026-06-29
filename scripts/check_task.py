@@ -55,6 +55,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task42": check_task42,
         "task43": check_task43,
         "task44": check_task44,
+        "task45": check_task45,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2060,6 +2061,64 @@ def check_task44(root: Path) -> list[str]:
     return failures
 
 
+def check_task45(root: Path) -> list[str]:
+    """Check Task 45 position daily tracking."""
+    failures = check_paths(
+        root,
+        [
+            "core/positions/position_pool.py",
+            "core/jobs/track_positions.py",
+            "core/jobs/export_positions.py",
+            "core/reporting/positions_report.py",
+            "docs/position_tracking.md",
+            "tests/test_position_tracking.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    source = read_source(root / "core/positions/position_pool.py")
+    for phrase in [
+        "track_active_positions",
+        "enrich_positions_with_tracking",
+        "max_gain_pct",
+        "max_drawdown_pct",
+        "close_to_entry_pct",
+        "latest_elder_score",
+        "technical_state",
+        "position_hint",
+        "position_reason",
+        "波动加大，需人工复核",
+        "数据不足",
+    ]:
+        if phrase not in source:
+            failures.append(f"core/positions/position_pool.py is missing Task 45 phrase: {phrase}.")
+
+    job_source = read_source(root / "core/jobs/track_positions.py")
+    for phrase in ["track_positions", "--format", "markdown", "all"]:
+        if phrase not in job_source:
+            failures.append(f"core/jobs/track_positions.py is missing {phrase}.")
+
+    report_source = read_source(root / "core/reporting/positions_report.py")
+    for phrase in ["max_gain_pct", "max_drawdown_pct", "latest_elder_score", "position_hint"]:
+        if phrase not in report_source:
+            failures.append(f"positions_report.py is missing tracking field {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["max_gain_pct", "max_drawdown_pct", "latest_elder_score", "technical_state", "position_hint", "position_reason"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 45 display field: {phrase}.")
+
+    docs = read_source(root / "docs/position_tracking.md") + read_source(root / "README.md") + read_source(root / "docs/commands_reference.md")
+    for phrase in ["python -m core.jobs.track_positions", "持仓正常", "持有观察", "波动加大，需人工复核", "不自动交易"]:
+        if phrase not in docs:
+            failures.append(f"Task 45 docs are missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_position_tracking.py")
+    for phrase in ["pnl_pct", "holding_days", "max_gain_pct", "max_drawdown_pct", "track_positions", "export_positions", "total_score"]:
+        if phrase.lower() not in tests_source.lower():
+            failures.append(f"tests/test_position_tracking.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2135,6 +2194,7 @@ def main(argv: list[str] | None = None) -> int:
             "task42",
             "task43",
             "task44",
+            "task45",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
