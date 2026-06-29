@@ -678,7 +678,7 @@ def _render_selection_logic_tab(st: Any, selection_df: pd.DataFrame) -> None:
 
 def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.DataFrame) -> None:
     st.subheader("埃尔德复核")
-    st.caption("二次技术复核层，不覆盖 total_score，不改变今日选股原始排序。")
+    st.caption("二次技术状态 / 节奏复核层，不覆盖 total_score，不改变今日选股原始排序，也不代表买入优先级。")
     review_df = build_elder_review(selection_df, price_df)
     if review_df.empty:
         st.info("暂无埃尔德复核结果。请先运行每日选股并确保本地 daily_price 有足够行情。")
@@ -712,7 +712,7 @@ def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.D
     st.dataframe(review_df[available], use_container_width=True)
     st.write("状态分布")
     st.dataframe(review_df["action_hint"].value_counts(dropna=False).rename_axis("action_hint").reset_index(name="count"), use_container_width=True)
-    st.info("操作建议只用于人工复核流程，不改变今日选股 total_score 排序。批量导出可运行 python -m core.jobs.export_elder_review。")
+    st.info("操作建议只用于人工复核流程，不改变今日选股 total_score 排序；“短线过热，不追”表示短期回撤风险偏高，不等于中期趋势一定转弱。批量导出可运行 python -m core.jobs.export_elder_review。")
     st.caption("命令行：python -m core.jobs.run_elder_review 或 python -m core.jobs.export_elder_review --format markdown")
 
 

@@ -2,6 +2,8 @@
 
 Task 42 增加 `backtest_elder_review`，用于回看埃尔德复核层在历史样本中的表现。它只读取本地 `daily_price` 或 sample 数据，不修改 `total_score`、因子权重、今日选股原始排序，也不会自动交易。
 
+Task 43 后，回看报告把 `elder_score` 明确定位为“技术状态 / 节奏复核分”，不是买入优先级或收益预测。
+
 ## 运行命令
 
 默认生成 Markdown、CSV、JSON：
@@ -43,10 +45,16 @@ python -m core.jobs.backtest_elder_review --start-date 20240101 --end-date 20260
 
 - `elder_score` 分组：top / middle / bottom
 - `action_hint` 分组：趋势确认，进入人工复核；趋势尚可，等待回调；短线过热，不追；趋势偏弱，暂缓；数据不足
+- 当前候选 / `selection_review` 样本分组：当明细中存在 `rank` 或 `total_score` 时单独统计；
+- `total_score 分层`：high / middle / low / unknown，用于观察同一选股强弱层里的 Elder 表现；
+- 市场阶段分层：strong / range / weak / unknown，基于样本平均 20 日历史涨跌粗分，不使用未来数据；
+- 市场阶段 x `action_hint` 组合分层。
 
 ## 如何解读
 
-重点看 top / middle / bottom 的 5 日、10 日、20 日未来收益和命中率是否有梯度，也可以看不同 `action_hint` 的后续表现是否符合直觉。
+重点看 top / middle / bottom 的 5 日、10 日、20 日未来收益和命中率是否有梯度，也可以看不同 `action_hint` 的后续表现是否符合直觉。若 top 组或“趋势确认”组没有跑赢其他组，应把它理解为节奏提示，而不是收益预测。
+
+`短线过热，不追` 的含义是短期回撤风险偏高；如果 20 日 `max_gain` 较高，可能说明它处在强趋势中的高位波动阶段，不应简单解读为中期趋势差。
 
 如果报告显示有效信号数量很少，通常是因为样本股票少、历史天数不足，或接近样本结束日期的记录缺少未来 20 日行情。
 

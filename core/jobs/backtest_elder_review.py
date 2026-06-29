@@ -18,8 +18,12 @@ from core.technical.elder import _classify_elder_state, _review_action, calculat
 
 DETAIL_COLUMNS = [
     "signal_date",
+    "rank",
     "ts_code",
     "name",
+    "total_score",
+    "total_score_group",
+    "market_stage",
     "elder_score",
     "elder_score_group",
     "action_hint",
@@ -62,8 +66,13 @@ def backtest_elder_review(
         "end_date": end_date or _max_date(price_df),
         "sample_stock_count": _nunique(price_df, "ts_code"),
         "valid_signal_count": int(len(details)),
+        "candidate_signal_count": summary["candidate_signal_count"],
         "elder_score_group_summary": summary["elder_score_group_summary"],
         "action_hint_summary": summary["action_hint_summary"],
+        "candidate_action_hint_summary": summary["candidate_action_hint_summary"],
+        "total_score_group_summary": summary["total_score_group_summary"],
+        "market_stage_summary": summary["market_stage_summary"],
+        "market_stage_action_hint_summary": summary["market_stage_action_hint_summary"],
         "has_reverse_signal": summary["has_reverse_signal"],
         "skip_reasons": _skip_reasons(price_df, details),
         "details_df": details,
@@ -89,6 +98,7 @@ def build_elder_backtest_details(
     source["trade_date"] = source["trade_date"].astype(str)
     indicators = calculate_elder_indicators(source)
     weekly_lookup = _calculate_weekly_trend_history(source)
+    market_stage_lookup = _market_stage_by_date(source)
     for ts_code, group in source.groupby("ts_code", sort=False):
         history = group.sort_values("trade_date").reset_index(drop=True)
         indicator_history = indicators[indicators["ts_code"].astype(str) == str(ts_code)].sort_values("trade_date").reset_index(drop=True)
@@ -117,8 +127,12 @@ def build_elder_backtest_details(
             metrics = calculate_forward_metrics(history, idx)
             row = {
                 "signal_date": signal_date,
+                "rank": current.get("rank"),
                 "ts_code": ts_code,
                 "name": current.get("name", ""),
+                "total_score": _to_float(current.get("total_score")),
+                "total_score_group": total_score_group(current.get("total_score")),
+                "market_stage": market_stage_lookup.get(signal_date, "unknown"),
                 "close": _to_float(current.get("close")),
                 "elder_score": elder_score,
                 "action_hint": action_hint,
@@ -190,11 +204,29 @@ def elder_score_group(value: Any) -> str:
     return "bottom"
 
 
+def total_score_group(value: Any) -> str:
+    """Group total_score for layered Elder validation."""
+    score = _to_float(value)
+    if score is None:
+        return "unknown"
+    if score >= 70:
+        return "high"
+    if score >= 45:
+        return "middle"
+    return "low"
+
+
 def summarize_elder_backtest(details: pd.DataFrame) -> dict[str, Any]:
     """Summarize future performance by score group and action_hint."""
+    candidate_details = _candidate_details(details)
     return {
+        "candidate_signal_count": int(len(candidate_details)),
         "elder_score_group_summary": _group_summary(details, "elder_score_group"),
         "action_hint_summary": _group_summary(details, "action_hint"),
+        "candidate_action_hint_summary": _group_summary(candidate_details, "action_hint"),
+        "total_score_group_summary": _group_summary(details, "total_score_group"),
+        "market_stage_summary": _group_summary(details, "market_stage"),
+        "market_stage_action_hint_summary": _two_level_group_summary(details, "market_stage", "action_hint"),
         "has_reverse_signal": _has_reverse_signal(details),
     }
 
@@ -237,7 +269,9 @@ def render_elder_backtest_markdown(result: dict[str, Any]) -> str:
         f"- 样本区间: {result.get('start_date') or '暂无'} 至 {result.get('end_date') or '暂无'}",
         f"- 样本股票数量: {result.get('sample_stock_count', 0)}",
         f"- 有效信号数量: {result.get('valid_signal_count', 0)}",
+        f"- 当前候选/selection_review 样本信号数量: {result.get('candidate_signal_count', 0)}",
         f"- 是否存在明显反向信号: {'是' if result.get('has_reverse_signal') else '否'}",
+        f"- 解释口径: elder_score 是技术状态 / 节奏复核分，不是买入优先级或收益预测。",
         "",
         "## elder_score 分组表现",
         "",
@@ -246,6 +280,29 @@ def render_elder_backtest_markdown(result: dict[str, Any]) -> str:
         "## action_hint 分组表现",
         "",
         *_summary_table_lines(result.get("action_hint_summary", []), "action_hint"),
+        "",
+        "## 当前候选 / selection_review 样本表现",
+        "",
+        *_summary_table_lines(result.get("candidate_action_hint_summary", []), "action_hint"),
+        "",
+        "## total_score 分层后的 elder 表现",
+        "",
+        *_summary_table_lines(result.get("total_score_group_summary", []), "total_score_group"),
+        "",
+        "## 市场阶段分层表现",
+        "",
+        *_summary_table_lines(result.get("market_stage_summary", []), "market_stage"),
+        "",
+        "## 市场阶段 x action_hint",
+        "",
+        *_summary_table_lines(result.get("market_stage_action_hint_summary", []), "market_stage/action_hint"),
+        "",
+        "## action_hint 解释",
+        "",
+        "- 趋势确认，进入人工复核：表示技术节奏具备人工复核条件，不表示收益预测或买入优先级。",
+        "- 趋势尚可，等待回调：趋势结构尚可，但节奏或位置仍需等待更合适的复核点。",
+        "- 短线过热，不追：短期回撤风险偏高，但不等于中期趋势差，可作为等待回调或移动止损观察信号。",
+        "- 趋势偏弱，暂缓：周线或短线结构未改善，先降低技术复核优先度。",
         "",
         "## 数据不足或跳过原因",
         "",
@@ -283,7 +340,9 @@ def main(argv: list[str] | None = None) -> None:
     print(f"- 样本区间: {result.get('start_date') or '暂无'} 至 {result.get('end_date') or '暂无'}")
     print(f"- 样本股票数量: {result['sample_stock_count']}")
     print(f"- 有效信号数量: {result['valid_signal_count']}")
+    print(f"- 当前候选/selection_review 样本信号数量: {result['candidate_signal_count']}")
     print(f"- 是否存在明显反向信号: {'是' if result['has_reverse_signal'] else '否'}")
+    print("- elder_score 口径: 技术状态 / 节奏复核分，不代表买入优先级。")
     print(f"- 生成文件: {', '.join(result.get('generated_files', {}).values())}")
     print(f"- 风险提示: {result['risk_note']}")
 
@@ -364,6 +423,34 @@ def _calculate_weekly_trend_history(price_df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=["ts_code", "trade_date", "weekly_trend_improving"])
 
 
+def _market_stage_by_date(price_df: pd.DataFrame) -> dict[str, str]:
+    """Classify market stage from sample average trailing 20-day returns."""
+    if price_df.empty or not {"ts_code", "trade_date", "close"}.issubset(price_df.columns):
+        return {}
+    source = price_df.copy()
+    source["trade_date"] = source["trade_date"].astype(str)
+    frames = []
+    for _, group in source.groupby("ts_code", sort=False):
+        df = group.sort_values("trade_date").copy()
+        close = pd.to_numeric(df["close"], errors="coerce")
+        df["trailing_return_20d"] = close / close.shift(20) - 1
+        frames.append(df[["trade_date", "trailing_return_20d"]])
+    if not frames:
+        return {}
+    avg_by_date = pd.concat(frames, ignore_index=True).groupby("trade_date")["trailing_return_20d"].mean()
+    stages: dict[str, str] = {}
+    for trade_date, value in avg_by_date.items():
+        if pd.isna(value):
+            stages[str(trade_date)] = "unknown"
+        elif float(value) >= 0.02:
+            stages[str(trade_date)] = "strong"
+        elif float(value) <= -0.02:
+            stages[str(trade_date)] = "weak"
+        else:
+            stages[str(trade_date)] = "range"
+    return stages
+
+
 def _latest_weekly_for_date(weekly: pd.DataFrame, ts_code: str, signal_date: str) -> pd.Series | None:
     if weekly.empty or "ts_code" not in weekly.columns or "trade_date" not in weekly.columns:
         return None
@@ -388,6 +475,25 @@ def _group_summary(details: pd.DataFrame, group_col: str) -> list[dict[str, Any]
         row["avg_max_gain_20d"] = _mean(_numeric_column(group, "max_gain_20d"))
         rows.append(row)
     return sorted(rows, key=lambda item: item["group"])
+
+
+def _two_level_group_summary(details: pd.DataFrame, first_col: str, second_col: str) -> list[dict[str, Any]]:
+    if details.empty or first_col not in details.columns or second_col not in details.columns:
+        return []
+    source = details.copy()
+    source[f"{first_col}/{second_col}"] = source[first_col].astype(str) + "/" + source[second_col].astype(str)
+    return _group_summary(source, f"{first_col}/{second_col}")
+
+
+def _candidate_details(details: pd.DataFrame) -> pd.DataFrame:
+    if details.empty:
+        return details
+    mask = pd.Series(False, index=details.index)
+    if "rank" in details.columns:
+        mask = mask | pd.to_numeric(details["rank"], errors="coerce").notna()
+    if "total_score" in details.columns:
+        mask = mask | pd.to_numeric(details["total_score"], errors="coerce").notna()
+    return details[mask].copy()
 
 
 def _numeric_column(df: pd.DataFrame, column: str) -> pd.Series:
