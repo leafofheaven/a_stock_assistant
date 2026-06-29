@@ -57,6 +57,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task44": check_task44,
         "task45": check_task45,
         "task46": check_task46,
+        "task47": check_task47,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2190,6 +2191,73 @@ def check_task46(root: Path) -> list[str]:
     return failures
 
 
+def check_task47(root: Path) -> list[str]:
+    """Check Task 47 full-universe update stability support."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/update_real_data.py",
+            "core/jobs/diagnose_update_batch.py",
+            "tests/test_full_update_stability.py",
+            "docs/real_universe.md",
+        ],
+    )
+    config_source = read_source(root / "app/config.py") + read_source(root / ".env.example") + read_source(root / "core/config/env_file.py")
+    for phrase in [
+        "FULL_UPDATE_BATCH_SIZE",
+        "FULL_UPDATE_LOOKBACK_DAYS",
+        "FULL_UPDATE_MAX_RETRIES",
+        "FULL_UPDATE_SLEEP_SECONDS",
+        "FULL_UPDATE_RESUME",
+    ]:
+        if phrase not in config_source:
+            failures.append(f"Task 47 configuration is missing {phrase}.")
+
+    update_source = read_source(root / "core/jobs/update_real_data.py")
+    for phrase in [
+        "_build_symbol_update_plan",
+        "_effective_update_start_date",
+        "daily_basic",
+        "adj_factor",
+        "initial_update_symbols",
+        "incremental_update_symbols",
+        "symbol_start_dates",
+        "_effective_batch_size",
+        "_effective_max_retries",
+        "_effective_sleep_seconds",
+        "skipped_symbols",
+        "completion_rate",
+        "FULL_UNIVERSE_LABEL",
+    ]:
+        if phrase not in update_source:
+            failures.append(f"core/jobs/update_real_data.py is missing Task 47 phrase: {phrase}.")
+
+    diagnose_source = read_source(root / "core/jobs/diagnose_update_batch.py")
+    for phrase in ["stale_symbols", "stale_symbol_count", "update_failed_count", "最新行情不足", "max_daily_basic_date", "max_adj_factor_date"]:
+        if phrase not in diagnose_source:
+            failures.append(f"core/jobs/diagnose_update_batch.py is missing Task 47 phrase: {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["全市场数据未完成", "coverage_rate", "missing_symbol_count", "stale_symbol_count", "结果仅基于已有行情股票"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 47 display phrase: {phrase}.")
+
+    tests_source = read_source(root / "tests/test_full_update_stability.py").lower()
+    for phrase in ["batch", "resume", "retry", "progress", "skipped", "total_score", "diagnose_update_batch", "global_max", "initial_update_symbols", "build_date_status"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_full_update_stability.py should cover {phrase}.")
+
+    docs = (
+        read_source(root / "docs/real_universe.md")
+        + read_source(root / "docs/commands_reference.md")
+        + read_source(root / "README.md")
+    )
+    for phrase in ["FULL_UPDATE_BATCH_SIZE", "FULL_UPDATE_RESUME", "断点续跑", "失败重试", "全市场更新可能耗时较长"]:
+        if phrase not in docs:
+            failures.append(f"Task 47 docs are missing {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2267,6 +2335,7 @@ def main(argv: list[str] | None = None) -> int:
             "task44",
             "task45",
             "task46",
+            "task47",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

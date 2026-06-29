@@ -146,6 +146,8 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     priced_count = int(tables.get("_priced_symbol_count", 0) or 0)
     coverage_rate = float(tables.get("_coverage_rate", 0.0) or 0.0)
     missing_count = int(tables.get("_missing_symbol_count", 0) or 0)
+    stale_count = int(tables.get("_stale_symbol_count", 0) or 0)
+    batch_status = str(tables.get("_batch_status", ""))
     latest_workflow_report = tables.get("_latest_workflow_report")
     latest_daily_workflow_report = tables.get("_latest_daily_workflow_report")
     latest_selection_review_report = tables.get("_latest_selection_review_report")
@@ -170,6 +172,8 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "priced_symbol_count": priced_count,
         "coverage_rate": coverage_rate,
         "missing_symbol_count": missing_count,
+        "stale_symbol_count": stale_count,
+        "batch_status": batch_status,
         "table_rows": {name: len(df) for name, df in tables.items() if isinstance(df, pd.DataFrame)},
         "last_job_status": _workflow_status_message(latest_workflow_report),
         "latest_workflow_report": latest_workflow_report,
@@ -332,6 +336,8 @@ def load_dashboard_data() -> dict[str, Any]:
     tables["_latest_watchlist_report"] = load_latest_watchlist_report()
     tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
     tables["_local_state"] = _safe_local_state()
+    batch_diagnostic = _safe_batch_diagnostic(settings, store)
+    _apply_batch_diagnostic_to_tables(tables, batch_diagnostic)
     watchlist = _load_watchlist_for_dashboard(store)
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
     positions = _load_positions_for_dashboard(store)
@@ -372,6 +378,8 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_priced_symbol_count"] = batch_diagnostic.get("priced_symbol_count", 0)
     real_tables["_coverage_rate"] = batch_diagnostic.get("coverage_rate", 0.0)
     real_tables["_missing_symbol_count"] = len(batch_diagnostic.get("missing_symbols", []))
+    real_tables["_stale_symbol_count"] = batch_diagnostic.get("stale_symbol_count", 0)
+    real_tables["_batch_status"] = _full_batch_status_text(batch_diagnostic)
     real_tables["_latest_workflow_report"] = load_latest_workflow_report()
     real_tables["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
     real_tables["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -406,6 +414,41 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     }
 
 
+def _safe_batch_diagnostic(settings: Any, store: Any) -> dict[str, Any]:
+    """Return batch diagnostic metadata for dashboard status, never raising in UI."""
+    try:
+        from core.jobs.diagnose_update_batch import diagnose_update_batch
+
+        return diagnose_update_batch(settings=settings, store=store)
+    except Exception:
+        return {}
+
+
+def _apply_batch_diagnostic_to_tables(tables: dict[str, Any], diagnostic: dict[str, Any]) -> None:
+    """Attach batch diagnostic counters to dashboard table metadata."""
+    if not diagnostic:
+        return
+    tables["_configured_symbol_count"] = diagnostic.get("configured_symbol_count", 0)
+    tables["_priced_symbol_count"] = diagnostic.get("priced_symbol_count", 0)
+    tables["_coverage_rate"] = diagnostic.get("coverage_rate", 0.0)
+    tables["_missing_symbol_count"] = len(diagnostic.get("missing_symbols", []))
+    tables["_stale_symbol_count"] = diagnostic.get("stale_symbol_count", 0)
+    tables["_batch_status"] = _full_batch_status_text(diagnostic)
+
+
+def _full_batch_status_text(diagnostic: dict[str, Any]) -> str:
+    """Return a concise full-universe coverage status."""
+    configured = int(diagnostic.get("configured_symbol_count", 0) or 0)
+    priced = int(diagnostic.get("priced_symbol_count", 0) or 0)
+    missing = len(diagnostic.get("missing_symbols", []))
+    stale = int(diagnostic.get("stale_symbol_count", 0) or 0)
+    if configured and (priced < configured or missing or stale):
+        return "全市场数据未完成"
+    if configured:
+        return "全市场数据已覆盖当前配置"
+    return ""
+
+
 def render_dashboard(data: dict[str, Any] | None = None) -> None:
     """Render the Streamlit dashboard from preloaded or sample local data."""
     import streamlit as st
@@ -420,7 +463,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
 
     tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
-        _render_selection_tab(st, dashboard_data.get("selection", pd.DataFrame()))
+        _render_selection_tab(st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[1]:
         _render_stock_detail_tab(
             st,
@@ -457,8 +500,17 @@ def main() -> None:
     render_dashboard()
 
 
-def _render_selection_tab(st: Any, selection_df: pd.DataFrame) -> None:
+def _render_selection_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str, Any] | None = None) -> None:
     st.subheader("今日选股")
+    if isinstance(tables, dict):
+        status = summarize_update_status(tables)
+        if status.get("configured_symbol_count", 0) and status.get("priced_symbol_count", 0) < status.get("configured_symbol_count", 0):
+            st.info(
+                "当前 full 股票池基础数量为 "
+                f"{status.get('configured_symbol_count', 0)}，"
+                f"可运行选股股票数量为 {status.get('priced_symbol_count', 0)}，"
+                "结果仅基于已有行情股票。"
+            )
     if selection_df.empty:
         st.info("暂无选股结果。请先运行每日选股任务或导入本地结果。")
         return
@@ -800,7 +852,10 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.metric("配置股票数量", status["configured_symbol_count"])
     st.metric("已有行情股票数量", status["priced_symbol_count"])
     st.metric("缺数据股票数量", status["missing_symbol_count"])
-    st.write({"覆盖率": f"{status['coverage_rate']:.2%}"})
+    st.metric("最新行情不足数量", status["stale_symbol_count"])
+    st.write({"覆盖率": f"{status['coverage_rate']:.2%}", "全市场状态": status.get("batch_status") or "暂无"})
+    if status.get("batch_status") == "全市场数据未完成":
+        st.warning("全市场数据未完成：当前结果只基于本地已有行情股票。点击“保存并更新数据”会继续补齐缺行情或最新不足的股票。")
     st.write({"是否 sample 数据": status["is_sample_data"], "是否真实数据": status["is_real_data"]})
     basic_quality = status.get("basic_quality", {})
     if basic_quality:
@@ -990,6 +1045,9 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             "数据库最新行情日期": date_status["latest_price_date"] or "暂无",
             "数据库最新因子日期": date_status["latest_factor_date"] or "暂无",
             "数据库最新选股日期": date_status["latest_selection_date"] or "暂无",
+            "full 覆盖率": f"{status.get('coverage_rate', 0.0):.2%}",
+            "full 缺行情股票": status.get("missing_symbol_count", 0),
+            "full 最新行情不足股票": status.get("stale_symbol_count", 0),
         }
     )
     if date_status["warning"]:
@@ -1003,6 +1061,7 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             "当前 DATA_PROVIDER": env_values.get("DATA_PROVIDER", "未设置"),
             "DuckDB 路径": env_values.get("DUCKDB_PATH", "./data/a_stock_assistant.duckdb"),
             "最新交易日 PE/PB 完整率": _latest_pe_pb_text(tables),
+            "全市场数据状态": status.get("batch_status") or "暂无",
             "当前已有行情股票数量": status.get("priced_symbol_count", 0),
             "最近日报路径": (status.get("latest_daily_workflow_report") or {}).get("path") if isinstance(status.get("latest_daily_workflow_report"), dict) else "暂无",
             "最近观察池报告路径": (status.get("latest_watchlist_report") or {}).get("path") if isinstance(status.get("latest_watchlist_report"), dict) else "暂无",
@@ -1044,6 +1103,11 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             batch_sleep = st.number_input("REAL_BATCH_SLEEP_SECONDS", min_value=0.0, value=float(env_values.get("REAL_BATCH_SLEEP_SECONDS", "0") or 0.0), step=0.1)
             max_retries = st.number_input("REAL_MAX_RETRIES", min_value=0, value=int(env_values.get("REAL_MAX_RETRIES", "1") or 1), step=1)
             timeout_seconds = st.number_input("REAL_REQUEST_TIMEOUT_SECONDS", min_value=1, value=int(env_values.get("REAL_REQUEST_TIMEOUT_SECONDS", "30") or 30), step=1)
+            full_update_batch_size = st.number_input("FULL_UPDATE_BATCH_SIZE", min_value=1, value=int(env_values.get("FULL_UPDATE_BATCH_SIZE", "50") or 50), step=10)
+            full_update_lookback_days = st.number_input("FULL_UPDATE_LOOKBACK_DAYS", min_value=1, value=int(env_values.get("FULL_UPDATE_LOOKBACK_DAYS", "250") or 250), step=10)
+            full_update_max_retries = st.number_input("FULL_UPDATE_MAX_RETRIES", min_value=1, value=int(env_values.get("FULL_UPDATE_MAX_RETRIES", "2") or 2), step=1)
+            full_update_sleep_seconds = st.number_input("FULL_UPDATE_SLEEP_SECONDS", min_value=0.0, value=float(env_values.get("FULL_UPDATE_SLEEP_SECONDS", "0.2") or 0.2), step=0.1)
+            full_update_resume = st.checkbox("FULL_UPDATE_RESUME", value=_bool_value(env_values.get("FULL_UPDATE_RESUME", "true")))
             min_listing_days = st.number_input("MIN_LISTING_DAYS", min_value=0, value=int(env_values.get("MIN_LISTING_DAYS", "120") or 120), step=10)
             min_avg_amount_20d = st.number_input("MIN_AVG_AMOUNT_20D", min_value=0, value=int(env_values.get("MIN_AVG_AMOUNT_20D", "100000000") or 100000000), step=10_000_000)
             min_median_amount_20d = st.number_input("MIN_MEDIAN_AMOUNT_20D", min_value=0, value=int(env_values.get("MIN_MEDIAN_AMOUNT_20D", "50000000") or 50000000), step=5_000_000)
@@ -1071,6 +1135,11 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         batch_sleep=batch_sleep,
         max_retries=max_retries,
         timeout_seconds=timeout_seconds,
+        full_update_batch_size=full_update_batch_size,
+        full_update_lookback_days=full_update_lookback_days,
+        full_update_max_retries=full_update_max_retries,
+        full_update_sleep_seconds=full_update_sleep_seconds,
+        full_update_resume=full_update_resume,
         min_listing_days=min_listing_days,
         min_avg_amount_20d=min_avg_amount_20d,
         min_median_amount_20d=min_median_amount_20d,
@@ -1127,6 +1196,11 @@ def build_settings_updates(
     batch_sleep: float,
     max_retries: int,
     timeout_seconds: int,
+    full_update_batch_size: int = 50,
+    full_update_lookback_days: int = 250,
+    full_update_max_retries: int = 2,
+    full_update_sleep_seconds: float = 0.2,
+    full_update_resume: bool = True,
     min_listing_days: int = 120,
     min_avg_amount_20d: int = 100_000_000,
     min_median_amount_20d: int = 50_000_000,
@@ -1152,6 +1226,11 @@ def build_settings_updates(
         "REAL_BATCH_SLEEP_SECONDS": batch_sleep,
         "REAL_MAX_RETRIES": max_retries,
         "REAL_REQUEST_TIMEOUT_SECONDS": timeout_seconds,
+        "FULL_UPDATE_BATCH_SIZE": full_update_batch_size,
+        "FULL_UPDATE_LOOKBACK_DAYS": full_update_lookback_days,
+        "FULL_UPDATE_MAX_RETRIES": full_update_max_retries,
+        "FULL_UPDATE_SLEEP_SECONDS": full_update_sleep_seconds,
+        "FULL_UPDATE_RESUME": full_update_resume,
         "MIN_LISTING_DAYS": min_listing_days,
         "MIN_AVG_AMOUNT_20D": min_avg_amount_20d,
         "MIN_MEDIAN_AMOUNT_20D": min_median_amount_20d,
@@ -1200,10 +1279,27 @@ def build_date_status(env_values: dict[str, str], status: dict[str, Any]) -> dic
     latest_price_date = status.get("latest_price_date")
     message = "结束日期留空表示尽量拉取到最新可得日期。"
     warning = False
+    full_mode = (
+        env_values.get("DATA_PROVIDER", "").lower() == "akshare"
+        and not str(env_values.get("AKSHARE_SAMPLE_SYMBOLS", "")).strip()
+        and env_values.get("REAL_UNIVERSE_PRESET") == "full"
+    )
+    configured_count = int(status.get("configured_symbol_count", 0) or 0)
+    priced_count = int(status.get("priced_symbol_count", 0) or 0)
+    missing_count = int(status.get("missing_symbol_count", 0) or 0)
+    stale_count = int(status.get("stale_symbol_count", 0) or 0)
+    if full_mode and configured_count and (priced_count < configured_count or missing_count or stale_count):
+        warning = True
+        message = (
+            f"全市场数据未完成：基础股票池 {configured_count} 只，已有行情 {priced_count} 只，"
+            f"缺行情 {missing_count} 只，最新不足 {stale_count} 只。点击“保存并更新数据”会继续补齐。"
+        )
+    elif full_mode and configured_count:
+        message = "full 股票池覆盖率已达到当前配置。"
     if end_date and latest_price_date and str(latest_price_date) < str(end_date):
         warning = True
         message = f"参数结束日期为 {end_date}，但数据库最新行情日期仍为 {latest_price_date}。需要点击“保存并更新数据”才会拉取新数据。"
-    elif end_date:
+    elif end_date and not warning:
         message = "数据库最新行情日期已达到或晚于参数结束日期。"
     return {
         "start_date": env_values.get("REAL_DATA_START_DATE", ""),

@@ -96,8 +96,12 @@ def main() -> None:
     print(f"- 数据库中实际有行情的股票数量: {result['priced_symbol_count']}")
     print(f"- 覆盖率: {result['coverage_rate']:.2%}")
     print(f"- 缺数据股票数量: {len(result['missing_symbols'])}")
+    print(f"- 最新行情不足数量: {result['stale_symbol_count']}")
+    print(f"- 更新失败数量: {result['update_failed_count']}")
     if result["missing_symbols"]:
         print(f"- 缺数据股票列表: {_format_symbol_list(result['missing_symbols'])}")
+    if result["stale_symbols"]:
+        print(f"- 最新行情不足股票列表: {_format_symbol_list(result['stale_symbols'])}")
     print(f"- 可运行因子诊断的股票数量: {result['factor_ready_count']}")
     print(f"- 可运行选股的股票数量: {result['selection_ready_count']}")
     print(f"- 可运行回测的股票数量: {result['backtest_ready_count']}")
@@ -138,9 +142,22 @@ def _build_result(
     factor_ready = [item for item in coverage if item["daily_price_rows"] >= 20 and item["has_daily_basic"]]
     backtest_ready = [item for item in coverage if item["daily_price_rows"] >= 60 and item["has_daily_basic"]]
     missing = [item["ts_code"] for item in coverage if not item["has_daily_price"]]
+    target_end_date = str(getattr(settings, "real_data_end_date", "") or "")
+    if not target_end_date:
+        from datetime import date
+
+        target_end_date = date.today().strftime("%Y%m%d")
+    stale = [
+        item["ts_code"]
+        for item in coverage
+        if item["has_daily_price"]
+        and not _symbol_has_current_market_tables(item, target_end_date)
+    ]
     computed_reasons = list(reasons)
     if missing:
         computed_reasons.append(f"部分股票缺少 daily_price：{_format_symbol_list(missing)}。")
+    if stale:
+        computed_reasons.append(f"部分股票行情或配套表未达到 {target_end_date}：{_format_symbol_list(stale)}。")
     return {
         "data_provider": settings.data_provider,
         "duckdb_path": str(store.db_path),
@@ -154,12 +171,28 @@ def _build_result(
         "coverage_rate": (len(priced) / len(configured_symbols)) if configured_symbols else 0.0,
         "symbol_coverage": coverage,
         "missing_symbols": missing,
+        "target_end_date": target_end_date,
+        "stale_symbols": stale,
+        "stale_symbol_count": len(stale),
+        "update_failed_count": 0,
         "factor_ready_count": len(factor_ready),
         "selection_ready_count": len(factor_ready),
         "backtest_ready_count": len(backtest_ready),
         "reasons": computed_reasons,
         "next_steps": _next_steps(len(priced), len(configured_symbols)),
     }
+
+
+def _symbol_has_current_market_tables(item: dict[str, Any], target_end_date: str) -> bool:
+    """Return whether all market data tables are present and current for one symbol."""
+    return (
+        bool(item.get("has_daily_price"))
+        and bool(item.get("has_daily_basic"))
+        and bool(item.get("has_adj_factor"))
+        and str(item.get("max_trade_date") or "") >= target_end_date
+        and str(item.get("max_daily_basic_date") or "") >= target_end_date
+        and str(item.get("max_adj_factor_date") or "") >= target_end_date
+    )
 
 
 def _symbol_coverage(configured_symbols: list[str], tables: dict[str, pd.DataFrame]) -> list[dict[str, Any]]:
@@ -183,7 +216,9 @@ def _symbol_coverage(configured_symbols: list[str], tables: dict[str, pd.DataFra
                 "min_trade_date": _date_stat(price_rows, "trade_date", "min"),
                 "max_trade_date": _date_stat(price_rows, "trade_date", "max"),
                 "has_daily_basic": not basic_rows.empty,
+                "max_daily_basic_date": _date_stat(basic_rows, "trade_date", "max"),
                 "has_adj_factor": not adj_rows.empty,
+                "max_adj_factor_date": _date_stat(adj_rows, "trade_date", "max"),
             }
         )
     return rows
