@@ -302,11 +302,13 @@ def sample_dashboard_data() -> dict[str, Any]:
 def load_dashboard_data() -> dict[str, Any]:
     """Load local real dashboard data when available, otherwise return sample data."""
     from app.config import get_settings
-    from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+    from core.storage.duckdb_store import DUCKDB_LOCK_MESSAGE, DuckDBStore, DuckDBStoreError, DuckDBStoreLockedError
 
     settings = get_settings()
+    database_status = _database_status(str(settings.duckdb_path), exists=Path(settings.duckdb_path).exists())
     if settings.data_provider == "sample":
         data = sample_dashboard_data()
+        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "sample", "message": "当前使用 sample 数据。"}
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -323,6 +325,7 @@ def load_dashboard_data() -> dict[str, Any]:
     if not store.db_path.exists():
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实 DuckDB 文件不存在）"
+        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "missing", "message": "DuckDB 文件不存在。"}
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -336,20 +339,26 @@ def load_dashboard_data() -> dict[str, Any]:
         return data
 
     try:
-        tables = {
-            "stock_basic": store.read_table("stock_basic"),
-            "daily_price": store.read_table("daily_price"),
-            "daily_basic": store.read_table("daily_basic"),
-            "factor_scores": store.read_table("factor_scores"),
-            "strategy_result": store.read_table("strategy_result"),
-            "backtest_result": store.read_table("backtest_result"),
-            "review_decisions": _safe_read_store_table(store, "review_decisions"),
-            "review_decision_history": _safe_read_store_table(store, "review_decision_history"),
-            "positions": _safe_read_store_table(store, "positions"),
-        }
-    except DuckDBStoreError:
+        tables = _safe_load_dashboard_tables(store)
+    except DuckDBStoreLockedError:
+        data = sample_dashboard_data()
+        data["data_source"] = "sample 数据（演示，DuckDB 被锁定）"
+        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "locked", "message": DUCKDB_LOCK_MESSAGE}
+        data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
+        data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
+        data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
+        data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+        data.setdefault("tables", {})["_local_state"] = _safe_local_state()
+        data.setdefault("watchlist", pd.DataFrame())
+        data.setdefault("watchlist_snapshot", pd.DataFrame())
+        data.setdefault("positions", pd.DataFrame())
+        return data
+    except DuckDBStoreError as exc:
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实数据读取失败）"
+        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "error", "message": str(exc)}
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -363,11 +372,9 @@ def load_dashboard_data() -> dict[str, Any]:
         return data
 
     if tables["strategy_result"].empty:
-        computed = _computed_real_dashboard_data(settings, store, tables)
-        if computed is not None:
-            return computed
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实选股结果不足）"
+        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "ok", "message": "DuckDB 可访问，但暂无可展示的本地选股结果。"}
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -387,7 +394,7 @@ def load_dashboard_data() -> dict[str, Any]:
     tables["_latest_watchlist_report"] = load_latest_watchlist_report()
     tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
     tables["_local_state"] = _safe_local_state()
-    batch_diagnostic = _safe_batch_diagnostic(settings, store)
+    batch_diagnostic: dict[str, Any] = {}
     _apply_batch_diagnostic_to_tables(tables, batch_diagnostic)
     watchlist = _load_watchlist_for_dashboard(store)
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
@@ -405,6 +412,32 @@ def load_dashboard_data() -> dict[str, Any]:
         "watchlist_snapshot": watchlist_snapshot,
         "positions": positions,
         "tables": tables,
+    }
+
+
+def _safe_load_dashboard_tables(store: Any) -> dict[str, pd.DataFrame]:
+    """Read lightweight dashboard tables with read-only short connections."""
+    tables: dict[str, pd.DataFrame] = {
+        "stock_basic": _safe_read_store_table(store, "stock_basic", limit=10000),
+        "daily_price": _safe_read_store_table(store, "daily_price", limit=30000),
+        "daily_basic": _safe_read_store_table(store, "daily_basic", limit=30000),
+        "factor_scores": _safe_read_store_table(store, "factor_scores", limit=10000),
+        "strategy_result": _safe_read_store_table(store, "strategy_result", limit=5000),
+        "backtest_result": _safe_read_store_table(store, "backtest_result", limit=1000),
+        "review_decisions": _safe_read_store_table(store, "review_decisions", limit=5000),
+        "review_decision_history": _safe_read_store_table(store, "review_decision_history", limit=10000),
+        "positions": _safe_read_store_table(store, "positions", limit=5000),
+    }
+    return tables
+
+
+def _database_status(path: str, *, exists: bool) -> dict[str, Any]:
+    """Build a database status payload for the page header."""
+    return {
+        "duckdb_path": path,
+        "exists": exists,
+        "status": "ok" if exists else "missing",
+        "message": "DuckDB 可访问。" if exists else "DuckDB 文件不存在。",
     }
 
 
@@ -512,46 +545,56 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     st.caption("仅用于研究与辅助决策，不构成投资建议。")
     data_source_status = describe_dashboard_data_source(dashboard_data)
     st.info(f"数据来源：{data_source_status['data_source']}。{data_source_status['message']}")
+    _render_database_status(st, dashboard_data.get("tables", {}).get("_database_status", {}))
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
     tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "观察池跟踪", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
-        _render_selection_tab(st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
+        _render_section(st, "今日选股", _render_selection_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[1]:
-        _render_stock_detail_tab(
-            st,
-            dashboard_data.get("stock_basic", pd.DataFrame()),
-            dashboard_data.get("price", pd.DataFrame()),
-            dashboard_data.get("factor_scores", pd.DataFrame()),
-        )
+        _render_section(st, "个股详情", _render_stock_detail_tab, st, dashboard_data.get("stock_basic", pd.DataFrame()), dashboard_data.get("price", pd.DataFrame()), dashboard_data.get("factor_scores", pd.DataFrame()))
     with tabs[2]:
-        _render_factor_ranking_tab(
-            st,
-            dashboard_data.get("factor_scores", pd.DataFrame()),
-            dashboard_data.get("daily_basic", pd.DataFrame()),
-        )
+        _render_section(st, "因子排名", _render_factor_ranking_tab, st, dashboard_data.get("factor_scores", pd.DataFrame()), dashboard_data.get("daily_basic", pd.DataFrame()))
     with tabs[3]:
-        _render_selection_logic_tab(st, dashboard_data.get("selection", pd.DataFrame()))
+        _render_section(st, "选股逻辑", _render_selection_logic_tab, st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[4]:
-        _render_elder_review_tab(
-            st,
-            dashboard_data.get("selection", pd.DataFrame()),
-            dashboard_data.get("price", pd.DataFrame()),
-        )
+        _render_section(st, "埃尔德复核", _render_elder_review_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("price", pd.DataFrame()))
     with tabs[5]:
-        _render_watchlist_tab(
-            st,
-            dashboard_data.get("watchlist", pd.DataFrame()),
-            dashboard_data.get("watchlist_snapshot", pd.DataFrame()),
-        )
+        _render_section(st, "观察池跟踪", _render_watchlist_tab, st, dashboard_data.get("watchlist", pd.DataFrame()), dashboard_data.get("watchlist_snapshot", pd.DataFrame()))
     with tabs[6]:
-        _render_positions_tab(st, dashboard_data.get("positions", pd.DataFrame()))
+        _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
     with tabs[7]:
-        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
+        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}))
     with tabs[8]:
-        _render_status_tab(st, dashboard_data.get("tables", {}))
+        _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
     with tabs[9]:
-        _render_local_console_tab(st, dashboard_data.get("tables", {}))
+        _render_section(st, "本地控制台", _render_local_console_tab, st, dashboard_data.get("tables", {}))
+
+
+def _render_section(st: Any, title: str, func: Any, *args: Any, **kwargs: Any) -> None:
+    """Render one Streamlit section without letting it blank the whole app."""
+    try:
+        func(*args, **kwargs)
+    except Exception as exc:
+        st.error(f"{title} 加载失败：{exc}")
+        st.info("页面其他区域仍可使用。若涉及 DuckDB 锁，请停止其他 core.jobs 或旧 Streamlit 后重试。")
+
+
+def _render_database_status(st: Any, status: dict[str, Any]) -> None:
+    """Render database accessibility status at the top of the dashboard."""
+    if not status:
+        return
+    message = status.get("message") or ""
+    path = status.get("duckdb_path") or "未知"
+    state = status.get("status") or "unknown"
+    if state == "locked":
+        st.error(f"数据库状态：DuckDB 被锁定。{message}")
+        st.warning("DuckDB may be locked by macOS FileProvider or cloud sync. Consider moving the database to a non-synced local directory.")
+        st.code(f"lsof {path}")
+    elif state in {"missing", "error"}:
+        st.warning(f"数据库状态：{message} 路径：{path}")
+    else:
+        st.caption(f"数据库状态：{message} 路径：{path}")
 
 
 def main() -> None:
@@ -1585,10 +1628,14 @@ def _load_positions_for_dashboard(store: Any) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _safe_read_store_table(store: Any, table_name: str) -> pd.DataFrame:
+def _safe_read_store_table(store: Any, table_name: str, limit: int | None = None) -> pd.DataFrame:
     """Read optional local DuckDB tables for the dashboard."""
+    from core.storage.duckdb_store import DuckDBStoreLockedError
+
     try:
-        return store.read_table(table_name)
+        return store.read_table(table_name, limit=limit)
+    except DuckDBStoreLockedError:
+        raise
     except Exception:
         return pd.DataFrame()
 

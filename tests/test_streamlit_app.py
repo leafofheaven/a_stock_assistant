@@ -15,6 +15,7 @@ from web.streamlit_app import (
     filter_selection_data,
     get_industry_options,
     render_dashboard,
+    _render_section,
     summarize_update_status,
 )
 
@@ -144,6 +145,44 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
     assert fake_streamlit.info_messages
 
 
+def test_render_dashboard_shows_database_locked_status(monkeypatch) -> None:
+    """Dashboard should render a locked database warning instead of crashing."""
+    fake_streamlit = FakeStreamlit()
+    monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
+
+    render_dashboard(
+        {
+            "selection": pd.DataFrame(),
+            "stock_basic": pd.DataFrame(),
+            "price": pd.DataFrame(),
+            "factor_scores": pd.DataFrame(),
+            "backtest": {},
+            "tables": {
+                "_database_status": {
+                    "status": "locked",
+                    "message": "DuckDB is locked by another process. Please stop other running jobs or Streamlit first.",
+                    "duckdb_path": "data/a_stock_assistant.duckdb",
+                }
+            },
+        }
+    )
+
+    assert fake_streamlit.error_messages
+    assert "DuckDB 被锁定" in fake_streamlit.error_messages[0]
+
+
+def test_render_section_catches_block_errors() -> None:
+    """A failing page section should not raise through the top-level dashboard."""
+    fake_streamlit = FakeStreamlit()
+
+    def fail_section() -> None:
+        raise RuntimeError("mock block failure")
+
+    _render_section(fake_streamlit, "测试区块", fail_section)
+
+    assert any("测试区块 加载失败" in message for message in fake_streamlit.error_messages)
+
+
 def _selection_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -188,6 +227,8 @@ class FakeStreamlit:
         self.title_text = ""
         self.tab_names: list[str] = []
         self.info_messages: list[str] = []
+        self.error_messages: list[str] = []
+        self.warning_messages: list[str] = []
 
     def set_page_config(self, **kwargs) -> None:
         return None
@@ -209,7 +250,7 @@ class FakeStreamlit:
         self.info_messages.append(text)
 
     def warning(self, text: str) -> None:
-        return None
+        self.warning_messages.append(text)
 
     def metric(self, label: str, value) -> None:
         return None
@@ -257,7 +298,7 @@ class FakeStreamlit:
         return None
 
     def error(self, text: str) -> None:
-        return None
+        self.error_messages.append(text)
 
     def spinner(self, text: str) -> FakeTab:
         return FakeTab()

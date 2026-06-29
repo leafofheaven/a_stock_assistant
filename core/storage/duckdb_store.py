@@ -18,6 +18,35 @@ class DuckDBStoreError(RuntimeError):
     """Raised when DuckDB storage operations fail."""
 
 
+class DuckDBStoreLockedError(DuckDBStoreError):
+    """Raised when the local DuckDB file is locked by another process."""
+
+
+DUCKDB_LOCK_MESSAGE = "DuckDB is locked by another process. Please stop other running jobs or Streamlit first."
+LOCK_ERROR_MARKERS = (
+    "could not set lock",
+    "conflicting lock",
+    "Conflicting lock",
+    "database is locked",
+    "io error",
+    "lock on file",
+    "locked",
+)
+
+
+def is_duckdb_lock_error(exc: BaseException | str) -> bool:
+    """Return whether an exception or message indicates a DuckDB file lock."""
+    text = str(exc).lower()
+    return any(marker in text for marker in LOCK_ERROR_MARKERS)
+
+
+def friendly_duckdb_error(exc: BaseException) -> DuckDBStoreError:
+    """Convert low-level DuckDB errors into user-facing storage errors."""
+    if is_duckdb_lock_error(exc):
+        return DuckDBStoreLockedError(DUCKDB_LOCK_MESSAGE)
+    return DuckDBStoreError(str(exc) or "DuckDB operation failed.")
+
+
 class DuckDBStore:
     """Small DuckDB wrapper for schema setup and DataFrame persistence."""
 
@@ -71,9 +100,11 @@ class DuckDBStore:
             with self.connect() as connection:
                 connection.execute(schema_sql)
                 self._apply_lightweight_migrations(connection)
+        except DuckDBStoreError:
+            raise
         except Exception as exc:
             logger.exception("Failed to initialize DuckDB schema at %s.", self.db_path)
-            raise DuckDBStoreError("Failed to initialize DuckDB schema.") from exc
+            raise friendly_duckdb_error(exc) from exc
 
         logger.info("Initialized DuckDB schema at %s.", self.db_path)
 
@@ -109,9 +140,12 @@ class DuckDBStore:
             if column not in existing:
                 connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column} {data_type}")
 
-    def connect(self) -> duckdb.DuckDBPyConnection:
+    def connect(self, *, read_only: bool = False) -> duckdb.DuckDBPyConnection:
         """Open a DuckDB connection for this store."""
-        return duckdb.connect(str(self.db_path))
+        try:
+            return duckdb.connect(str(self.db_path), read_only=read_only)
+        except Exception as exc:
+            raise friendly_duckdb_error(exc) from exc
 
     def write_dataframe(self, table_name: str, df: pd.DataFrame) -> int:
         """Append a DataFrame to a table and return the number of inserted rows."""
@@ -125,9 +159,11 @@ class DuckDBStore:
                 connection.register("input_df", df)
                 connection.execute(f"INSERT INTO {table_name} BY NAME SELECT * FROM input_df")
                 connection.unregister("input_df")
+        except DuckDBStoreError:
+            raise
         except Exception as exc:
             logger.exception("Failed to write DataFrame to %s.", table_name)
-            raise DuckDBStoreError(f"Failed to write DataFrame to {table_name}.") from exc
+            raise friendly_duckdb_error(exc) from exc
 
         logger.info("Wrote %s rows to %s.", len(df), table_name)
         return len(df)
@@ -160,9 +196,11 @@ class DuckDBStore:
                 )
                 connection.execute(f"INSERT INTO {table_name} BY NAME SELECT * FROM input_df")
                 connection.unregister("input_df")
+        except DuckDBStoreError:
+            raise
         except Exception as exc:
             logger.exception("Failed to upsert DataFrame into %s.", table_name)
-            raise DuckDBStoreError(f"Failed to upsert DataFrame into {table_name}.") from exc
+            raise friendly_duckdb_error(exc) from exc
 
         logger.info("Upserted %s rows into %s.", len(df), table_name)
         return len(df)
@@ -181,7 +219,7 @@ class DuckDBStore:
             raise DuckDBStoreError(f"Table {table_name} does not have a configured date column.")
 
         try:
-            with self.connect() as connection:
+            with self.connect(read_only=True) as connection:
                 return connection.execute(
                     f"""
                     SELECT *
@@ -191,19 +229,26 @@ class DuckDBStore:
                     """,
                     [start_date, end_date],
                 ).fetchdf()
+        except DuckDBStoreError:
+            raise
         except Exception as exc:
             logger.exception("Failed to read date range from %s.", table_name)
-            raise DuckDBStoreError(f"Failed to read date range from {table_name}.") from exc
+            raise friendly_duckdb_error(exc) from exc
 
-    def read_table(self, table_name: str) -> pd.DataFrame:
+    def read_table(self, table_name: str, *, limit: int | None = None, read_only: bool = True) -> pd.DataFrame:
         """Read an entire table into a DataFrame."""
         self._validate_table(table_name)
         try:
-            with self.connect() as connection:
-                return connection.execute(f"SELECT * FROM {table_name}").fetchdf()
+            query = f"SELECT * FROM {table_name}"
+            if limit is not None and limit > 0:
+                query = f"{query} LIMIT {int(limit)}"
+            with self.connect(read_only=read_only) as connection:
+                return connection.execute(query).fetchdf()
+        except DuckDBStoreError:
+            raise
         except Exception as exc:
             logger.exception("Failed to read table %s.", table_name)
-            raise DuckDBStoreError(f"Failed to read table {table_name}.") from exc
+            raise friendly_duckdb_error(exc) from exc
 
     def _validate_table(self, table_name: str) -> None:
         """Reject unknown table names before building SQL statements."""

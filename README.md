@@ -131,7 +131,15 @@ full 基础信息增强口径：`ENABLE_STOCK_BASIC_ENRICHMENT=false`、`FULL_EN
 streamlit run web/streamlit_app.py
 ```
 
-页面用于查看数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地状态提示。“选股逻辑”Tab 会显示 `total_score` 公式、因子权重、候选排名原因和主要贡献因子。“参数设置 / 本地控制台”提供简化设置向导：切换自定义股票池或预设股票池，修改开始/结束日期，查看“参数日期 vs 数据库日期”，并使用“保存参数”“保存并本地重算”“保存并更新数据”。预设股票池中 `mini / small / medium` 是样本池，`full` 是沪深 A 股全市场，不含北交所；如果 `AKSHARE_SAMPLE_SYMBOLS` 不为空，自定义股票池优先于 full。点击运行后页面会逐行显示当前步骤、当前股票或子任务、成功/失败/跳过数量、实时日志和最终报告路径。修改日期后数据库日期不会立刻变化，需要点击“保存并更新数据”才会联网拉取新行情。
+如果页面黑屏或 DuckDB 被锁，先运行：
+
+```bash
+python -m core.jobs.diagnose_streamlit_startup
+python scripts/start_streamlit_safe.py --dry-run
+python scripts/start_streamlit_safe.py
+```
+
+页面用于查看数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地状态提示。“选股逻辑”Tab 会显示 `total_score` 公式、因子权重、候选排名原因和主要贡献因子。“参数设置 / 本地控制台”提供简化设置向导：切换自定义股票池或预设股票池，修改开始/结束日期，查看“参数日期 vs 数据库日期”，并使用“保存参数”“保存并本地重算”“保存并更新数据”。预设股票池中 `mini / small / medium` 是样本池，`full` 是沪深 A 股全市场，不含北交所；如果 `AKSHARE_SAMPLE_SYMBOLS` 不为空，自定义股票池优先于 full。点击运行后页面会逐行显示当前步骤、当前股票或子任务、成功/失败/跳过数量、实时日志和最终报告路径。修改日期后数据库日期不会立刻变化，需要点击“保存并更新数据”才会联网拉取新行情。若提示 DuckDB 被其他进程锁定，请停止其他 `core.jobs` 或旧 Streamlit；如果 `lsof data/a_stock_assistant.duckdb` 显示 `fileprovi/fileproviderd`，建议把 DuckDB 放到非云同步目录。
 
 full 模式会经过可交易过滤：默认剔除 ST、退市整理、北交所、上市不足 120 天、近 20 日成交不连续和流动性不足股票。近 20 日平均成交额默认门槛为 1 亿元，停牌股票复牌后重新满足成交连续性和流动性规则会自动重新纳入。
 
