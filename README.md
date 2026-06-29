@@ -102,6 +102,7 @@ python -m core.jobs.doctor_daily_run --post-run
 - 选股逻辑说明：`python -m core.jobs.explain_selection_logic`，`python -m core.jobs.explain_selection_logic --format markdown`，详见 `docs/selection_logic.md`
 - 埃尔德复核：`python -m core.jobs.run_elder_review`，`python -m core.jobs.run_elder_review --format markdown`，详见 `docs/elder_review.md`
 - 埃尔德复核导出：`python -m core.jobs.export_elder_review`，`python -m core.jobs.export_elder_review --format markdown`，详见 `docs/elder_review_workflow.md`
+- 埃尔德复核历史回看：`python -m core.jobs.backtest_elder_review`，`python -m core.jobs.backtest_elder_review --start-date 20240101 --end-date 20260625 --format all`，详见 `docs/elder_review_backtest.md`
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
@@ -144,6 +145,7 @@ open scripts/mac/A股选股助手.command
 - [选股逻辑说明](docs/selection_logic.md)
 - [埃尔德复核](docs/elder_review.md)
 - [埃尔德复核与观察池流程](docs/elder_review_workflow.md)
+- [埃尔德复核历史回看](docs/elder_review_backtest.md)
 - [Task 35-38 交接说明](docs/task_35_38_handoff.md)
 - [常见问题排查](docs/troubleshooting.md)
 - [数据与备份](docs/data_and_backup.md)
