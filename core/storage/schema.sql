@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS stock_basic (
     area VARCHAR,
     industry VARCHAR,
     market VARCHAR,
+    exchange VARCHAR,
     list_date VARCHAR,
     delist_date VARCHAR,
     is_hs VARCHAR

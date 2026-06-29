@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import pandas as pd
 
 from core.data_sources.base import DataSourceError, StockDataSource
+from core.data_sources.real_universe import exchange_from_symbol
 from core.data_sources.valuation_enrichment import ValuationEnricher, merge_latest_valuation
 
 logger = logging.getLogger(__name__)
@@ -490,12 +491,13 @@ def _standardize_fields(function_name: str, df: pd.DataFrame) -> pd.DataFrame:
         result = result.rename(columns={"code": "symbol"})
         if "ts_code" not in result.columns and "symbol" in result.columns:
             result["ts_code"] = result["symbol"].map(_to_ts_code)
-        for column in ["area", "industry", "market", "list_date", "delist_date", "is_hs"]:
+        for column in ["area", "industry", "market", "exchange", "list_date", "delist_date", "is_hs"]:
             if column not in result.columns:
                 result[column] = pd.NA
         result["market"] = result["market"].combine_first(result["ts_code"].map(_market_from_ts_code))
+        result["exchange"] = result["exchange"].where(result["exchange"].map(_not_missing_value), result["symbol"].map(exchange_from_symbol))
         return result[
-            ["ts_code", "symbol", "name", "area", "industry", "market", "list_date", "delist_date", "is_hs"]
+            ["ts_code", "symbol", "name", "area", "industry", "market", "exchange", "list_date", "delist_date", "is_hs"]
         ]
 
     if function_name == "tool_trade_date_hist_sina":

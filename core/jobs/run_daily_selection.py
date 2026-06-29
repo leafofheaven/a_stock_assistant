@@ -176,6 +176,12 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
             allow_missing_list_date_with_price_history=is_akshare,
             min_price_history_days=60,
             allow_missing_valuation=is_akshare,
+            min_listing_days=getattr(settings, "min_listing_days", 120),
+            min_avg_amount_20d=getattr(settings, "min_avg_amount_20d", 100_000_000),
+            min_median_amount_20d=getattr(settings, "min_median_amount_20d", 50_000_000),
+            min_latest_amount=getattr(settings, "min_latest_amount", 30_000_000),
+            min_traded_days_20d=getattr(settings, "min_traded_days_20d", 18),
+            include_bse=getattr(settings, "include_bse", False),
         )
         tradeable = universe[universe["is_tradeable"].fillna(False)].copy()
         if tradeable.empty:
@@ -221,7 +227,10 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
         "is_real_data": True,
         "selection_date": latest_trade_date,
+        "universe_source": _universe_source_label(settings),
+        "raw_universe_count": int(len(universe)),
         "stock_pool_count": int(len(tradeable)),
+        "universe_filter_counts": _universe_filter_counts(universe),
         "scored_stock_count": int(len(factor_scores)),
         "factor_calculable_count": int(len(factor_scores)),
         "total_score_non_null_count": total_score_non_null,
@@ -262,6 +271,30 @@ def _calculate_minimal_real_scores(
     factors["fundamental_score"] = normalize_factor(factors, "pe_score", higher_is_better=True)
     factors["volatility_score"] = normalize_factor(factors, "volatility_20d", higher_is_better=False)
     return calculate_total_score(factors)
+
+
+def _universe_source_label(settings: Settings) -> str:
+    """Return a concise universe source label for reports."""
+    if settings.data_provider == "akshare" and getattr(settings, "akshare_sample_symbols", "").strip():
+        return "AKSHARE_SAMPLE_SYMBOLS"
+    if getattr(settings, "real_universe_preset", "") == "full":
+        return "REAL_UNIVERSE_PRESET=full（沪深 A 股全市场，不含北交所）"
+    return f"REAL_UNIVERSE_PRESET={getattr(settings, 'real_universe_preset', '')}"
+
+
+def _universe_filter_counts(universe: pd.DataFrame) -> dict[str, int]:
+    """Return exclusion counts by broad filter reason."""
+    if universe.empty or "exclude_reason" not in universe.columns:
+        return {}
+    reasons = universe["exclude_reason"].fillna("").astype(str)
+    return {
+        "st_or_abnormal": int(reasons.str.contains("ST stock|delisting stock", regex=True).sum()),
+        "bse": int(reasons.str.contains("BSE stock", regex=False).sum()),
+        "recent_listing": int(reasons.str.contains("listed less than", regex=False).sum()),
+        "low_liquidity": int(reasons.str.contains("amount", regex=False).sum()),
+        "insufficient_traded_days": int(reasons.str.contains("traded days 20d", regex=False).sum()),
+        "data_missing": int(reasons.str.contains("severe financial|suspended", regex=True).sum()),
+    }
 
 
 def _latest_factor_rows(factor_df: pd.DataFrame, trade_date: str) -> pd.DataFrame:

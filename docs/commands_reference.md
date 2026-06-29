@@ -33,7 +33,9 @@ python -m core.jobs.diagnose_data_quality
 
 作用：更新少量真实数据并诊断 DuckDB 是否可用于选股。重点看 `daily_price 行数`、`最新行情日期`、`是否足够运行 run_daily_selection`。
 
-常用参数：真实数据范围由 `.env` 中 `REAL_DATA_START_DATE`、`REAL_DATA_END_DATE`、`AKSHARE_SAMPLE_SYMBOLS` 或 `REAL_UNIVERSE_PRESET` 控制。
+常用参数：真实数据范围由 `.env` 中 `REAL_DATA_START_DATE`、`REAL_DATA_END_DATE`、`AKSHARE_SAMPLE_SYMBOLS` 或 `REAL_UNIVERSE_PRESET` 控制。`mini / small / medium` 是样本池；`REAL_UNIVERSE_PRESET=full` 是沪深 A 股全市场，不含北交所。`AKSHARE_SAMPLE_SYMBOLS` 不为空时，自定义股票池优先于 full。
+
+full 模式可交易过滤默认使用：上市不少于 120 天、近 20 日平均成交额不低于 1 亿元、成交额中位数不低于 5000 万元、最新成交额不低于 3000 万元、近 20 日有效成交天数不少于 18 天。停牌股票复牌后重新满足条件会重新纳入。
 
 `update_real_data` 会输出 `[progress]` 进度行，显示当前阶段、当前股票、成功/失败/跳过数量。AKShare 基础信息增强字段缺失时，会使用基础字段或本地 preset 兜底，不影响主行情写入。
 
@@ -225,7 +227,7 @@ streamlit run web/streamlit_app.py
 
 运行命令时页面会实时追加日志，并展示当前运行步骤、当前处理股票或子任务、成功/失败/跳过数量和最终报告路径。
 
-自定义股票池会写入 `AKSHARE_SAMPLE_SYMBOLS`，它不为空时 `REAL_UNIVERSE_PRESET` 不生效。使用预设股票池会清空 `AKSHARE_SAMPLE_SYMBOLS` 并保存 `REAL_UNIVERSE_PRESET=small` 或 `medium`。结束日期留空表示尽量拉取到最新可得日期；修改结束日期后，只有“保存并更新数据”会让数据库最新行情日期变化。
+自定义股票池会写入 `AKSHARE_SAMPLE_SYMBOLS`，它不为空时 `REAL_UNIVERSE_PRESET` 不生效。使用预设股票池会清空 `AKSHARE_SAMPLE_SYMBOLS` 并保存 `REAL_UNIVERSE_PRESET=mini`、`small`、`medium` 或 `full`。其中 `full` 表示沪深 A 股全市场，不含北交所。结束日期留空表示尽量拉取到最新可得日期；修改结束日期后，只有“保存并更新数据”会让数据库最新行情日期变化。
 
 Mac 双击启动器：
 

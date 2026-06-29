@@ -56,6 +56,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task43": check_task43,
         "task44": check_task44,
         "task45": check_task45,
+        "task46": check_task46,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2119,6 +2120,68 @@ def check_task45(root: Path) -> list[str]:
     return failures
 
 
+def check_task46(root: Path) -> list[str]:
+    """Check Task 46 full HS A-share universe and tradeability filters."""
+    failures = check_paths(
+        root,
+        [
+            "core/data_sources/real_universe.py",
+            "core/universe/stock_pool.py",
+            "core/jobs/update_real_data.py",
+            "docs/real_universe.md",
+            "tests/test_real_universe_full.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    config_source = read_source(root / "app/config.py") + read_source(root / ".env.example")
+    for phrase in [
+        "REAL_UNIVERSE_PRESET",
+        "MIN_LISTING_DAYS",
+        "MIN_AVG_AMOUNT_20D",
+        "MIN_MEDIAN_AMOUNT_20D",
+        "MIN_LATEST_AMOUNT",
+        "MIN_TRADED_DAYS_20D",
+        "INCLUDE_BSE",
+    ]:
+        if phrase not in config_source:
+            failures.append(f"configuration is missing {phrase}.")
+
+    universe_source = read_source(root / "core/data_sources/real_universe.py")
+    for phrase in ["full", "沪深 A 股全市场，不含北交所", "build_full_a_share_universe", "BSE", "ST", "退市"]:
+        if phrase not in universe_source:
+            failures.append(f"core/data_sources/real_universe.py is missing {phrase}.")
+
+    pool_source = read_source(root / "core/universe/stock_pool.py")
+    for phrase in [
+        "median_amount_20d",
+        "latest_amount",
+        "traded_days_20d",
+        "min_avg_amount_20d",
+        "min_median_amount_20d",
+        "min_latest_amount",
+        "min_traded_days_20d",
+        "BSE stock",
+    ]:
+        if phrase not in pool_source:
+            failures.append(f"core/universe/stock_pool.py is missing {phrase}.")
+
+    update_source = read_source(root / "core/jobs/update_real_data.py")
+    for phrase in ["build_full_a_share_universe", "AKSHARE_SAMPLE_SYMBOLS", "sample_symbols", "emit_progress"]:
+        if phrase not in update_source:
+            failures.append(f"core/jobs/update_real_data.py is missing {phrase}.")
+
+    docs = read_source(root / "docs/real_universe.md") + read_source(root / "README.md") + read_source(root / "docs/commands_reference.md")
+    for phrase in ["mini / small / medium", "full", "沪深 A 股全市场，不含北交所", "近 20 日平均成交额", "复牌后"]:
+        if phrase not in docs:
+            failures.append(f"Task 46 docs are missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_real_universe_full.py").lower()
+    for phrase in ["full", "akshare_sample_symbols", "bse", "st", "退市", "avg amount", "median amount", "latest amount", "traded days", "total_score"]:
+        if phrase.lower() not in tests_source:
+            failures.append(f"tests/test_real_universe_full.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2195,6 +2258,7 @@ def main(argv: list[str] | None = None) -> int:
             "task43",
             "task44",
             "task45",
+            "task46",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

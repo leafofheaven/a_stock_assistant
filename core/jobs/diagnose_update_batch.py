@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from app.config import Settings, get_settings
+from core.data_sources.real_universe import is_full_universe_preset
 from core.data_sources.universe_presets import get_universe_preset, to_ts_code
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
@@ -43,6 +44,8 @@ def diagnose_update_batch(
             tables[table_name] = pd.DataFrame()
             reasons.append(f"{table_name} 读取失败：{exc}")
 
+    if sample_source == "REAL_UNIVERSE_PRESET=full" and not configured_symbols:
+        configured_symbols = _full_symbols_from_stock_basic(tables.get("stock_basic", pd.DataFrame()))
     return _build_result(
         settings=resolved_settings,
         store=resolved_store,
@@ -155,11 +158,22 @@ def _configured_symbols(settings: Settings) -> tuple[list[str], str]:
         explicit = [symbol.strip() for symbol in settings.akshare_sample_symbols.split(",") if symbol.strip()]
         if explicit:
             return [to_ts_code(symbol) for symbol in explicit], "AKSHARE_SAMPLE_SYMBOLS"
+        if is_full_universe_preset(settings.real_universe_preset):
+            return [], "REAL_UNIVERSE_PRESET=full"
         return [to_ts_code(symbol) for symbol in get_universe_preset(settings.real_universe_preset)], "REAL_UNIVERSE_PRESET"
     explicit = [symbol.strip() for symbol in settings.real_data_sample_symbols.split(",") if symbol.strip()]
     if explicit:
         return [to_ts_code(symbol) for symbol in explicit], "REAL_DATA_SAMPLE_SYMBOLS"
     return [to_ts_code(symbol) for symbol in get_universe_preset(settings.real_universe_preset)], "REAL_UNIVERSE_PRESET"
+
+
+def _full_symbols_from_stock_basic(stock_basic: pd.DataFrame) -> list[str]:
+    """Return local full-universe symbols from stock_basic when available."""
+    if stock_basic.empty or "ts_code" not in stock_basic.columns:
+        return []
+    if "exchange" in stock_basic.columns:
+        stock_basic = stock_basic[stock_basic["exchange"].astype(str).isin(["SSE", "SZSE"])]
+    return stock_basic["ts_code"].dropna().astype(str).drop_duplicates().tolist()
 
 
 def _rows_for_symbol(df: pd.DataFrame, ts_code: str) -> pd.DataFrame:

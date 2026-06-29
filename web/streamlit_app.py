@@ -978,7 +978,7 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         }
     )
     if effective["preset_inactive"]:
-        st.warning("你现在选择的是“自定义股票池”，所以系统只会更新上面输入的股票代码。预设股票池 small / medium 暂时不会生效。")
+        st.warning("你现在选择的是“自定义股票池”，所以系统只会更新上面输入的股票代码。预设股票池 small / medium / full 暂时不会生效。")
     else:
         st.info("当前使用 REAL_UNIVERSE_PRESET 股票池。")
 
@@ -1017,13 +1017,13 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         symbols = st.text_input("自定义股票代码", value=env_values.get("AKSHARE_SAMPLE_SYMBOLS", "000001,600000,000002"))
         preset = st.selectbox(
             "预设股票池",
-            ["mini", "small", "medium"],
-            index=_option_index(["mini", "small", "medium"], env_values.get("REAL_UNIVERSE_PRESET", "mini")),
+            ["mini", "small", "medium", "full"],
+            index=_option_index(["mini", "small", "medium", "full"], env_values.get("REAL_UNIVERSE_PRESET", "mini")),
         )
         if pool_mode == "自定义股票池":
             st.caption("支持 000001,600000,002475，也支持中文逗号、换行和 000001.SZ / 600000.SH。保存后预设股票池暂时不会生效。")
         else:
-            st.caption("保存时会清空 AKSHARE_SAMPLE_SYMBOLS，预设股票池将在下次更新数据时生效。")
+            st.caption("保存时会清空 AKSHARE_SAMPLE_SYMBOLS。mini / small / medium 是样本池；full 是沪深 A 股全市场，不含北交所。")
         start_date = st.text_input("参数开始日期", value=env_values.get("REAL_DATA_START_DATE", "20240101"))
         end_date = st.text_input("参数结束日期", value=env_values.get("REAL_DATA_END_DATE", ""))
         st.caption("结束日期留空表示尽量拉取到最新可得日期。")
@@ -1044,6 +1044,12 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             batch_sleep = st.number_input("REAL_BATCH_SLEEP_SECONDS", min_value=0.0, value=float(env_values.get("REAL_BATCH_SLEEP_SECONDS", "0") or 0.0), step=0.1)
             max_retries = st.number_input("REAL_MAX_RETRIES", min_value=0, value=int(env_values.get("REAL_MAX_RETRIES", "1") or 1), step=1)
             timeout_seconds = st.number_input("REAL_REQUEST_TIMEOUT_SECONDS", min_value=1, value=int(env_values.get("REAL_REQUEST_TIMEOUT_SECONDS", "30") or 30), step=1)
+            min_listing_days = st.number_input("MIN_LISTING_DAYS", min_value=0, value=int(env_values.get("MIN_LISTING_DAYS", "120") or 120), step=10)
+            min_avg_amount_20d = st.number_input("MIN_AVG_AMOUNT_20D", min_value=0, value=int(env_values.get("MIN_AVG_AMOUNT_20D", "100000000") or 100000000), step=10_000_000)
+            min_median_amount_20d = st.number_input("MIN_MEDIAN_AMOUNT_20D", min_value=0, value=int(env_values.get("MIN_MEDIAN_AMOUNT_20D", "50000000") or 50000000), step=5_000_000)
+            min_latest_amount = st.number_input("MIN_LATEST_AMOUNT", min_value=0, value=int(env_values.get("MIN_LATEST_AMOUNT", "30000000") or 30000000), step=5_000_000)
+            min_traded_days_20d = st.number_input("MIN_TRADED_DAYS_20D", min_value=0, max_value=20, value=int(env_values.get("MIN_TRADED_DAYS_20D", "18") or 18), step=1)
+            include_bse = st.checkbox("INCLUDE_BSE", value=_bool_value(env_values.get("INCLUDE_BSE", "false")))
             data_dir = st.text_input("DATA_DIR", value=env_values.get("DATA_DIR", "./data"))
             duckdb_path = st.text_input("DUCKDB_PATH", value=env_values.get("DUCKDB_PATH", "./data/a_stock_assistant.duckdb"))
             st.write({"TUSHARE_TOKEN 状态": display_values.get("TUSHARE_TOKEN", "未设置")})
@@ -1065,6 +1071,12 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         batch_sleep=batch_sleep,
         max_retries=max_retries,
         timeout_seconds=timeout_seconds,
+        min_listing_days=min_listing_days,
+        min_avg_amount_20d=min_avg_amount_20d,
+        min_median_amount_20d=min_median_amount_20d,
+        min_latest_amount=min_latest_amount,
+        min_traded_days_20d=min_traded_days_20d,
+        include_bse=include_bse,
         data_dir=data_dir,
         duckdb_path=duckdb_path,
     )
@@ -1115,8 +1127,14 @@ def build_settings_updates(
     batch_sleep: float,
     max_retries: int,
     timeout_seconds: int,
-    data_dir: str,
-    duckdb_path: str,
+    min_listing_days: int = 120,
+    min_avg_amount_20d: int = 100_000_000,
+    min_median_amount_20d: int = 50_000_000,
+    min_latest_amount: int = 30_000_000,
+    min_traded_days_20d: int = 18,
+    include_bse: bool = False,
+    data_dir: str = "./data",
+    duckdb_path: str = "./data/a_stock_assistant.duckdb",
 ) -> tuple[dict[str, Any], dict[str, list[str]]]:
     """Build .env updates for the simplified settings form."""
     parsed = parse_stock_symbols(symbols_text)
@@ -1134,6 +1152,12 @@ def build_settings_updates(
         "REAL_BATCH_SLEEP_SECONDS": batch_sleep,
         "REAL_MAX_RETRIES": max_retries,
         "REAL_REQUEST_TIMEOUT_SECONDS": timeout_seconds,
+        "MIN_LISTING_DAYS": min_listing_days,
+        "MIN_AVG_AMOUNT_20D": min_avg_amount_20d,
+        "MIN_MEDIAN_AMOUNT_20D": min_median_amount_20d,
+        "MIN_LATEST_AMOUNT": min_latest_amount,
+        "MIN_TRADED_DAYS_20D": min_traded_days_20d,
+        "INCLUDE_BSE": include_bse,
         "DATA_DIR": data_dir,
         "DUCKDB_PATH": duckdb_path,
     }
@@ -1159,14 +1183,14 @@ def effective_pool_config(values: dict[str, str]) -> dict[str, Any]:
         }
     return {
         "mode": "preset",
-        "mode_label": "REAL_UNIVERSE_PRESET",
+        "mode_label": "REAL_UNIVERSE_PRESET=full（沪深 A 股全市场，不含北交所）" if preset == "full" else "REAL_UNIVERSE_PRESET",
         "symbol_count": 0,
         "symbols": [],
-        "symbols_text": f"使用预设：{preset}",
+        "symbols_text": "使用预设：full（沪深 A 股全市场，不含北交所）" if preset == "full" else f"使用预设：{preset}",
         "akshare_sample_symbols": "",
         "real_universe_preset": preset,
         "preset_inactive": False,
-        "message": "AKSHARE_SAMPLE_SYMBOLS 为空，当前使用 REAL_UNIVERSE_PRESET 股票池。",
+        "message": "AKSHARE_SAMPLE_SYMBOLS 为空，当前使用 full 沪深 A 股全市场股票池，不含北交所。" if preset == "full" else "AKSHARE_SAMPLE_SYMBOLS 为空，当前使用 REAL_UNIVERSE_PRESET 股票池。",
     }
 
 
