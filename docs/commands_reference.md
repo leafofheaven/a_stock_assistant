@@ -196,12 +196,16 @@ python -m core.jobs.export_watchlist --format all
 命令：
 
 ```bash
+python -m core.jobs.refresh_watchlist_from_selection
 python -m core.jobs.track_watchlist
 python -m core.jobs.track_watchlist --export-report --format all
+python -m core.jobs.export_watchlist_tracking --format all
 python -m core.jobs.export_watchlist_tracking_report --format all
 ```
 
-作用：生成观察池 snapshot，并导出价格、评分、PE/PB 变化报告。重点看 `缺少行情股票数量`、`缺少评分股票数量`、`score_change`、`pe_change`、`pb_change`。
+作用：把今日候选刷新到观察池，生成 `watchlist_daily_snapshots` 与 `watchlist_events`，并导出价格、评分、PE/PB、排名和入选次数变化报告。重点看 `watch_status`、`selected_count_5d`、`selected_count_10d`、`consecutive_selected_days`、`rank_change`、`score_change`。
+
+状态包括 `new_candidate`、`active_watch`、`strong_watch`、`wait_pullback`、`near_buy_zone`、`overheated`、`weakening`、`invalidated`、`bought`、`removed`。这些状态只用于人工复核，不改变 `total_score`、因子权重或今日选股排序。
 
 ## 一键日常工作流
 

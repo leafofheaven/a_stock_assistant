@@ -15,7 +15,7 @@
 - 埃尔德复核接入人工复核：支持导出带操作建议的 CSV / Markdown，并可显式把趋势确认股票加入观察池。
 - 回测诊断、工作流报告和 Streamlit 页面。
 - 候选股票复核报告、人工复核模板导出和复核结果导入。
-- 观察池管理、观察池跟踪、观察池变化报告、状态调整与历史记录。
+- 观察池管理、每日候选跟踪、观察池变化报告、状态调整与历史记录。
 - 本地 DuckDB 备份、恢复 dry-run、报告清理和本地状态诊断。
 - Chrome 本地控制台：Streamlit 页面内可修改常用 `.env` 参数、运行白名单命令、实时查看运行进度、查看 doctor 体检并打开 reports 文件夹。
 
@@ -109,7 +109,7 @@ python -m core.jobs.doctor_daily_run --post-run
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
-- 观察池评分刷新、跟踪与变化报告：`watchlist_snapshots`，`python -m core.jobs.refresh_watchlist_scores --dry-run`，`python -m core.jobs.track_watchlist`，`python -m core.jobs.export_watchlist_tracking_report`，`--track-watchlist`，`--export-watchlist-tracking`
+- 观察池每日候选跟踪与变化报告：`watchlist_daily_snapshots`，`watchlist_events`，`python -m core.jobs.refresh_watchlist_from_selection`，`python -m core.jobs.track_watchlist`，`python -m core.jobs.export_watchlist_tracking`，`python -m core.jobs.export_watchlist_tracking_report`，`--track-watchlist`，`--export-watchlist-tracking`
 - 一键日常工作流与综合日报：`python -m core.jobs.run_daily_workflow --backup-before-run --format all`，`python -m core.jobs.run_daily_workflow --skip-update --format all`
 - 日常运行体检与安全恢复：`python -m core.jobs.doctor_daily_run --pre-run`，`python -m core.jobs.doctor_daily_run --post-run`，`python -m core.jobs.doctor_daily_run --fix-safe`，`python -m core.jobs.run_daily_workflow --doctor-before-run --backup-before-run --format all`
 - 观察池状态调整与复核记录管理：`python -m core.jobs.update_review_decision`，`python -m core.jobs.diagnose_review_history`，`--diagnose-review-history`
@@ -154,6 +154,7 @@ open scripts/mac/A股选股助手.command
 - [选股逻辑说明](docs/selection_logic.md)
 - [埃尔德复核](docs/elder_review.md)
 - [埃尔德复核与观察池流程](docs/elder_review_workflow.md)
+- [观察池每日候选跟踪](docs/watchlist_candidate_tracking.md)
 - [埃尔德复核历史回看](docs/elder_review_backtest.md)
 - [持仓池](docs/position_pool.md)
 - [持仓每日跟踪](docs/position_tracking.md)

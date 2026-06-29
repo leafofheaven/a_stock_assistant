@@ -6,6 +6,7 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from core.review.decisions import build_watchlist_dataframe, summarize_review_decisions
+from core.review.tracking import WATCH_STATUS_LABELS, summarize_watchlist_tracking
 from core.storage.duckdb_store import DuckDBStore
 
 
@@ -18,6 +19,7 @@ def diagnose_watchlist(
     resolved_store = store or DuckDBStore(resolved_settings.duckdb_path)
     summary = summarize_review_decisions(resolved_store)
     watchlist = build_watchlist_dataframe(resolved_store, active_only=True)
+    tracking = summarize_watchlist_tracking(resolved_store)
     return {
         "data_provider": resolved_settings.data_provider,
         "duckdb_path": str(resolved_store.db_path),
@@ -27,6 +29,16 @@ def diagnose_watchlist(
         "needs_data_count": summary["decision_counts"].get("needs_data", 0),
         "exclude_count": summary["decision_counts"].get("exclude", 0),
         "pass_count": summary["decision_counts"].get("pass", 0),
+        "tracking_snapshot_count": tracking["snapshot_count"],
+        "watch_status_counts": tracking["status_counts"],
+        "new_candidate_count": tracking["new_candidate_count"],
+        "strong_watch_count": tracking["strong_watch_count"],
+        "wait_pullback_count": tracking["wait_pullback_count"],
+        "overheated_count": tracking["overheated_count"],
+        "weakening_count": tracking["weakening_count"],
+        "invalidated_count": tracking["invalidated_count"],
+        "near_buy_zone_count": tracking["near_buy_zone_count"],
+        "event_count": tracking["event_count"],
         "watchlist": watchlist.to_dict("records"),
         "next_steps": _next_steps(summary["active_watch_count"]),
     }
@@ -44,6 +56,12 @@ def main() -> None:
     print(f"- needs_data 数量: {result['needs_data_count']}")
     print(f"- exclude 数量: {result['exclude_count']}")
     print(f"- pass 数量: {result['pass_count']}")
+    print(f"- 每日跟踪 snapshot 数量: {result['tracking_snapshot_count']}")
+    print(f"- 观察池事件数量: {result['event_count']}")
+    print("- 观察池分层数量:")
+    counts = result.get("watch_status_counts") or {}
+    for key, label in WATCH_STATUS_LABELS.items():
+        print(f"  {label}: {counts.get(key, 0)}")
     print("- 当前观察池股票列表:")
     if result["watchlist"]:
         for item in result["watchlist"]:

@@ -16,8 +16,19 @@ TRACKING_COLUMNS = [
     "market",
     "list_date",
     "snapshot_date",
+    "trade_date",
     "latest_trade_date",
+    "current_close",
     "latest_close",
+    "today_rank",
+    "previous_rank",
+    "rank_change",
+    "selected_count_5d",
+    "selected_count_10d",
+    "consecutive_selected_days",
+    "watch_status",
+    "watch_status_label",
+    "daily_note",
     "pe",
     "pb",
     "total_score",
@@ -193,29 +204,35 @@ def _current_and_baseline(
     if snapshots_df.empty:
         return pd.DataFrame(), {}
     df = snapshots_df.copy()
-    if since and "snapshot_date" in df.columns:
-        df = df[df["snapshot_date"].astype(str) >= since]
+    date_col = "snapshot_date" if "snapshot_date" in df.columns else "trade_date"
+    if "snapshot_date" not in df.columns and "trade_date" in df.columns:
+        df["snapshot_date"] = df["trade_date"]
+    if since and date_col in df.columns:
+        df = df[df[date_col].astype(str) >= since]
     if df.empty:
         return pd.DataFrame(), {}
     if latest_only:
-        latest = str(df["snapshot_date"].dropna().astype(str).max())
-        current = df[df["snapshot_date"].astype(str) == latest].copy()
+        latest = str(df[date_col].dropna().astype(str).max())
+        current = df[df[date_col].astype(str) == latest].copy()
     else:
         current = df.copy()
-    baseline_rows = df.sort_values("snapshot_date").groupby("ts_code", as_index=False).head(1)
+    baseline_rows = df.sort_values(date_col).groupby("ts_code", as_index=False).head(1)
     baseline = {str(row["ts_code"]): row for row in baseline_rows.to_dict("records")}
     return current.reset_index(drop=True), baseline
 
 
 def _tracking_record(row: dict[str, Any], baseline: dict[str, dict[str, Any]]) -> dict[str, Any]:
     base = baseline.get(str(row.get("ts_code")), {})
-    close_change = _pct_change(row.get("latest_close"), base.get("latest_close"))
+    latest_close = row.get("latest_close", row.get("current_close"))
+    base_close = base.get("latest_close", base.get("current_close"))
+    close_change = _pct_change(latest_close, base_close)
     total_change = _diff(row.get("total_score"), base.get("total_score"))
     pe_change = _diff(row.get("pe"), base.get("pe"))
     pb_change = _diff(row.get("pb"), base.get("pb"))
     data_quality_note = _quality_note(row.get("data_quality_note"), row.get("total_score"))
     return {
         **_jsonable(row),
+        "latest_close": latest_close,
         "close_change_pct": close_change,
         "score_change": total_change,
         "total_score_change": total_change,

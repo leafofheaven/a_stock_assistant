@@ -160,6 +160,58 @@ CREATE TABLE IF NOT EXISTS watchlist_snapshots (
     created_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS watchlist_daily_snapshots (
+    snapshot_id VARCHAR PRIMARY KEY,
+    ts_code VARCHAR,
+    name VARCHAR,
+    trade_date VARCHAR,
+    current_close DOUBLE,
+    pe DOUBLE,
+    pb DOUBLE,
+    today_rank INTEGER,
+    previous_rank INTEGER,
+    rank_change INTEGER,
+    total_score DOUBLE,
+    total_score_change DOUBLE,
+    top_n_flag BOOLEAN,
+    new_candidate_flag BOOLEAN,
+    first_selected_date VARCHAR,
+    last_selected_date VARCHAR,
+    selected_count_5d INTEGER,
+    selected_count_10d INTEGER,
+    consecutive_selected_days INTEGER,
+    best_rank INTEGER,
+    watch_status VARCHAR,
+    watch_status_label VARCHAR,
+    watch_days INTEGER,
+    entry_reason VARCHAR,
+    watch_reason VARCHAR,
+    daily_note VARCHAR,
+    elder_score DOUBLE,
+    action_hint VARCHAR,
+    elder_reason VARCHAR,
+    weekly_trend VARCHAR,
+    daily_pullback VARCHAR,
+    force_signal VARCHAR,
+    elder_ray_signal VARCHAR,
+    created_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS watchlist_events (
+    event_id VARCHAR PRIMARY KEY,
+    ts_code VARCHAR,
+    event_date VARCHAR,
+    event_type VARCHAR,
+    old_status VARCHAR,
+    new_status VARCHAR,
+    old_rank INTEGER,
+    new_rank INTEGER,
+    old_score DOUBLE,
+    new_score DOUBLE,
+    reason VARCHAR,
+    created_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS review_decision_history (
     history_id VARCHAR PRIMARY KEY,
     ts_code VARCHAR,
