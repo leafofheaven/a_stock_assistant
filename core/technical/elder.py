@@ -35,8 +35,13 @@ ELDER_REVIEW_COLUMNS = [
     "close_to_ema13_pct",
     "close_to_ema22_pct",
     "weekly_trend_improving",
+    "weekly_trend",
     "daily_pullback_ok",
+    "daily_pullback",
     "short_trigger",
+    "force_signal",
+    "elder_ray_signal",
+    "review_action",
 ]
 
 
@@ -163,8 +168,9 @@ def build_elder_review(
         latest = history.iloc[-1]
         previous = history.iloc[-2] if len(history) >= 2 else latest
         weekly_row = _latest_weekly_row(weekly, ts_code)
-        score, action_hint, reason = _classify_elder_state(latest, previous, weekly_row)
+        score, action_hint, reason, signals = _classify_elder_state(latest, previous, weekly_row)
         rows.append(_review_row(candidate, latest, weekly_row, score, action_hint, reason))
+        rows[-1].update(signals)
     return pd.DataFrame(rows)[ELDER_REVIEW_COLUMNS]
 
 
@@ -172,7 +178,7 @@ def _classify_elder_state(
     latest: pd.Series,
     previous: pd.Series,
     weekly_row: pd.Series | None,
-) -> tuple[int, str, str]:
+) -> tuple[int, str, str, dict[str, str]]:
     """Classify one candidate into an Elder-style review bucket."""
     weekly_ok = bool(weekly_row is not None and weekly_row.get("weekly_trend_improving", False))
     close_to_ema13 = _to_float(latest.get("close_to_ema13_pct"))
@@ -190,6 +196,12 @@ def _classify_elder_state(
     hist_strengthening = hist_slope > 0
     elder_ray_improving = bull_power > 0 or bear_power > prev_bear_power
     short_trigger = force_cross_up or (hist_strengthening and elder_ray_improving)
+    signals = {
+        "weekly_trend": "改善" if weekly_ok else "偏弱",
+        "daily_pullback": "接近 EMA" if pullback_ok else "偏离 EMA",
+        "force_signal": "由负转正" if force_cross_up else ("偏强" if force2 > 0 else "偏弱"),
+        "elder_ray_signal": "多头增强/空头减弱" if elder_ray_improving else "压力未减弱",
+    }
 
     score = 0
     if weekly_ok:
@@ -206,14 +218,15 @@ def _classify_elder_state(
         score += 10
 
     if not weekly_ok:
-        return min(score, 45), "趋势偏弱，暂缓", "周线趋势尚未改善，先暂缓技术确认。"
+        return min(score, 45), "趋势偏弱，暂缓", "周线趋势尚未改善，先暂缓技术确认。", signals
     if overheat:
-        return min(score, 70), "短线过热，不追", "周线趋势尚可，但收盘价明显高于 EMA，短线不宜追高。"
+        signals["daily_pullback"] = "短线过热"
+        return min(score, 70), "短线过热，不追", "周线趋势尚可，但收盘价明显高于 EMA，短线不宜追高。", signals
     if pullback_ok and short_trigger:
-        return min(score, 100), "趋势确认，进入人工复核", "周线趋势改善，日线接近 EMA，短线触发信号转强。"
+        return min(score, 100), "趋势确认，进入人工复核", "周线趋势改善，日线接近 EMA，短线触发信号转强。", signals
     if pullback_ok:
-        return min(score, 85), "趋势尚可，等待回调", "周线趋势改善，价格仍在趋势结构内，但短线触发信号不够明确。"
-    return min(score, 75), "趋势尚可，等待回调", "周线趋势改善，但价格离 EMA 较远，等待更合适的回调位置。"
+        return min(score, 85), "趋势尚可，等待回调", "周线趋势改善，价格仍在趋势结构内，但短线触发信号不够明确。", signals
+    return min(score, 75), "趋势尚可，等待回调", "周线趋势改善，但价格离 EMA 较远，等待更合适的回调位置。", signals
 
 
 def _review_row(
@@ -232,8 +245,13 @@ def _review_row(
             "action_hint": action_hint,
             "elder_reason": reason,
             "weekly_trend_improving": bool(weekly_row is not None and weekly_row.get("weekly_trend_improving", False)),
+            "weekly_trend": "数据不足",
             "daily_pullback_ok": False,
+            "daily_pullback": "数据不足",
             "short_trigger": False,
+            "force_signal": "数据不足",
+            "elder_ray_signal": "数据不足",
+            "review_action": _review_action(action_hint),
         }
     )
     indicator_columns = [
@@ -257,9 +275,19 @@ def _review_row(
         close_to_ema13 = _to_float(latest.get("close_to_ema13_pct"))
         close_to_ema22 = _to_float(latest.get("close_to_ema22_pct"))
         row["daily_pullback_ok"] = bool(abs(close_to_ema13) <= 5 or abs(close_to_ema22) <= 8)
-        previous_force = None
         row["short_trigger"] = "短线触发信号转强" in reason or "短线触发" in reason
     return row
+
+
+def _review_action(action_hint: str) -> str:
+    """Map technical status to manual review workflow action."""
+    if action_hint == "趋势确认，进入人工复核":
+        return "加入观察池"
+    if action_hint == "趋势尚可，等待回调":
+        return "等待回调"
+    if action_hint == "趋势偏弱，暂缓":
+        return "暂缓"
+    return "忽略"
 
 
 def _latest_weekly_row(weekly: pd.DataFrame, ts_code: str) -> pd.Series | None:

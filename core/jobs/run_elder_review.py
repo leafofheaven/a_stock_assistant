@@ -92,22 +92,43 @@ def render_elder_review_markdown(result: dict[str, Any]) -> str:
     if review_df.empty:
         lines.append("暂无复核结果。")
         return "\n".join(lines)
-    columns = ["rank", "ts_code", "name", "total_score", "elder_score", "action_hint", "elder_reason"]
+    columns = [
+        "rank",
+        "ts_code",
+        "name",
+        "total_score",
+        "elder_score",
+        "review_action",
+        "action_hint",
+        "weekly_trend",
+        "daily_pullback",
+        "force_signal",
+        "elder_ray_signal",
+        "elder_reason",
+    ]
+    for column in columns:
+        if column not in review_df.columns:
+            review_df[column] = ""
     lines.extend(
         [
-            "| rank | ts_code | name | total_score | elder_score | action_hint | reason |",
-            "| --- | --- | --- | ---: | ---: | --- | --- |",
+            "| rank | ts_code | name | total_score | elder_score | 操作建议 | action_hint | weekly | pullback | force | elder_ray | reason |",
+            "| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for item in review_df[columns].to_dict("records"):
         lines.append(
-            "| {rank} | {ts_code} | {name} | {total_score} | {elder_score} | {action_hint} | {reason} |".format(
+            "| {rank} | {ts_code} | {name} | {total_score} | {elder_score} | {review_action} | {action_hint} | {weekly_trend} | {daily_pullback} | {force_signal} | {elder_ray_signal} | {reason} |".format(
                 rank=item.get("rank") or "",
                 ts_code=item.get("ts_code") or "",
                 name=item.get("name") or "",
                 total_score=_fmt(item.get("total_score")),
                 elder_score=_fmt(item.get("elder_score")),
+                review_action=item.get("review_action") or "",
                 action_hint=item.get("action_hint") or "",
+                weekly_trend=item.get("weekly_trend") or "",
+                daily_pullback=item.get("daily_pullback") or "",
+                force_signal=item.get("force_signal") or "",
+                elder_ray_signal=item.get("elder_ray_signal") or "",
                 reason=item.get("elder_reason") or "",
             )
         )

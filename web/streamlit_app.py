@@ -562,6 +562,25 @@ def _render_stock_detail_tab(
     factors = factor_df[factor_df["ts_code"] == ts_code] if "ts_code" in factor_df.columns else pd.DataFrame()
     if not factors.empty:
         st.dataframe(factors[[column for column in FACTOR_SCORE_COLUMNS if column in factors.columns]], use_container_width=True)
+        latest_factor = factors.sort_values("trade_date").iloc[-1].to_dict() if "trade_date" in factors.columns else factors.iloc[-1].to_dict()
+        latest_factor.setdefault("ts_code", ts_code)
+        if not basic.empty:
+            latest_factor.setdefault("name", basic.iloc[-1].get("name"))
+            latest_factor.setdefault("industry", basic.iloc[-1].get("industry"))
+        elder = build_elder_review(pd.DataFrame([latest_factor]), price_df)
+        if not elder.empty:
+            st.write("最近一次埃尔德复核")
+            elder_columns = [
+                "elder_score",
+                "review_action",
+                "action_hint",
+                "elder_reason",
+                "weekly_trend",
+                "daily_pullback",
+                "force_signal",
+                "elder_ray_signal",
+            ]
+            st.dataframe(elder[[column for column in elder_columns if column in elder.columns]], use_container_width=True)
 
 
 def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame, daily_basic: pd.DataFrame | None = None) -> None:
@@ -671,8 +690,13 @@ def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.D
         "industry",
         "total_score",
         "elder_score",
+        "review_action",
         "action_hint",
         "elder_reason",
+        "weekly_trend",
+        "daily_pullback",
+        "force_signal",
+        "elder_ray_signal",
         "ema13",
         "ema22",
         "macd_histogram",
@@ -688,7 +712,8 @@ def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.D
     st.dataframe(review_df[available], use_container_width=True)
     st.write("状态分布")
     st.dataframe(review_df["action_hint"].value_counts(dropna=False).rename_axis("action_hint").reset_index(name="count"), use_container_width=True)
-    st.caption("命令行：python -m core.jobs.run_elder_review 或 python -m core.jobs.run_elder_review --format markdown")
+    st.info("操作建议只用于人工复核流程，不改变今日选股 total_score 排序。批量导出可运行 python -m core.jobs.export_elder_review。")
+    st.caption("命令行：python -m core.jobs.run_elder_review 或 python -m core.jobs.export_elder_review --format markdown")
 
 
 def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:

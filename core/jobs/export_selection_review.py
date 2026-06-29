@@ -20,6 +20,7 @@ from core.reporting.selection_review_report import (
 from core.sample_data import get_sample_dashboard_data
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 from core.strategy.selector import select_top_stocks
+from core.technical.elder import build_elder_review
 
 
 def export_selection_review(
@@ -115,7 +116,10 @@ def _load_selection_payload(
             stock_basic_df = sample.get("stock_basic", pd.DataFrame())
         return {
             "selection_summary": summary,
-            "selection_df": _attach_stock_basic_fields(selection_df, stock_basic_df),
+            "selection_df": _attach_elder_fields(
+                _attach_stock_basic_fields(selection_df, stock_basic_df),
+                price_df,
+            ),
             "factor_df": factor_df,
             "price_df": price_df,
             "daily_basic_df": daily_basic_df,
@@ -125,7 +129,7 @@ def _load_selection_payload(
     sample = get_sample_dashboard_data()
     return {
         "selection_summary": summary,
-        "selection_df": sample["selection"].head(top_n).copy(),
+        "selection_df": _attach_elder_fields(sample["selection"].head(top_n).copy(), sample["price"]),
         "factor_df": sample["factor_scores"],
         "price_df": sample["price"],
         "daily_basic_df": sample["daily_basic"],
@@ -145,7 +149,7 @@ def _load_existing_tables(store: DuckDBStore, top_n: int) -> dict[str, Any] | No
         selection = selection.head(top_n)
     stock_basic = _safe_read_table(store, "stock_basic")
     return {
-        "selection_df": _attach_stock_basic_fields(selection, stock_basic),
+        "selection_df": _attach_elder_fields(_attach_stock_basic_fields(selection, stock_basic), _safe_read_table(store, "daily_price")),
         "factor_df": factor_scores,
         "price_df": _safe_read_table(store, "daily_price"),
         "daily_basic_df": _safe_read_table(store, "daily_basic"),
@@ -180,6 +184,34 @@ def _attach_stock_basic_fields(selection_df: pd.DataFrame, stock_basic_df: pd.Da
         if stock_field in merged.columns:
             merged[field] = merged[field].where(~merged[field].map(_is_missing), merged[stock_field])
             merged = merged.drop(columns=[stock_field])
+    return merged
+
+
+def _attach_elder_fields(selection_df: pd.DataFrame, price_df: pd.DataFrame) -> pd.DataFrame:
+    """Attach Elder review fields without changing candidate ordering."""
+    if selection_df.empty:
+        return selection_df.copy()
+    review = build_elder_review(selection_df, price_df)
+    if review.empty:
+        return selection_df.copy()
+    elder_columns = [
+        "ts_code",
+        "trade_date",
+        "elder_score",
+        "action_hint",
+        "elder_reason",
+        "weekly_trend",
+        "daily_pullback",
+        "force_signal",
+        "elder_ray_signal",
+        "review_action",
+    ]
+    available = [column for column in elder_columns if column in review.columns]
+    result = selection_df.copy()
+    result["_original_order"] = range(len(result))
+    join_keys = ["ts_code", "trade_date"] if "trade_date" in result.columns and "trade_date" in review.columns else ["ts_code"]
+    merged = result.merge(review[available], on=join_keys, how="left", suffixes=("", "_elder"))
+    merged = merged.sort_values("_original_order").drop(columns=["_original_order"]).reset_index(drop=True)
     return merged
 
 
