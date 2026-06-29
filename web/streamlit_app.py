@@ -1098,6 +1098,8 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
                 index=_option_index(["qfq", "hfq", ""], env_values.get("AKSHARE_ADJUST", "qfq")),
             )
             basic_enrichment = st.checkbox("ENABLE_REAL_BASIC_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_REAL_BASIC_ENRICHMENT", "true")))
+            stock_basic_enrichment = st.checkbox("ENABLE_STOCK_BASIC_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_STOCK_BASIC_ENRICHMENT", "false")))
+            full_stock_basic_enrichment = st.checkbox("FULL_ENABLE_STOCK_BASIC_ENRICHMENT", value=_bool_value(env_values.get("FULL_ENABLE_STOCK_BASIC_ENRICHMENT", "false")))
             valuation_enrichment = st.checkbox("ENABLE_REAL_VALUATION_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_REAL_VALUATION_ENRICHMENT", "true")))
             batch_size = st.number_input("REAL_BATCH_SIZE", min_value=1, value=int(env_values.get("REAL_BATCH_SIZE", "10") or 10), step=1)
             batch_sleep = st.number_input("REAL_BATCH_SLEEP_SECONDS", min_value=0.0, value=float(env_values.get("REAL_BATCH_SLEEP_SECONDS", "0") or 0.0), step=0.1)
@@ -1130,6 +1132,8 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         provider=provider,
         akshare_adjust=akshare_adjust,
         basic_enrichment=basic_enrichment,
+        stock_basic_enrichment=stock_basic_enrichment,
+        full_stock_basic_enrichment=full_stock_basic_enrichment,
         valuation_enrichment=valuation_enrichment,
         batch_size=batch_size,
         batch_sleep=batch_sleep,
@@ -1209,6 +1213,8 @@ def build_settings_updates(
     include_bse: bool = False,
     data_dir: str = "./data",
     duckdb_path: str = "./data/a_stock_assistant.duckdb",
+    stock_basic_enrichment: bool = False,
+    full_stock_basic_enrichment: bool = False,
 ) -> tuple[dict[str, Any], dict[str, list[str]]]:
     """Build .env updates for the simplified settings form."""
     parsed = parse_stock_symbols(symbols_text)
@@ -1221,6 +1227,8 @@ def build_settings_updates(
         "REAL_DATA_START_DATE": start_date,
         "REAL_DATA_END_DATE": end_date,
         "ENABLE_REAL_BASIC_ENRICHMENT": basic_enrichment,
+        "ENABLE_STOCK_BASIC_ENRICHMENT": stock_basic_enrichment,
+        "FULL_ENABLE_STOCK_BASIC_ENRICHMENT": full_stock_basic_enrichment,
         "ENABLE_REAL_VALUATION_ENRICHMENT": valuation_enrichment,
         "REAL_BATCH_SIZE": batch_size,
         "REAL_BATCH_SLEEP_SECONDS": batch_sleep,

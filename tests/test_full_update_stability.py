@@ -103,6 +103,13 @@ class FullUpdateClient:
         )
 
 
+class BlockingBasicEnrichmentClient(FullUpdateClient):
+    """Client that fails if per-symbol basic enrichment is called."""
+
+    def enrich_stock_basic(self, stock_basic: pd.DataFrame, symbols: list[str] | None = None) -> pd.DataFrame:
+        raise AssertionError("stock_individual_info_em should not run in full mode by default")
+
+
 def test_full_update_uses_batches_and_progress(tmp_path: Path) -> None:
     """full mode should split requests into batches and emit readable progress."""
     client = FullUpdateClient()
@@ -122,6 +129,23 @@ def test_full_update_uses_batches_and_progress(tmp_path: Path) -> None:
     assert client.price_batches == [["000001", "600000"], ["300750", "688981"]]
     assert any(state.step == "daily_price" and "第 1/2 批" in state.message for state in progress)
     assert any(state.step == "daily_price" and state.success >= 2 for state in progress)
+    assert any("开始解析 沪深 A 股全市场" in state.message for state in progress)
+    assert not any("开始更新 0 只样本股票" in state.message for state in progress)
+
+
+def test_full_update_skips_per_symbol_basic_enrichment_by_default(tmp_path: Path) -> None:
+    """full mode should not call stock_individual_info_em before market data updates."""
+    client = BlockingBasicEnrichmentClient()
+
+    result = update_real_data(
+        settings=FullUpdateSettings(),
+        store=DuckDBStore(tmp_path / "full-no-basic-enrichment.duckdb"),
+        client=client,
+    )
+
+    assert result["status"] == "success"
+    assert result["success_symbols"] == 4
+    assert client.price_batches
 
 
 def test_full_update_resume_skips_symbols_already_current(tmp_path: Path) -> None:

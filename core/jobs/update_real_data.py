@@ -171,7 +171,7 @@ def _run_provider_update(
         progress,
         step="update_real_data",
         current=provider_name,
-        message=f"开始更新 {len(sample_symbols)} 只样本股票，日期 {effective_start_date}-{end_date}。",
+        message=_initial_update_message(settings, provider_name, sample_symbols, effective_start_date, end_date),
     )
 
     try:
@@ -200,7 +200,7 @@ def _run_provider_update(
             stock_basic = _merge_existing_stock_basic(stock_basic, resolved_store)
         if (
             provider_name == "akshare"
-            and getattr(settings, "enable_real_basic_enrichment", True)
+            and _should_run_stock_basic_enrichment(settings, provider_name)
             and hasattr(client, "enrich_stock_basic")
         ):
             try:
@@ -212,7 +212,11 @@ def _run_provider_update(
                     "stock_basic_enrichment",
                     f"{type(exc).__name__}: {exc}",
                 )
-        if provider_name == "akshare" and getattr(settings, "enable_real_basic_enrichment", True):
+        if (
+            provider_name == "akshare"
+            and getattr(settings, "enable_real_basic_enrichment", True)
+            and not _use_full_universe(settings, provider_name)
+        ):
             stock_basic = _apply_local_basic_info_presets(client, stock_basic)
         emit_progress(progress, step="trade_calendar", current="trade_calendar", message="读取交易日历。")
         update_plan = _build_symbol_update_plan(
@@ -234,7 +238,8 @@ def _run_provider_update(
             message=(
                 f"全市场股票 {len(sample_symbols)} 只，已跳过 {len(skipped_symbols)} 只，"
                 f"增量更新 {len(update_plan.get('incremental_update_symbols', []))} 只，"
-                f"首次补数据 {len(update_plan.get('initial_update_symbols', []))} 只。"
+                f"首次补数据 {len(update_plan.get('initial_update_symbols', []))} 只，"
+                f"本批次待更新数量 {min(_effective_batch_size(settings, _use_full_universe(settings, provider_name)), len(symbols_to_fetch))} 只。"
             ),
         )
         frames = {
@@ -482,6 +487,33 @@ def _use_full_universe(settings: Settings, provider_name: str) -> bool:
     if [symbol.strip() for symbol in getattr(settings, "akshare_sample_symbols", "").split(",") if symbol.strip()]:
         return False
     return is_full_universe_preset(getattr(settings, "real_universe_preset", "mini"))
+
+
+def _initial_update_message(
+    settings: Settings,
+    provider_name: str,
+    sample_symbols: list[str],
+    start_date: str,
+    end_date: str,
+) -> str:
+    """Return a progress message before provider stock_basic is resolved."""
+    if _use_full_universe(settings, provider_name):
+        return f"开始解析 {FULL_UNIVERSE_LABEL} 基础股票池，日期 {start_date}-{end_date}。"
+    return f"开始更新 {len(sample_symbols)} 只样本股票，日期 {start_date}-{end_date}。"
+
+
+def _should_run_stock_basic_enrichment(settings: Settings, provider_name: str) -> bool:
+    """Return whether optional per-symbol stock_basic enrichment may run."""
+    if provider_name != "akshare":
+        return False
+    if not getattr(settings, "enable_real_basic_enrichment", True):
+        return False
+    if _use_full_universe(settings, provider_name):
+        return bool(getattr(settings, "full_enable_stock_basic_enrichment", False))
+    specific = getattr(settings, "enable_stock_basic_enrichment", None)
+    if specific is None:
+        return True
+    return bool(specific)
 
 
 def _full_update_resume(settings: Settings, provider_name: str) -> bool:

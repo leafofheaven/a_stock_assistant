@@ -222,6 +222,10 @@ class AKShareClient(StockDataSource):
             return pd.DataFrame(), f"AKShare function is unavailable: {function_name}"
         try:
             result = function(**kwargs)
+        except _optional_network_errors() as exc:
+            return pd.DataFrame(), f"{type(exc).__name__}: {exc}"
+        except (KeyError, ValueError) as exc:
+            return pd.DataFrame(), f"{type(exc).__name__}: {exc}"
         except Exception as exc:
             return pd.DataFrame(), f"{type(exc).__name__}: {exc}"
         if not isinstance(result, pd.DataFrame):
@@ -632,6 +636,16 @@ def _market_from_ts_code(ts_code: str) -> str:
     """Return a compact market label inferred from ts_code."""
     code = str(ts_code)
     return "上交所" if code.endswith(".SH") else "深交所"
+
+
+def _optional_network_errors() -> tuple[type[BaseException], ...]:
+    """Return optional network exception classes without requiring requests."""
+    try:
+        from requests.exceptions import RequestException, Timeout
+
+        return (Timeout, RequestException)
+    except Exception:
+        return ()
 
 
 def _parse_individual_info(df: pd.DataFrame) -> dict[str, Any]:

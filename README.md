@@ -121,6 +121,8 @@ python -m core.jobs.doctor_daily_run --post-run
 
 full 全市场更新口径：页面和 `diagnose_update_batch` 不只看数据库全局最新行情日期，还会逐只股票检查 `daily_price`、`daily_basic`、`adj_factor` 覆盖情况。覆盖率低时会显示“全市场数据未完成”，点击“保存并更新数据”会把缺行情或最新不足的股票加入队列；`FULL_UPDATE_RESUME=true` 时已有最新数据的股票会跳过。
 
+full 基础信息增强口径：`ENABLE_STOCK_BASIC_ENRICHMENT=false`、`FULL_ENABLE_STOCK_BASIC_ENRICHMENT=false` 为默认设置。full 模式不会逐只调用 `stock_individual_info_em`，避免全市场更新在基础增强阶段阻塞。
+
 日常稳定性：运行前可先执行 `python -m core.jobs.doctor_daily_run --pre-run` 检查 `.env`、DuckDB、`reports/.gitkeep`、最近备份和报告、Git 误提交风险。需要安全修复目录或 `reports/.gitkeep` 时运行 `python -m core.jobs.doctor_daily_run --fix-safe`。不要使用 `rm -rf reports`；清理生成报告请用 `python -m core.jobs.clean_generated_reports --force` 或 `find reports -type f ! -name ".gitkeep" -delete`。
 
 ## Streamlit 启动

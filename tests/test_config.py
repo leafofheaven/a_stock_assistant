@@ -29,6 +29,8 @@ def test_settings_defaults() -> None:
     assert settings.real_batch_sleep_seconds == 0.0
     assert settings.real_max_retries == 1
     assert settings.real_request_timeout_seconds == 30
+    assert settings.enable_stock_basic_enrichment is False
+    assert settings.full_enable_stock_basic_enrichment is False
     assert settings.enable_real_basic_enrichment is True
     assert settings.enable_real_valuation_enrichment is True
 
@@ -57,6 +59,8 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
                 "REAL_BATCH_SLEEP_SECONDS=0.1",
                 "REAL_MAX_RETRIES=2",
                 "REAL_REQUEST_TIMEOUT_SECONDS=12",
+                "ENABLE_STOCK_BASIC_ENRICHMENT=true",
+                "FULL_ENABLE_STOCK_BASIC_ENRICHMENT=true",
                 "ENABLE_REAL_BASIC_ENRICHMENT=false",
                 "ENABLE_REAL_VALUATION_ENRICHMENT=false",
             ]
@@ -84,6 +88,8 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
     assert settings.real_batch_sleep_seconds == 0.1
     assert settings.real_max_retries == 2
     assert settings.real_request_timeout_seconds == 12
+    assert settings.enable_stock_basic_enrichment is True
+    assert settings.full_enable_stock_basic_enrichment is True
     assert settings.enable_real_basic_enrichment is False
     assert settings.enable_real_valuation_enrichment is False
 
