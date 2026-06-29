@@ -38,6 +38,8 @@ class FullUpdateSettings:
     full_update_resume = True
     enable_real_basic_enrichment = False
     enable_real_valuation_enrichment = False
+    enable_valuation_enrichment = False
+    full_enable_valuation_enrichment = False
     include_bse = False
     duckdb_path = Path("unused.duckdb")
 
@@ -68,6 +70,12 @@ class LimitedBatchesSettings(FullUpdateSettings):
     full_update_max_batches = 1
 
 
+class FullValuationGoalSettings(FullUpdateSettings):
+    """Keep the legacy valuation goal enabled while full network enrichment stays off."""
+
+    enable_real_valuation_enrichment = True
+
+
 class FullUpdateClient:
     """Mock AKShare-like client with controllable batch failures."""
 
@@ -80,6 +88,9 @@ class FullUpdateClient:
         self.enrichment_records: list[dict[str, str]] = []
 
     def get_stock_basic(self) -> pd.DataFrame:
+        raise AssertionError("full mode should not call stock_info_a_code_name")
+
+    def get_full_a_share_basic_excluding_bse(self) -> pd.DataFrame:
         return pd.DataFrame(
             [
                 {"symbol": "000001", "name": "平安银行", "list_date": "19910403"},
@@ -122,6 +133,23 @@ class BlockingBasicEnrichmentClient(FullUpdateClient):
         raise AssertionError("stock_individual_info_em should not run in full mode by default")
 
 
+class BlockingValuationEnrichmentClient(FullUpdateClient):
+    """Client that fails if stock_zh_a_spot_em style valuation enrichment is called."""
+
+    enable_valuation_enrichment = True
+
+    def get_daily_basic(self, start_date: str, end_date: str, symbols: list[str] | None = None) -> pd.DataFrame:
+        assert self.enable_valuation_enrichment is False
+        rows = [{"ts_code": _to_ts_code(symbol), "trade_date": end_date, "turnover_rate": 1.0} for symbol in (symbols or [])]
+        result = pd.DataFrame(rows)
+        for column in ["volume_ratio", "pe", "pb", "ps", "total_mv", "circ_mv"]:
+            result[column] = pd.NA
+        return result
+
+    def enrich_daily_basic_valuation(self, daily_basic: pd.DataFrame, symbols: list[str] | None = None) -> pd.DataFrame:
+        raise AssertionError("stock_zh_a_spot_em fallback should not run in full mode by default")
+
+
 class HardFailPriceClient(FullUpdateClient):
     """Client whose selected batch always raises a non-DataSource exception."""
 
@@ -132,6 +160,33 @@ class HardFailPriceClient(FullUpdateClient):
         if "600000" in batch:
             raise ValueError("mock hard batch failure")
         return _price_rows(batch, end_date=end_date)
+
+
+class EmptyFirstSymbolClient(FullUpdateClient):
+    """Client that returns no daily_price rows for one symbol."""
+
+    def get_full_a_share_basic_excluding_bse(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {"symbol": "000024", "name": "空数据"},
+                {"symbol": "000025", "name": "后续一"},
+                {"symbol": "000026", "name": "后续二"},
+                {"symbol": "000027", "name": "后续三"},
+            ]
+        )
+
+    def get_daily_price(self, start_date: str, end_date: str, symbols: list[str] | None = None) -> pd.DataFrame:
+        batch = symbols or []
+        self.price_batches.append(batch)
+        valid = [symbol for symbol in batch if symbol != "000024"]
+        return _price_rows(valid, end_date=end_date)
+
+
+class BrokenFullBasicListClient(FullUpdateClient):
+    """Client whose provider full basic list is unavailable."""
+
+    def get_full_a_share_basic_excluding_bse(self) -> pd.DataFrame:
+        raise RuntimeError("mock full basic list failure")
 
 
 def test_full_update_uses_batches_and_progress(tmp_path: Path) -> None:
@@ -172,6 +227,21 @@ def test_full_update_skips_per_symbol_basic_enrichment_by_default(tmp_path: Path
     assert client.price_batches
 
 
+def test_full_update_skips_valuation_enrichment_by_default(tmp_path: Path) -> None:
+    """full mode should not block daily_basic on optional PE/PB snapshot fallbacks."""
+    client = BlockingValuationEnrichmentClient()
+
+    result = update_real_data(
+        settings=FullValuationGoalSettings(),
+        store=DuckDBStore(tmp_path / "full-no-valuation-enrichment.duckdb"),
+        client=client,
+    )
+
+    assert result["status"] == "success"
+    assert result["success_symbols"] == 4
+    assert result["enrichment_summary"]["valuation_status"] == "skipped"
+
+
 def test_full_update_resume_skips_symbols_already_current(tmp_path: Path) -> None:
     """Resume mode should skip symbols whose local daily_price already reaches end_date."""
     store = DuckDBStore(tmp_path / "full-resume.duckdb")
@@ -209,6 +279,60 @@ def test_full_update_global_max_date_does_not_hide_missing_symbols(tmp_path: Pat
     assert result["full_universe_symbol_count"] == 4
 
 
+def test_full_update_uses_stock_basic_cache_when_provider_basic_list_fails(tmp_path: Path) -> None:
+    """full stock_basic failures should fall back to local cache and still update prices."""
+    store = DuckDBStore(tmp_path / "full-cache-basic.duckdb")
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "symbol": "000001", "name": "平安银行", "market": "主板", "exchange": "SZSE"},
+                {"ts_code": "600000.SH", "symbol": "600000", "name": "浦发银行", "market": "主板", "exchange": "SSE"},
+            ]
+        ),
+    )
+    client = BrokenFullBasicListClient()
+
+    result = update_real_data(settings=LimitedSymbolsSettings(), store=store, client=client)
+
+    requested = [symbol for batch in client.price_batches for symbol in batch]
+    assert requested == ["000001", "600000"]
+    assert result["status"] == "success"
+    assert result["success_symbols"] == 2
+
+
+def test_full_update_stock_basic_cache_does_not_shrink_full_universe(tmp_path: Path) -> None:
+    """A local stock_basic cache must supplement fields, not define the full universe boundary."""
+    store = DuckDBStore(tmp_path / "full-cache-does-not-shrink.duckdb")
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "symbol": "000001", "name": "平安银行", "industry": "银行", "market": "主板", "exchange": "SZSE"},
+                {"ts_code": "600000.SH", "symbol": "600000", "name": "浦发银行", "industry": "银行", "market": "主板", "exchange": "SSE"},
+            ]
+        ),
+    )
+    store.upsert_dataframe("daily_price", _price_rows(["000001", "600000"], end_date="20240131"))
+    store.upsert_dataframe("daily_basic", _daily_basic_rows(["000001", "600000"], trade_date="20240131"))
+    store.upsert_dataframe("adj_factor", _adj_factor_rows(["000001", "600000"], trade_date="20240131"))
+    client = FullUpdateClient()
+
+    result = update_real_data(settings=LimitedBatchesSettings(), store=store, client=client)
+
+    requested = [symbol for batch in client.price_batches for symbol in batch]
+    assert result["total_symbols"] == 4
+    assert result["full_universe_symbol_count"] == 4
+    assert result["full_universe_count"] == 4
+    assert result["pending_queue_count"] == 2
+    assert result["planned_count"] == 2
+    assert result["skipped_symbols"] == 2
+    assert result["initial_update_symbols"] == 2
+    assert requested == ["300750", "688981"]
+
+
 def test_full_update_initial_backfill_prioritizes_missing_daily_price(tmp_path: Path) -> None:
     """Missing daily_price symbols should be planned before stale symbols."""
     store = DuckDBStore(tmp_path / "full-missing-first.duckdb")
@@ -237,6 +361,8 @@ def test_full_update_max_symbols_limits_one_run(tmp_path: Path) -> None:
     requested = [symbol for batch in client.price_batches for symbol in batch]
     assert len(requested) == 2
     assert result["total_symbols"] == 4
+    assert result["full_universe_count"] == 4
+    assert result["planned_count"] == 2
     assert result["success_symbols"] == 2
     assert result["full_update_max_symbols"] == 2
 
@@ -256,6 +382,28 @@ def test_full_update_hard_batch_failure_does_not_abort(tmp_path: Path) -> None:
     assert result["status"] == "partial_success"
     assert result["failed_symbols"] == 2
     assert any("mock hard batch failure" in item["error_message"] for item in result["failure_records"])
+
+
+def test_full_update_persists_empty_data_and_deprioritizes_next_run(tmp_path: Path) -> None:
+    """Empty daily_price symbols should be diagnosed and not retried first on resume."""
+    store = DuckDBStore(tmp_path / "full-empty-data.duckdb")
+    client = EmptyFirstSymbolClient()
+
+    result = update_real_data(settings=LimitedSymbolsSettings(), store=store, client=client)
+    diagnostic = diagnose_update_batch(settings=FullUpdateSettings(), store=store, client=EmptyFirstSymbolClient())
+
+    assert result["status"] == "partial_success"
+    assert "000024.SZ" in result["empty_data_symbols"]
+    assert diagnostic["update_failed_count"] == 1
+    assert "000024.SZ" in diagnostic["empty_data_symbols"]
+    assert diagnostic["missing_symbols"][-1] == "000024.SZ"
+
+    retry_client = EmptyFirstSymbolClient()
+    update_real_data(settings=LimitedBatchesSettings(), store=store, client=retry_client)
+
+    requested = [symbol for batch in retry_client.price_batches for symbol in batch]
+    assert requested[:2] == ["000026", "000027"]
+    assert "000024" not in requested[:2]
 
 
 def test_full_update_missing_daily_basic_or_adj_factor_enters_incremental_queue(tmp_path: Path) -> None:

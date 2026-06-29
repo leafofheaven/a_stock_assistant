@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from core.data_sources.real_universe import build_full_a_share_universe
+from core.data_sources.real_universe import build_full_a_share_universe, resolve_full_a_share_universe
 from core.config.env_file import validate_env_updates
 from core.jobs.diagnose_update_batch import diagnose_update_batch
 from core.jobs.update_real_data import update_real_data
@@ -67,9 +67,15 @@ class MockFullClient:
         self.requested_price_symbols: list[str] = []
         self.failure_records: list[dict[str, str]] = []
         self.enrichment_records: list[dict[str, str]] = []
+        self.stock_basic_calls = 0
 
     def get_stock_basic(self) -> pd.DataFrame:
         """Return mixed A-share rows including excluded symbols."""
+        self.stock_basic_calls += 1
+        return self.get_full_a_share_basic_excluding_bse()
+
+    def get_full_a_share_basic_excluding_bse(self) -> pd.DataFrame:
+        """Return mixed HS A-share rows for full mode."""
         return pd.DataFrame(
             [
                 {"symbol": "000001", "name": "平安银行", "list_date": "19910403"},
@@ -105,7 +111,7 @@ class MockFullClient:
 class BrokenBasicClient(MockFullClient):
     """Mock provider whose basic list call fails."""
 
-    def get_stock_basic(self) -> pd.DataFrame:
+    def get_full_a_share_basic_excluding_bse(self) -> pd.DataFrame:
         raise RuntimeError("mock basic list failure")
 
 
@@ -116,12 +122,49 @@ def test_env_validation_accepts_full_preset() -> None:
 
 def test_full_universe_filters_to_hs_a_shares_without_bse_or_abnormal_names() -> None:
     """full mode should mean HS A-shares, excluding BSE, ST, and delisting names."""
-    universe = build_full_a_share_universe(MockFullClient().get_stock_basic(), include_bse=False)
+    universe = build_full_a_share_universe(MockFullClient().get_full_a_share_basic_excluding_bse(), include_bse=False)
 
     assert set(universe["ts_code"]) == {"000001.SZ", "600000.SH", "300750.SZ", "688981.SH"}
     assert "830799.BJ" not in set(universe["ts_code"])
     assert all("ST" not in name for name in universe["name"])
     assert {"SSE", "SZSE"}.issuperset(set(universe["exchange"]))
+
+
+def test_full_universe_without_bse_source_reports_zero_exclusion_note() -> None:
+    """When the provider source already excludes BSE, zero BSE exclusions should be explicit."""
+    raw = pd.DataFrame(
+        [
+            {"symbol": "000001", "name": "平安银行"},
+            {"symbol": "600000", "name": "浦发银行"},
+        ]
+    )
+
+    summary = resolve_full_a_share_universe(raw, include_bse=False)
+
+    assert summary["excluded_bse_count"] == 0
+    assert summary["contains_bse"] is False
+    assert "数据源未包含北交所" in summary["bse_filter_note"]
+
+
+def test_full_universe_result_never_contains_bse_when_disabled() -> None:
+    """INCLUDE_BSE=false should remove .BJ/BSE/8/4 style BSE rows from full universe."""
+    raw = pd.DataFrame(
+        [
+            {"ts_code": "000001.SZ", "symbol": "000001", "name": "平安银行", "exchange": "SZSE"},
+            {"ts_code": "430001.BJ", "symbol": "430001", "name": "北交四开头", "exchange": "BSE"},
+            {"symbol": "830799", "name": "北交八开头"},
+            {"symbol": "920001", "name": "北交九开头"},
+        ]
+    )
+
+    summary = resolve_full_a_share_universe(raw, include_bse=False)
+    ts_codes = set(summary["ts_codes"])
+
+    assert summary["excluded_bse_count"] == 3
+    assert summary["contains_bse"] is False
+    assert "000001.SZ" in ts_codes
+    assert not any(code.endswith((".BJ", ".BSE")) for code in ts_codes)
+    assert not any(code.split(".")[0].startswith(("4", "8", "9")) for code in ts_codes)
 
 
 def test_full_update_discovers_symbols_from_stock_basic(tmp_path: Path) -> None:
@@ -133,6 +176,7 @@ def test_full_update_discovers_symbols_from_stock_basic(tmp_path: Path) -> None:
     assert result["total_symbols"] == 4
     assert set(result["sample_symbols"]) == {"000001", "600000", "300750", "688981"}
     assert "830799" not in client.requested_price_symbols
+    assert client.stock_basic_calls == 0
 
 
 def test_diagnose_full_resolves_provider_basic_list_without_local_prices(tmp_path: Path) -> None:
@@ -149,6 +193,27 @@ def test_diagnose_full_resolves_provider_basic_list_without_local_prices(tmp_pat
     assert result["excluded_abnormal_count"] == 2
     assert result["base_universe_count"] == 4
     assert result["configured_symbol_count"] == 4
+    assert result["priced_symbol_count"] == 0
+
+
+def test_diagnose_full_provider_universe_not_shrunk_by_local_stock_basic(tmp_path: Path) -> None:
+    """Local stock_basic rows should not replace the provider full universe boundary."""
+    store = DuckDBStore(tmp_path / "local-cache.duckdb")
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "symbol": "000001", "name": "平安银行"},
+                {"ts_code": "600000.SH", "symbol": "600000", "name": "浦发银行"},
+            ]
+        ),
+    )
+
+    result = diagnose_update_batch(settings=FullSettings(), store=store, client=MockFullClient())
+
+    assert result["configured_symbol_count"] == 4
+    assert result["base_universe_count"] == 4
     assert result["priced_symbol_count"] == 0
 
 

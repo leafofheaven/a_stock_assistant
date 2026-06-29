@@ -38,6 +38,8 @@ def test_settings_defaults() -> None:
     assert settings.full_update_max_batches == 0
     assert settings.enable_stock_basic_enrichment is False
     assert settings.full_enable_stock_basic_enrichment is False
+    assert settings.enable_valuation_enrichment is False
+    assert settings.full_enable_valuation_enrichment is False
     assert settings.enable_real_basic_enrichment is True
     assert settings.enable_real_valuation_enrichment is True
 
@@ -75,6 +77,8 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
                 "FULL_UPDATE_MAX_BATCHES=1",
                 "ENABLE_STOCK_BASIC_ENRICHMENT=true",
                 "FULL_ENABLE_STOCK_BASIC_ENRICHMENT=true",
+                "ENABLE_VALUATION_ENRICHMENT=true",
+                "FULL_ENABLE_VALUATION_ENRICHMENT=true",
                 "ENABLE_REAL_BASIC_ENRICHMENT=false",
                 "ENABLE_REAL_VALUATION_ENRICHMENT=false",
             ]
@@ -111,6 +115,8 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
     assert settings.full_update_max_batches == 1
     assert settings.enable_stock_basic_enrichment is True
     assert settings.full_enable_stock_basic_enrichment is True
+    assert settings.enable_valuation_enrichment is True
+    assert settings.full_enable_valuation_enrichment is True
     assert settings.enable_real_basic_enrichment is False
     assert settings.enable_real_valuation_enrichment is False
 

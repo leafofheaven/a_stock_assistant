@@ -55,7 +55,7 @@ def select_data_provider(
                 adjust=resolved_settings.akshare_adjust,
                 request_timeout_seconds=getattr(resolved_settings, "real_request_timeout_seconds", 30),
                 enable_basic_enrichment=getattr(resolved_settings, "enable_stock_basic_enrichment", False),
-                enable_valuation_enrichment=getattr(resolved_settings, "enable_real_valuation_enrichment", True),
+                enable_valuation_enrichment=_akshare_valuation_enrichment_enabled(resolved_settings),
             ),
             message="使用 AKShare 数据源。",
         )
@@ -67,7 +67,7 @@ def select_data_provider(
             adjust=resolved_settings.akshare_adjust,
             request_timeout_seconds=getattr(resolved_settings, "real_request_timeout_seconds", 30),
             enable_basic_enrichment=getattr(resolved_settings, "enable_stock_basic_enrichment", False),
-            enable_valuation_enrichment=getattr(resolved_settings, "enable_real_valuation_enrichment", True),
+            enable_valuation_enrichment=_akshare_valuation_enrichment_enabled(resolved_settings),
         )
         fallback_name = "akshare"
 
@@ -78,3 +78,18 @@ def select_data_provider(
         fallback=fallback,
         message="使用 Tushare 主数据源。",
     )
+
+
+def _akshare_valuation_enrichment_enabled(settings: Settings) -> bool:
+    """Return whether AKShare may run optional valuation network enrichment."""
+    if not getattr(settings, "enable_real_valuation_enrichment", True):
+        return False
+    sample_symbols = [
+        symbol.strip()
+        for symbol in getattr(settings, "akshare_sample_symbols", "").split(",")
+        if symbol.strip()
+    ]
+    full_mode = not sample_symbols and str(getattr(settings, "real_universe_preset", "")).lower() == "full"
+    if full_mode:
+        return bool(getattr(settings, "full_enable_valuation_enrichment", False))
+    return bool(getattr(settings, "enable_valuation_enrichment", False))

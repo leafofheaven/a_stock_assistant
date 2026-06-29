@@ -14,7 +14,7 @@ from core.data_sources.universe_presets import get_universe_preset, to_ts_code
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 
-CORE_TABLES = ["stock_basic", "daily_price", "daily_basic", "adj_factor"]
+CORE_TABLES = ["stock_basic", "daily_price", "daily_basic", "adj_factor", "update_failures"]
 FULL_UNIVERSE_PENDING = "__FULL_UNIVERSE_PENDING__"
 
 
@@ -90,6 +90,8 @@ def main() -> None:
     if result["sample_source"] == "REAL_UNIVERSE_PRESET=full":
         print(f"- 原始沪深 A 股数量: {result.get('raw_symbol_count', 0)}")
         print(f"- 剔除北交所数量: {result.get('excluded_bse_count', 0)}")
+        if result.get("bse_filter_note"):
+            print(f"- 北交所过滤说明: {result.get('bse_filter_note')}")
         print(f"- 剔除 ST / 退市数量: {result.get('excluded_abnormal_count', 0)}")
         print(f"- 基础股票池数量: {result.get('base_universe_count', 0)}")
     print(f"- 配置股票数量: {result['configured_symbol_count']}")
@@ -98,6 +100,8 @@ def main() -> None:
     print(f"- 缺数据股票数量: {len(result['missing_symbols'])}")
     print(f"- 最新行情不足数量: {result['stale_symbol_count']}")
     print(f"- 更新失败数量: {result['update_failed_count']}")
+    if result.get("empty_data_symbols"):
+        print(f"- 空数据 / 暂不可用股票: {_format_symbol_list(result['empty_data_symbols'])}")
     if result["missing_symbols"]:
         print(f"- 缺数据股票列表: {_format_symbol_list(result['missing_symbols'])}")
     if result["stale_symbols"]:
@@ -141,7 +145,9 @@ def _build_result(
     priced = [item for item in coverage if item["has_daily_price"]]
     factor_ready = [item for item in coverage if item["daily_price_rows"] >= 20 and item["has_daily_basic"]]
     backtest_ready = [item for item in coverage if item["daily_price_rows"] >= 60 and item["has_daily_basic"]]
+    failure_state = _failure_state(tables.get("update_failures", pd.DataFrame()))
     missing = [item["ts_code"] for item in coverage if not item["has_daily_price"]]
+    missing = sorted(missing, key=lambda symbol: (symbol in failure_state, symbol))
     target_end_date = str(getattr(settings, "real_data_end_date", "") or "")
     if not target_end_date:
         from datetime import date
@@ -165,6 +171,8 @@ def _build_result(
         "configured_symbol_count": len(configured_symbols),
         "raw_symbol_count": int(universe_summary.get("raw_symbol_count", len(configured_symbols))),
         "excluded_bse_count": int(universe_summary.get("excluded_bse_count", 0)),
+        "bse_filter_note": str(universe_summary.get("bse_filter_note", "")),
+        "contains_bse": bool(universe_summary.get("contains_bse", False)),
         "excluded_abnormal_count": int(universe_summary.get("excluded_abnormal_count", 0)),
         "base_universe_count": int(universe_summary.get("base_universe_count", len(configured_symbols))),
         "priced_symbol_count": len(priced),
@@ -174,7 +182,11 @@ def _build_result(
         "target_end_date": target_end_date,
         "stale_symbols": stale,
         "stale_symbol_count": len(stale),
-        "update_failed_count": 0,
+        "update_failed_count": len(failure_state),
+        "update_failure_symbols": sorted(failure_state),
+        "empty_data_symbols": sorted(
+            symbol for symbol, status in failure_state.items() if status in {"empty_data", "temporarily_unavailable"}
+        ),
         "factor_ready_count": len(factor_ready),
         "selection_ready_count": len(factor_ready),
         "backtest_ready_count": len(backtest_ready),
@@ -193,6 +205,22 @@ def _symbol_has_current_market_tables(item: dict[str, Any], target_end_date: str
         and str(item.get("max_daily_basic_date") or "") >= target_end_date
         and str(item.get("max_adj_factor_date") or "") >= target_end_date
     )
+
+
+def _failure_state(update_failures: pd.DataFrame) -> dict[str, str]:
+    """Return latest persistent update failure state by symbol."""
+    if update_failures.empty or "ts_code" not in update_failures.columns:
+        return {}
+    if "status" not in update_failures.columns:
+        return {}
+    rows = update_failures.copy()
+    if "last_seen_at" in rows.columns:
+        rows = rows.sort_values("last_seen_at")
+    latest = rows.dropna(subset=["ts_code"]).groupby(rows["ts_code"].astype(str)).tail(1)
+    return {
+        str(row["ts_code"]): str(row.get("status", "temporarily_unavailable"))
+        for row in latest.to_dict("records")
+    }
 
 
 def _symbol_coverage(configured_symbols: list[str], tables: dict[str, pd.DataFrame]) -> list[dict[str, Any]]:
@@ -245,7 +273,8 @@ def _resolve_full_universe_for_diagnosis(
     stock_basic: pd.DataFrame,
     client: StockDataSource | None,
 ) -> dict[str, Any]:
-    """Resolve full universe for diagnostics from provider first, then local fallback."""
+    """Resolve full universe for diagnostics from HS-only provider, with local fallback."""
+    local_summary = resolve_full_a_share_universe(stock_basic, include_bse=getattr(settings, "include_bse", False))
     try:
         resolved_client = client or AKShareClient(
             adjust=getattr(settings, "akshare_adjust", "qfq"),
@@ -253,11 +282,13 @@ def _resolve_full_universe_for_diagnosis(
             enable_basic_enrichment=False,
             enable_valuation_enrichment=False,
         )
-        provider_stock_basic = resolved_client.get_stock_basic()
+        if not hasattr(resolved_client, "get_full_a_share_basic_excluding_bse"):
+            raise RuntimeError("client does not provide full HS A-share basic list")
+        provider_stock_basic = resolved_client.get_full_a_share_basic_excluding_bse()  # type: ignore[attr-defined]
     except Exception as exc:
-        local_summary = resolve_full_a_share_universe(stock_basic, include_bse=getattr(settings, "include_bse", False))
         local_result = _without_frame(local_summary)
         if local_result.get("base_universe_count", 0):
+            local_result["source"] = "local stock_basic cache"
             local_result["warnings"] = [
                 f"AKShare 基础股票列表获取失败：{type(exc).__name__}: {exc}；已回退使用本地 stock_basic 诊断。",
                 *list(local_result.get("warnings", [])),

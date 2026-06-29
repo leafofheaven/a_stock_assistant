@@ -54,6 +54,20 @@ CREATE TABLE IF NOT EXISTS adj_factor (
     PRIMARY KEY (ts_code, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS update_failures (
+    ts_code VARCHAR,
+    provider VARCHAR,
+    table_name VARCHAR,
+    target_end_date VARCHAR,
+    status VARCHAR,
+    failed_stage VARCHAR,
+    error_message VARCHAR,
+    attempt_count INTEGER,
+    first_seen_at TIMESTAMP,
+    last_seen_at TIMESTAMP,
+    PRIMARY KEY (ts_code, table_name, target_end_date)
+);
+
 CREATE TABLE IF NOT EXISTS factor_values (
     ts_code VARCHAR,
     trade_date VARCHAR,

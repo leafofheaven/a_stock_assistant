@@ -53,6 +53,13 @@ class AKShareClient(StockDataSource):
         """Return stock basic information from AKShare."""
         return self._call("stock_info_a_code_name")
 
+    def get_full_a_share_basic_excluding_bse(self) -> pd.DataFrame:
+        """Return HS A-share basic rows without AKShare BSE stock-info calls."""
+        frame, error_message = self._fetch_eastmoney_hs_basic_list()
+        if error_message:
+            raise DataSourceError(error_message)
+        return frame
+
     def get_trade_calendar(self) -> pd.DataFrame:
         """Return the trading calendar from AKShare."""
         return self._call("tool_trade_date_hist_sina")
@@ -341,6 +348,84 @@ class AKShareClient(StockDataSource):
             return
         self._logged_enrichment_warnings.add(key)
         logger.warning("AKShare optional enrichment warning for %s: %s", stage, message)
+
+    def _fetch_eastmoney_hs_basic_list(self) -> tuple[pd.DataFrame, str]:
+        """Fetch a compact Shanghai/Shenzhen A-share list via system curl."""
+        page_size = 100
+        rows: list[dict[str, Any]] = []
+        for page in range(1, 100):
+            params = {
+                "pn": str(page),
+                "pz": str(page_size),
+                "po": "1",
+                "np": "1",
+                "fltt": "2",
+                "invt": "2",
+                "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
+                "fields": "f12,f14",
+            }
+            url = f"https://push2.eastmoney.com/api/qt/clist/get?{urlencode(params)}"
+            command = [
+                "curl",
+                "-4",
+                "--http1.1",
+                "--noproxy",
+                "*",
+                "-sSL",
+                "--max-time",
+                str(max(1, int(self.request_timeout_seconds))),
+                "-A",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "-e",
+                "https://quote.eastmoney.com/",
+                url,
+            ]
+            try:
+                completed = self._curl_runner(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.request_timeout_seconds + 5,
+                )
+            except subprocess.TimeoutExpired as exc:
+                return pd.DataFrame(), f"Eastmoney HS stock list timeout: {exc}"
+            except Exception as exc:
+                return pd.DataFrame(), f"Eastmoney HS stock list failed: {type(exc).__name__}: {exc}"
+            if getattr(completed, "returncode", 1) != 0:
+                stderr = str(getattr(completed, "stderr", "") or "").strip()
+                return pd.DataFrame(), f"Eastmoney HS stock list curl failed: {stderr}"
+            try:
+                payload = json.loads(getattr(completed, "stdout", "") or "{}")
+            except json.JSONDecodeError as exc:
+                return pd.DataFrame(), f"Eastmoney HS stock list JSONDecodeError: {exc}"
+            page_rows = ((payload.get("data") or {}).get("diff") or [])
+            if not page_rows:
+                break
+            rows.extend(page_rows)
+            if len(page_rows) < page_size:
+                break
+        if not rows:
+            return pd.DataFrame(), "Eastmoney HS stock list returned empty data"
+        parsed = []
+        for item in rows:
+            symbol = str(item.get("f12") or "").strip()
+            if not symbol:
+                continue
+            ts_code = _to_ts_code(symbol)
+            parsed.append(
+                {
+                    "symbol": symbol,
+                    "ts_code": ts_code,
+                    "name": str(item.get("f14") or "").strip(),
+                    "market": _market_from_ts_code(ts_code),
+                    "exchange": exchange_from_symbol(symbol),
+                    "list_date": pd.NA,
+                }
+            )
+        result = pd.DataFrame(parsed)
+        if not result.empty and "ts_code" in result.columns:
+            result = result.drop_duplicates("ts_code", keep="last").reset_index(drop=True)
+        return result, ""
 
     def _call_market_data(
         self,

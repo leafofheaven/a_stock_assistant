@@ -2149,7 +2149,7 @@ def check_task46(root: Path) -> list[str]:
             failures.append(f"configuration is missing {phrase}.")
 
     universe_source = read_source(root / "core/data_sources/real_universe.py")
-    for phrase in ["full", "沪深 A 股全市场，不含北交所", "build_full_a_share_universe", "BSE", "ST", "退市"]:
+    for phrase in ["full", "沪深 A 股全市场，不含北交所", "build_full_a_share_universe", "contains_bse", "bse_filter_note", "BSE", "ST", "退市"]:
         if phrase not in universe_source:
             failures.append(f"core/data_sources/real_universe.py is missing {phrase}.")
 
@@ -2175,7 +2175,7 @@ def check_task46(root: Path) -> list[str]:
     diagnose_source = read_source(root / "core/jobs/diagnose_update_batch.py")
     if 'return [], "REAL_UNIVERSE_PRESET=full"' in diagnose_source:
         failures.append("diagnose_update_batch.py must not silently return [] for full mode.")
-    for phrase in ["resolve_full_a_share_universe", "raw_symbol_count", "excluded_bse_count", "base_universe_count", "AKShare 基础股票列表获取失败"]:
+    for phrase in ["resolve_full_a_share_universe", "raw_symbol_count", "excluded_bse_count", "bse_filter_note", "base_universe_count", "AKShare 基础股票列表获取失败"]:
         if phrase not in diagnose_source:
             failures.append(f"core/jobs/diagnose_update_batch.py is missing full diagnostic phrase: {phrase}.")
 
@@ -2185,7 +2185,7 @@ def check_task46(root: Path) -> list[str]:
             failures.append(f"Task 46 docs are missing {phrase}.")
 
     tests_source = read_source(root / "tests/test_real_universe_full.py").lower()
-    for phrase in ["full", "akshare_sample_symbols", "bse", "st", "退市", "avg amount", "median amount", "latest amount", "traded days", "total_score", "validate_env_updates", "diagnose_update_batch"]:
+    for phrase in ["full", "akshare_sample_symbols", "contains_bse", "数据源未包含北交所", "bse", "st", "退市", "avg amount", "median amount", "latest amount", "traded days", "total_score", "validate_env_updates", "diagnose_update_batch"]:
         if phrase.lower() not in tests_source:
             failures.append(f"tests/test_real_universe_full.py should cover {phrase}.")
     return failures
@@ -2213,6 +2213,8 @@ def check_task47(root: Path) -> list[str]:
         "FULL_UPDATE_MAX_BATCHES",
         "ENABLE_STOCK_BASIC_ENRICHMENT",
         "FULL_ENABLE_STOCK_BASIC_ENRICHMENT",
+        "ENABLE_VALUATION_ENRICHMENT",
+        "FULL_ENABLE_VALUATION_ENRICHMENT",
     ]:
         if phrase not in config_source:
             failures.append(f"Task 47 configuration is missing {phrase}.")
@@ -2220,6 +2222,7 @@ def check_task47(root: Path) -> list[str]:
     update_source = read_source(root / "core/jobs/update_real_data.py")
     for phrase in [
         "_build_symbol_update_plan",
+        "_resolve_full_stock_basic_for_update",
         "_effective_update_start_date",
         "daily_basic",
         "adj_factor",
@@ -2227,10 +2230,18 @@ def check_task47(root: Path) -> list[str]:
         "incremental_update_symbols",
         "symbol_start_dates",
         "_should_run_stock_basic_enrichment",
+        "_should_run_valuation_enrichment",
         "full_enable_stock_basic_enrichment",
+        "full_enable_valuation_enrichment",
         "_effective_max_symbols",
         "_effective_max_batches",
         "_limit_symbols",
+        "full_universe_count",
+        "pending_queue_count",
+        "planned_count",
+        "update_failures",
+        "empty_data",
+        "temporarily_unavailable",
         "_effective_batch_size",
         "_effective_max_retries",
         "_effective_sleep_seconds",
@@ -2240,19 +2251,31 @@ def check_task47(root: Path) -> list[str]:
     ]:
         if phrase not in update_source:
             failures.append(f"core/jobs/update_real_data.py is missing Task 47 phrase: {phrase}.")
+    if "raw_stock_basic = client.get_stock_basic()" in update_source.split("if _use_full_universe", 1)[0]:
+        failures.append("full mode should not call generic client.get_stock_basic before resolving the full universe.")
+
+    akshare_source = read_source(root / "core/data_sources/akshare_client.py")
+    for phrase in ["get_full_a_share_basic_excluding_bse", "_fetch_eastmoney_hs_basic_list", "push2.eastmoney.com/api/qt/clist/get", "--max-time"]:
+        if phrase not in akshare_source:
+            failures.append(f"akshare_client.py is missing full basic list phrase: {phrase}.")
 
     diagnose_source = read_source(root / "core/jobs/diagnose_update_batch.py")
-    for phrase in ["stale_symbols", "stale_symbol_count", "update_failed_count", "最新行情不足", "max_daily_basic_date", "max_adj_factor_date"]:
+    for phrase in ["stale_symbols", "stale_symbol_count", "update_failed_count", "empty_data_symbols", "update_failures", "最新行情不足", "max_daily_basic_date", "max_adj_factor_date", "get_full_a_share_basic_excluding_bse", "bse_filter_note"]:
         if phrase not in diagnose_source:
             failures.append(f"core/jobs/diagnose_update_batch.py is missing Task 47 phrase: {phrase}.")
 
     streamlit_source = read_source(root / "web/streamlit_app.py")
-    for phrase in ["全市场数据未完成", "coverage_rate", "missing_symbol_count", "stale_symbol_count", "结果仅基于已有行情股票"]:
+    for phrase in ["全市场数据未完成", "coverage_rate", "missing_symbol_count", "stale_symbol_count", "bse_filter_note", "结果仅基于已有行情股票"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing Task 47 display phrase: {phrase}.")
 
     tests_source = read_source(root / "tests/test_full_update_stability.py").lower()
-    for phrase in ["batch", "resume", "retry", "progress", "skipped", "total_score", "diagnose_update_batch", "global_max", "initial_update_symbols", "build_date_status", "stock_individual_info_em", "blockingbasicenrichmentclient", "limitedsymbolssettings", "hardfailpriceclient", "missing daily_price"]:
+    schema_source = read_source(root / "core/storage/schema.sql") + read_source(root / "core/storage/duckdb_store.py")
+    for phrase in ["update_failures", "target_end_date", "attempt_count"]:
+        if phrase not in schema_source:
+            failures.append(f"storage schema should support persistent update failures: {phrase}.")
+
+    for phrase in ["batch", "resume", "retry", "progress", "skipped", "total_score", "diagnose_update_batch", "global_max", "initial_update_symbols", "build_date_status", "stock_individual_info_em", "blockingbasicenrichmentclient", "stock_zh_a_spot_em", "blockingvaluationenrichmentclient", "stock_info_a_code_name", "brokenfullbasiclistclient", "stock_basic cache", "does_not_shrink", "full_universe_count", "pending_queue_count", "planned_count", "emptyfirstsymbolclient", "empty_data", "deprioritizes", "limitedsymbolssettings", "hardfailpriceclient", "missing daily_price"]:
         if phrase not in tests_source:
             failures.append(f"tests/test_full_update_stability.py should cover {phrase}.")
 
@@ -2261,7 +2284,7 @@ def check_task47(root: Path) -> list[str]:
         + read_source(root / "docs/commands_reference.md")
         + read_source(root / "README.md")
     )
-    for phrase in ["FULL_UPDATE_BATCH_SIZE", "FULL_UPDATE_RESUME", "FULL_UPDATE_MAX_SYMBOLS", "FULL_UPDATE_MAX_BATCHES", "ENABLE_STOCK_BASIC_ENRICHMENT", "FULL_ENABLE_STOCK_BASIC_ENRICHMENT", "断点续跑", "失败重试", "全市场更新可能耗时较长"]:
+    for phrase in ["FULL_UPDATE_BATCH_SIZE", "FULL_UPDATE_RESUME", "FULL_UPDATE_MAX_SYMBOLS", "FULL_UPDATE_MAX_BATCHES", "ENABLE_STOCK_BASIC_ENRICHMENT", "FULL_ENABLE_STOCK_BASIC_ENRICHMENT", "ENABLE_VALUATION_ENRICHMENT", "FULL_ENABLE_VALUATION_ENRICHMENT", "PE/PB", "断点续跑", "失败重试", "全市场更新可能耗时较长"]:
         if phrase not in docs:
             failures.append(f"Task 47 docs are missing {phrase}.")
     return failures

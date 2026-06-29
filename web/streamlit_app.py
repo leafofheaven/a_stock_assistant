@@ -148,6 +148,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     missing_count = int(tables.get("_missing_symbol_count", 0) or 0)
     stale_count = int(tables.get("_stale_symbol_count", 0) or 0)
     batch_status = str(tables.get("_batch_status", ""))
+    bse_filter_note = str(tables.get("_bse_filter_note", ""))
     latest_workflow_report = tables.get("_latest_workflow_report")
     latest_daily_workflow_report = tables.get("_latest_daily_workflow_report")
     latest_selection_review_report = tables.get("_latest_selection_review_report")
@@ -173,6 +174,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "coverage_rate": coverage_rate,
         "missing_symbol_count": missing_count,
         "stale_symbol_count": stale_count,
+        "bse_filter_note": bse_filter_note,
         "batch_status": batch_status,
         "table_rows": {name: len(df) for name, df in tables.items() if isinstance(df, pd.DataFrame)},
         "last_job_status": _workflow_status_message(latest_workflow_report),
@@ -380,6 +382,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_missing_symbol_count"] = len(batch_diagnostic.get("missing_symbols", []))
     real_tables["_stale_symbol_count"] = batch_diagnostic.get("stale_symbol_count", 0)
     real_tables["_batch_status"] = _full_batch_status_text(batch_diagnostic)
+    real_tables["_bse_filter_note"] = batch_diagnostic.get("bse_filter_note", "")
     real_tables["_latest_workflow_report"] = load_latest_workflow_report()
     real_tables["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
     real_tables["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -434,6 +437,7 @@ def _apply_batch_diagnostic_to_tables(tables: dict[str, Any], diagnostic: dict[s
     tables["_missing_symbol_count"] = len(diagnostic.get("missing_symbols", []))
     tables["_stale_symbol_count"] = diagnostic.get("stale_symbol_count", 0)
     tables["_batch_status"] = _full_batch_status_text(diagnostic)
+    tables["_bse_filter_note"] = diagnostic.get("bse_filter_note", "")
 
 
 def _full_batch_status_text(diagnostic: dict[str, Any]) -> str:
@@ -854,6 +858,8 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.metric("缺数据股票数量", status["missing_symbol_count"])
     st.metric("最新行情不足数量", status["stale_symbol_count"])
     st.write({"覆盖率": f"{status['coverage_rate']:.2%}", "全市场状态": status.get("batch_status") or "暂无"})
+    if status.get("bse_filter_note"):
+        st.caption(status["bse_filter_note"])
     if status.get("batch_status") == "全市场数据未完成":
         st.warning("全市场数据未完成：当前结果只基于本地已有行情股票。点击“保存并更新数据”会继续补齐缺行情或最新不足的股票。")
     st.write({"是否 sample 数据": status["is_sample_data"], "是否真实数据": status["is_real_data"]})
@@ -1101,6 +1107,8 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             stock_basic_enrichment = st.checkbox("ENABLE_STOCK_BASIC_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_STOCK_BASIC_ENRICHMENT", "false")))
             full_stock_basic_enrichment = st.checkbox("FULL_ENABLE_STOCK_BASIC_ENRICHMENT", value=_bool_value(env_values.get("FULL_ENABLE_STOCK_BASIC_ENRICHMENT", "false")))
             valuation_enrichment = st.checkbox("ENABLE_REAL_VALUATION_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_REAL_VALUATION_ENRICHMENT", "true")))
+            valuation_network_enrichment = st.checkbox("ENABLE_VALUATION_ENRICHMENT", value=_bool_value(env_values.get("ENABLE_VALUATION_ENRICHMENT", "false")))
+            full_valuation_network_enrichment = st.checkbox("FULL_ENABLE_VALUATION_ENRICHMENT", value=_bool_value(env_values.get("FULL_ENABLE_VALUATION_ENRICHMENT", "false")))
             batch_size = st.number_input("REAL_BATCH_SIZE", min_value=1, value=int(env_values.get("REAL_BATCH_SIZE", "10") or 10), step=1)
             batch_sleep = st.number_input("REAL_BATCH_SLEEP_SECONDS", min_value=0.0, value=float(env_values.get("REAL_BATCH_SLEEP_SECONDS", "0") or 0.0), step=0.1)
             max_retries = st.number_input("REAL_MAX_RETRIES", min_value=0, value=int(env_values.get("REAL_MAX_RETRIES", "1") or 1), step=1)
@@ -1137,6 +1145,8 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         stock_basic_enrichment=stock_basic_enrichment,
         full_stock_basic_enrichment=full_stock_basic_enrichment,
         valuation_enrichment=valuation_enrichment,
+        valuation_network_enrichment=valuation_network_enrichment,
+        full_valuation_network_enrichment=full_valuation_network_enrichment,
         batch_size=batch_size,
         batch_sleep=batch_sleep,
         max_retries=max_retries,
@@ -1221,6 +1231,8 @@ def build_settings_updates(
     duckdb_path: str = "./data/a_stock_assistant.duckdb",
     stock_basic_enrichment: bool = False,
     full_stock_basic_enrichment: bool = False,
+    valuation_network_enrichment: bool = False,
+    full_valuation_network_enrichment: bool = False,
 ) -> tuple[dict[str, Any], dict[str, list[str]]]:
     """Build .env updates for the simplified settings form."""
     parsed = parse_stock_symbols(symbols_text)
@@ -1236,6 +1248,8 @@ def build_settings_updates(
         "ENABLE_STOCK_BASIC_ENRICHMENT": stock_basic_enrichment,
         "FULL_ENABLE_STOCK_BASIC_ENRICHMENT": full_stock_basic_enrichment,
         "ENABLE_REAL_VALUATION_ENRICHMENT": valuation_enrichment,
+        "ENABLE_VALUATION_ENRICHMENT": valuation_network_enrichment,
+        "FULL_ENABLE_VALUATION_ENRICHMENT": full_valuation_network_enrichment,
         "REAL_BATCH_SIZE": batch_size,
         "REAL_BATCH_SLEEP_SECONDS": batch_sleep,
         "REAL_MAX_RETRIES": max_retries,
