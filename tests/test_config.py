@@ -29,6 +29,17 @@ def test_settings_defaults() -> None:
     assert settings.real_batch_sleep_seconds == 0.0
     assert settings.real_max_retries == 1
     assert settings.real_request_timeout_seconds == 30
+    assert settings.full_update_batch_size == 50
+    assert settings.full_update_lookback_days == 250
+    assert settings.full_update_max_retries == 2
+    assert settings.full_update_sleep_seconds == 0.2
+    assert settings.full_update_resume is True
+    assert settings.full_update_max_symbols == 0
+    assert settings.full_update_max_batches == 0
+    assert settings.enable_stock_basic_enrichment is False
+    assert settings.full_enable_stock_basic_enrichment is False
+    assert settings.enable_valuation_enrichment is False
+    assert settings.full_enable_valuation_enrichment is False
     assert settings.enable_real_basic_enrichment is True
     assert settings.enable_real_valuation_enrichment is True
 
@@ -57,6 +68,17 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
                 "REAL_BATCH_SLEEP_SECONDS=0.1",
                 "REAL_MAX_RETRIES=2",
                 "REAL_REQUEST_TIMEOUT_SECONDS=12",
+                "FULL_UPDATE_BATCH_SIZE=20",
+                "FULL_UPDATE_LOOKBACK_DAYS=120",
+                "FULL_UPDATE_MAX_RETRIES=1",
+                "FULL_UPDATE_SLEEP_SECONDS=0.3",
+                "FULL_UPDATE_RESUME=false",
+                "FULL_UPDATE_MAX_SYMBOLS=20",
+                "FULL_UPDATE_MAX_BATCHES=1",
+                "ENABLE_STOCK_BASIC_ENRICHMENT=true",
+                "FULL_ENABLE_STOCK_BASIC_ENRICHMENT=true",
+                "ENABLE_VALUATION_ENRICHMENT=true",
+                "FULL_ENABLE_VALUATION_ENRICHMENT=true",
                 "ENABLE_REAL_BASIC_ENRICHMENT=false",
                 "ENABLE_REAL_VALUATION_ENRICHMENT=false",
             ]
@@ -84,6 +106,17 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
     assert settings.real_batch_sleep_seconds == 0.1
     assert settings.real_max_retries == 2
     assert settings.real_request_timeout_seconds == 12
+    assert settings.full_update_batch_size == 20
+    assert settings.full_update_lookback_days == 120
+    assert settings.full_update_max_retries == 1
+    assert settings.full_update_sleep_seconds == 0.3
+    assert settings.full_update_resume is False
+    assert settings.full_update_max_symbols == 20
+    assert settings.full_update_max_batches == 1
+    assert settings.enable_stock_basic_enrichment is True
+    assert settings.full_enable_stock_basic_enrichment is True
+    assert settings.enable_valuation_enrichment is True
+    assert settings.full_enable_valuation_enrichment is True
     assert settings.enable_real_basic_enrichment is False
     assert settings.enable_real_valuation_enrichment is False
 

@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     real_batch_sleep_seconds: float = Field(default=0.0, validation_alias="REAL_BATCH_SLEEP_SECONDS")
     real_max_retries: int = Field(default=1, validation_alias="REAL_MAX_RETRIES")
     real_request_timeout_seconds: int = Field(default=30, validation_alias="REAL_REQUEST_TIMEOUT_SECONDS")
+    full_update_batch_size: int = Field(default=50, validation_alias="FULL_UPDATE_BATCH_SIZE")
+    full_update_lookback_days: int = Field(default=250, validation_alias="FULL_UPDATE_LOOKBACK_DAYS")
+    full_update_max_retries: int = Field(default=2, validation_alias="FULL_UPDATE_MAX_RETRIES")
+    full_update_sleep_seconds: float = Field(default=0.2, validation_alias="FULL_UPDATE_SLEEP_SECONDS")
+    full_update_resume: bool = Field(default=True, validation_alias="FULL_UPDATE_RESUME")
+    full_update_max_symbols: int = Field(default=0, validation_alias="FULL_UPDATE_MAX_SYMBOLS")
+    full_update_max_batches: int = Field(default=0, validation_alias="FULL_UPDATE_MAX_BATCHES")
+    enable_stock_basic_enrichment: bool = Field(default=False, validation_alias="ENABLE_STOCK_BASIC_ENRICHMENT")
+    full_enable_stock_basic_enrichment: bool = Field(default=False, validation_alias="FULL_ENABLE_STOCK_BASIC_ENRICHMENT")
+    enable_valuation_enrichment: bool = Field(default=False, validation_alias="ENABLE_VALUATION_ENRICHMENT")
+    full_enable_valuation_enrichment: bool = Field(default=False, validation_alias="FULL_ENABLE_VALUATION_ENRICHMENT")
     enable_real_basic_enrichment: bool = Field(
         default=True,
         validation_alias="ENABLE_REAL_BASIC_ENRICHMENT",

@@ -63,6 +63,8 @@ def resolve_full_a_share_universe(raw_stock_basic: pd.DataFrame, include_bse: bo
             "excluded_bse_count": 0,
             "excluded_abnormal_count": 0,
             "base_universe_count": 0,
+            "bse_filter_note": "基础股票列表为空，无法判断北交所过滤。",
+            "contains_bse": False,
             "warnings": ["AKShare 基础股票列表为空，full 股票池暂不可用。"],
         }
 
@@ -74,6 +76,14 @@ def resolve_full_a_share_universe(raw_stock_basic: pd.DataFrame, include_bse: bo
     result = result[~result["name"].map(is_rule_excluded_name)].copy()
     result = result[result["exchange"].isin(["SSE", "SZSE"])].copy()
     result = result.drop_duplicates("ts_code", keep="last").reset_index(drop=True)
+    excluded_bse_count = int(bse_mask.sum()) if not include_bse else 0
+    bse_filter_note = (
+        "数据源未包含北交所，剔除北交所数量 0。"
+        if not include_bse and excluded_bse_count == 0
+        else "INCLUDE_BSE=false，已按 .BJ/BSE/8/4/9 前缀排除北交所。"
+        if not include_bse
+        else "INCLUDE_BSE=true，北交所过滤未启用。"
+    )
     return {
         "source": "REAL_UNIVERSE_PRESET=full",
         "label": FULL_UNIVERSE_LABEL,
@@ -81,9 +91,11 @@ def resolve_full_a_share_universe(raw_stock_basic: pd.DataFrame, include_bse: bo
         "symbols": result["symbol"].dropna().astype(str).tolist() if "symbol" in result.columns else [],
         "ts_codes": result["ts_code"].dropna().astype(str).tolist() if "ts_code" in result.columns else [],
         "raw_symbol_count": int(len(normalized)),
-        "excluded_bse_count": int(bse_mask.sum()) if not include_bse else 0,
+        "excluded_bse_count": excluded_bse_count,
         "excluded_abnormal_count": int((~bse_mask & abnormal_mask).sum()) if not include_bse else int(abnormal_mask.sum()),
         "base_universe_count": int(len(result)),
+        "bse_filter_note": bse_filter_note,
+        "contains_bse": bool(_contains_bse_rows(result)),
         "warnings": [] if not result.empty else ["full 股票池过滤后为空，请检查 AKShare 基础列表返回结构。"],
     }
 
@@ -138,6 +150,20 @@ def is_bse_symbol(symbol: str) -> bool:
     clean = str(symbol).strip().split(".")[0]
     suffix = str(symbol).strip().split(".")[-1].upper() if "." in str(symbol) else ""
     return suffix in {"BJ", "BSE"} or clean.startswith(("4", "8", "9"))
+
+
+def _contains_bse_rows(df: pd.DataFrame) -> bool:
+    """Return whether normalized result rows still include BSE-style symbols."""
+    if df.empty:
+        return False
+    ts_codes = df["ts_code"].dropna().astype(str) if "ts_code" in df.columns else pd.Series(dtype="object")
+    symbols = df["symbol"].dropna().astype(str) if "symbol" in df.columns else pd.Series(dtype="object")
+    exchanges = df["exchange"].dropna().astype(str).str.upper() if "exchange" in df.columns else pd.Series(dtype="object")
+    return bool(
+        ts_codes.str.endswith((".BJ", ".BSE")).any()
+        or symbols.map(is_bse_symbol).any()
+        or exchanges.isin(["BSE", "BJ"]).any()
+    )
 
 
 def exchange_from_symbol(symbol: str) -> str:

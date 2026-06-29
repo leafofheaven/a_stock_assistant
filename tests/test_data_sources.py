@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any
 
 import pandas as pd
@@ -70,6 +71,15 @@ class MockAKShareModule:
         """Return mock daily basic data."""
         self.calls.append(("stock_a_lg_indicator", kwargs))
         return pd.DataFrame({"trade_date": ["20240102"], "pe": [8.5]})
+
+
+class CurlResult:
+    """Tiny subprocess.CompletedProcess stand-in."""
+
+    def __init__(self, stdout: str, returncode: int = 0, stderr: str = "") -> None:
+        self.stdout = stdout
+        self.returncode = returncode
+        self.stderr = stderr
 
 
 def test_data_source_clients_implement_unified_interface() -> None:
@@ -175,6 +185,49 @@ def test_akshare_client_methods_return_dataframes() -> None:
         "end_date": "20240131",
         "adjust": "qfq",
     }
+
+
+def test_akshare_full_basic_uses_hs_curl_without_bse_stock_info() -> None:
+    """full universe basic list should not call stock_info_a_code_name or BSE helpers."""
+    akshare = MockAKShareModule()
+    calls: list[list[str]] = []
+
+    def fake_curl(command: list[str], **_: Any) -> CurlResult:
+        calls.append(command)
+        return CurlResult(
+            '{"data":{"diff":[{"f12":"000001","f14":"平安银行"},{"f12":"600000","f14":"浦发银行"}]}}'
+        )
+
+    client = AKShareClient(akshare_module=akshare, curl_runner=fake_curl)
+    result = client.get_full_a_share_basic_excluding_bse()
+
+    assert set(result["ts_code"]) == {"000001.SZ", "600000.SH"}
+    assert [name for name, _ in akshare.calls] == []
+    assert calls
+    assert "stock_info_bj_name_code" not in " ".join(calls[0])
+
+
+def test_akshare_full_basic_paginates_eastmoney_list() -> None:
+    """full basic list should collect multiple Eastmoney pages instead of one short page."""
+    calls: list[list[str]] = []
+
+    def fake_curl(command: list[str], **_: Any) -> CurlResult:
+        calls.append(command)
+        page = "1" if "pn=1" in command[-1] else "2"
+        rows = (
+            [{"f12": f"000{index:03d}", "f14": f"样本{index}"} for index in range(1, 101)]
+            if page == "1"
+            else [{"f12": "600000", "f14": "浦发银行"}]
+        )
+        return CurlResult(json.dumps({"data": {"diff": rows}}, ensure_ascii=False))
+
+    client = AKShareClient(akshare_module=MockAKShareModule(), curl_runner=fake_curl)
+    result = client.get_full_a_share_basic_excluding_bse()
+
+    assert len(result) == 101
+    assert len(calls) == 2
+    assert "000001.SZ" in set(result["ts_code"])
+    assert "600000.SH" in set(result["ts_code"])
 
 
 def test_client_wraps_provider_exceptions(caplog: pytest.LogCaptureFixture) -> None:

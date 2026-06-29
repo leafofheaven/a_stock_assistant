@@ -105,7 +105,7 @@ python -m core.jobs.doctor_daily_run --post-run
 - 埃尔德复核历史回看：`python -m core.jobs.backtest_elder_review`，`python -m core.jobs.backtest_elder_review --start-date 20240101 --end-date 20260625 --format all`，详见 `docs/elder_review_backtest.md`
 - 持仓池基础记录：`python -m core.jobs.import_positions --file <csv>`，`python -m core.jobs.export_positions`，详见 `docs/position_pool.md`
 - 持仓每日跟踪：`python -m core.jobs.track_positions`，`python -m core.jobs.track_positions --format markdown`，详见 `docs/position_tracking.md`
-- 沪深 A 股全市场股票池：`REAL_UNIVERSE_PRESET=full`，`AKSHARE_SAMPLE_SYMBOLS=`，详见 `docs/real_universe.md`
+- 沪深 A 股全市场股票池：`REAL_UNIVERSE_PRESET=full`，`AKSHARE_SAMPLE_SYMBOLS=`，支持批量更新、断点续跑和失败重试，详见 `docs/real_universe.md`
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
@@ -118,6 +118,10 @@ python -m core.jobs.doctor_daily_run --post-run
 `run_real_workflow` 偏底层真实数据流程诊断；`run_daily_workflow` 偏日常使用，会一键生成候选复核、观察池、跟踪和 `daily_workflow` 综合日报。
 
 数据质量口径：PE/PB 当前优先补全最新交易日。日报和候选/观察池报告优先看“最新交易日、当前候选、当前观察池”的完整率；全历史 `daily_basic` 完整率偏低通常只表示历史区间估值字段尚未逐日补全。
+
+full 全市场更新口径：页面和 `diagnose_update_batch` 不只看数据库全局最新行情日期，还会逐只股票检查 `daily_price`、`daily_basic`、`adj_factor` 覆盖情况。覆盖率低时会显示“全市场数据未完成”，点击“保存并更新数据”会把缺行情或最新不足的股票加入队列；`FULL_UPDATE_RESUME=true` 时已有最新数据的股票会跳过。
+
+full 基础信息增强口径：`ENABLE_STOCK_BASIC_ENRICHMENT=false`、`FULL_ENABLE_STOCK_BASIC_ENRICHMENT=false` 为默认设置。full 模式不会逐只调用 `stock_individual_info_em`，避免全市场更新在基础增强阶段阻塞。
 
 日常稳定性：运行前可先执行 `python -m core.jobs.doctor_daily_run --pre-run` 检查 `.env`、DuckDB、`reports/.gitkeep`、最近备份和报告、Git 误提交风险。需要安全修复目录或 `reports/.gitkeep` 时运行 `python -m core.jobs.doctor_daily_run --fix-safe`。不要使用 `rm -rf reports`；清理生成报告请用 `python -m core.jobs.clean_generated_reports --force` 或 `find reports -type f ! -name ".gitkeep" -delete`。
 
