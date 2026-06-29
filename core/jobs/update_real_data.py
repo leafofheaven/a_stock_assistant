@@ -14,8 +14,8 @@ from core.data_sources.basic_info_presets import enrich_with_basic_info_presets
 from core.data_sources.provider import select_data_provider
 from core.data_sources.real_universe import (
     FULL_UNIVERSE_LABEL,
-    build_full_a_share_universe,
     is_full_universe_preset,
+    resolve_full_a_share_universe,
 )
 from core.data_sources.universe_presets import get_universe_preset, to_akshare_symbol
 from core.runtime.progress import ProgressCallback, emit_progress, print_progress
@@ -175,9 +175,14 @@ def _run_provider_update(
         before_rows = _table_row_counts(resolved_store)
         emit_progress(progress, step="stock_basic", current="stock_basic", message="读取股票基础信息。")
         raw_stock_basic = client.get_stock_basic()
+        full_universe_summary: dict[str, Any] = {}
         if _use_full_universe(settings, provider_name):
-            stock_basic = build_full_a_share_universe(raw_stock_basic, include_bse=getattr(settings, "include_bse", False))
-            sample_symbols = stock_basic["symbol"].dropna().astype(str).tolist() if "symbol" in stock_basic.columns else []
+            full_universe_summary = resolve_full_a_share_universe(
+                raw_stock_basic,
+                include_bse=getattr(settings, "include_bse", False),
+            )
+            stock_basic = full_universe_summary["stock_basic"]
+            sample_symbols = list(full_universe_summary["symbols"])
             emit_progress(
                 progress,
                 step="stock_basic",
@@ -325,9 +330,10 @@ def _run_provider_update(
         "status": status,
         "message": f"{message_prefix} 真实 {provider_name} 数据更新完成。".strip(),
         "data_source": provider_name,
-        "universe_preset": getattr(settings, "real_universe_preset", "mini"),
-        "universe_label": FULL_UNIVERSE_LABEL if _use_full_universe(settings, provider_name) else getattr(settings, "real_universe_preset", "mini"),
-        "start_date": start_date,
+            "universe_preset": getattr(settings, "real_universe_preset", "mini"),
+            "universe_label": FULL_UNIVERSE_LABEL if _use_full_universe(settings, provider_name) else getattr(settings, "real_universe_preset", "mini"),
+            "full_universe_summary": _jsonable_universe_summary(full_universe_summary),
+            "start_date": start_date,
         "end_date": end_date,
         "sample_symbols": sample_symbols,
         "written_rows": written_rows,
@@ -421,6 +427,11 @@ def _use_full_universe(settings: Settings, provider_name: str) -> bool:
     if [symbol.strip() for symbol in getattr(settings, "akshare_sample_symbols", "").split(",") if symbol.strip()]:
         return False
     return is_full_universe_preset(getattr(settings, "real_universe_preset", "mini"))
+
+
+def _jsonable_universe_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return full-universe summary without DataFrames."""
+    return {key: value for key, value in summary.items() if key != "stock_basic"}
 
 
 def _group_enrichment_warnings(warnings: list[dict[str, str]]) -> list[dict[str, Any]]:

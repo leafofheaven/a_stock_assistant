@@ -7,17 +7,21 @@ from typing import Any
 import pandas as pd
 
 from app.config import Settings, get_settings
-from core.data_sources.real_universe import is_full_universe_preset
+from core.data_sources.akshare_client import AKShareClient
+from core.data_sources.base import StockDataSource
+from core.data_sources.real_universe import is_full_universe_preset, resolve_full_a_share_universe
 from core.data_sources.universe_presets import get_universe_preset, to_ts_code
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 
 CORE_TABLES = ["stock_basic", "daily_price", "daily_basic", "adj_factor"]
+FULL_UNIVERSE_PENDING = "__FULL_UNIVERSE_PENDING__"
 
 
 def diagnose_update_batch(
     settings: Settings | None = None,
     store: DuckDBStore | None = None,
+    client: StockDataSource | None = None,
 ) -> dict[str, Any]:
     """Diagnose configured universe coverage in local DuckDB tables."""
     resolved_settings = settings or get_settings()
@@ -26,13 +30,25 @@ def diagnose_update_batch(
     empty_tables = {table_name: pd.DataFrame() for table_name in CORE_TABLES}
 
     if not resolved_store.db_path.exists():
+        universe_summary = {}
+        if sample_source == "REAL_UNIVERSE_PRESET=full":
+            universe_summary = _resolve_full_universe_for_diagnosis(
+                settings=resolved_settings,
+                stock_basic=pd.DataFrame(),
+                client=client,
+            )
+            configured_symbols = list(universe_summary.get("ts_codes", []))
         return _build_result(
             settings=resolved_settings,
             store=resolved_store,
             tables=empty_tables,
             configured_symbols=configured_symbols,
             sample_source=sample_source,
-            reasons=["DuckDB 文件不存在，请先运行 python -m core.jobs.update_real_data。"],
+            reasons=[
+                "DuckDB 文件不存在，请先运行 python -m core.jobs.update_real_data。",
+                *list(universe_summary.get("warnings", [])),
+            ],
+            universe_summary=universe_summary,
         )
 
     tables: dict[str, pd.DataFrame] = {}
@@ -44,8 +60,15 @@ def diagnose_update_batch(
             tables[table_name] = pd.DataFrame()
             reasons.append(f"{table_name} 读取失败：{exc}")
 
-    if sample_source == "REAL_UNIVERSE_PRESET=full" and not configured_symbols:
-        configured_symbols = _full_symbols_from_stock_basic(tables.get("stock_basic", pd.DataFrame()))
+    universe_summary: dict[str, Any] = {}
+    if sample_source == "REAL_UNIVERSE_PRESET=full":
+        universe_summary = _resolve_full_universe_for_diagnosis(
+            settings=resolved_settings,
+            stock_basic=tables.get("stock_basic", pd.DataFrame()),
+            client=client,
+        )
+        configured_symbols = list(universe_summary.get("ts_codes", []))
+        reasons.extend(universe_summary.get("warnings", []))
     return _build_result(
         settings=resolved_settings,
         store=resolved_store,
@@ -53,6 +76,7 @@ def diagnose_update_batch(
         configured_symbols=configured_symbols,
         sample_source=sample_source,
         reasons=reasons,
+        universe_summary=universe_summary,
     )
 
 
@@ -63,17 +87,23 @@ def main() -> None:
     print(f"- 当前 DATA_PROVIDER: {result['data_provider']}")
     print(f"- DuckDB 路径: {result['duckdb_path']}")
     print(f"- 当前股票样本来源: {result['sample_source']}")
+    if result["sample_source"] == "REAL_UNIVERSE_PRESET=full":
+        print(f"- 原始沪深 A 股数量: {result.get('raw_symbol_count', 0)}")
+        print(f"- 剔除北交所数量: {result.get('excluded_bse_count', 0)}")
+        print(f"- 剔除 ST / 退市数量: {result.get('excluded_abnormal_count', 0)}")
+        print(f"- 基础股票池数量: {result.get('base_universe_count', 0)}")
     print(f"- 配置股票数量: {result['configured_symbol_count']}")
     print(f"- 数据库中实际有行情的股票数量: {result['priced_symbol_count']}")
     print(f"- 覆盖率: {result['coverage_rate']:.2%}")
     print(f"- 缺数据股票数量: {len(result['missing_symbols'])}")
     if result["missing_symbols"]:
-        print(f"- 缺数据股票列表: {', '.join(result['missing_symbols'])}")
+        print(f"- 缺数据股票列表: {_format_symbol_list(result['missing_symbols'])}")
     print(f"- 可运行因子诊断的股票数量: {result['factor_ready_count']}")
     print(f"- 可运行选股的股票数量: {result['selection_ready_count']}")
     print(f"- 可运行回测的股票数量: {result['backtest_ready_count']}")
     print("- 每只股票覆盖:")
-    for item in result["symbol_coverage"]:
+    coverage_rows = result["symbol_coverage"]
+    for item in coverage_rows[:120]:
         print(
             f"  {item['ts_code']} {item.get('name') or ''} "
             f"daily_price={'是' if item['has_daily_price'] else '否'} "
@@ -82,6 +112,8 @@ def main() -> None:
             f"daily_basic={'是' if item['has_daily_basic'] else '否'} "
             f"adj_factor={'是' if item['has_adj_factor'] else '否'}"
         )
+    if len(coverage_rows) > 120:
+        print(f"  ... 其余 {len(coverage_rows) - 120} 只省略，完整结构化结果可在函数返回值中查看。")
     if result["reasons"]:
         print("- 具体原因:")
         for reason in result["reasons"]:
@@ -98,6 +130,7 @@ def _build_result(
     configured_symbols: list[str],
     sample_source: str,
     reasons: list[str],
+    universe_summary: dict[str, Any],
 ) -> dict[str, Any]:
     """Build a structured batch coverage diagnostic."""
     coverage = _symbol_coverage(configured_symbols, tables)
@@ -107,12 +140,16 @@ def _build_result(
     missing = [item["ts_code"] for item in coverage if not item["has_daily_price"]]
     computed_reasons = list(reasons)
     if missing:
-        computed_reasons.append(f"部分股票缺少 daily_price：{', '.join(missing)}。")
+        computed_reasons.append(f"部分股票缺少 daily_price：{_format_symbol_list(missing)}。")
     return {
         "data_provider": settings.data_provider,
         "duckdb_path": str(store.db_path),
         "sample_source": sample_source,
         "configured_symbol_count": len(configured_symbols),
+        "raw_symbol_count": int(universe_summary.get("raw_symbol_count", len(configured_symbols))),
+        "excluded_bse_count": int(universe_summary.get("excluded_bse_count", 0)),
+        "excluded_abnormal_count": int(universe_summary.get("excluded_abnormal_count", 0)),
+        "base_universe_count": int(universe_summary.get("base_universe_count", len(configured_symbols))),
         "priced_symbol_count": len(priced),
         "coverage_rate": (len(priced) / len(configured_symbols)) if configured_symbols else 0.0,
         "symbol_coverage": coverage,
@@ -159,7 +196,7 @@ def _configured_symbols(settings: Settings) -> tuple[list[str], str]:
         if explicit:
             return [to_ts_code(symbol) for symbol in explicit], "AKSHARE_SAMPLE_SYMBOLS"
         if is_full_universe_preset(settings.real_universe_preset):
-            return [], "REAL_UNIVERSE_PRESET=full"
+            return [FULL_UNIVERSE_PENDING], "REAL_UNIVERSE_PRESET=full"
         return [to_ts_code(symbol) for symbol in get_universe_preset(settings.real_universe_preset)], "REAL_UNIVERSE_PRESET"
     explicit = [symbol.strip() for symbol in settings.real_data_sample_symbols.split(",") if symbol.strip()]
     if explicit:
@@ -167,13 +204,51 @@ def _configured_symbols(settings: Settings) -> tuple[list[str], str]:
     return [to_ts_code(symbol) for symbol in get_universe_preset(settings.real_universe_preset)], "REAL_UNIVERSE_PRESET"
 
 
-def _full_symbols_from_stock_basic(stock_basic: pd.DataFrame) -> list[str]:
-    """Return local full-universe symbols from stock_basic when available."""
-    if stock_basic.empty or "ts_code" not in stock_basic.columns:
-        return []
-    if "exchange" in stock_basic.columns:
-        stock_basic = stock_basic[stock_basic["exchange"].astype(str).isin(["SSE", "SZSE"])]
-    return stock_basic["ts_code"].dropna().astype(str).drop_duplicates().tolist()
+def _resolve_full_universe_for_diagnosis(
+    *,
+    settings: Settings,
+    stock_basic: pd.DataFrame,
+    client: StockDataSource | None,
+) -> dict[str, Any]:
+    """Resolve full universe for diagnostics from provider first, then local fallback."""
+    try:
+        resolved_client = client or AKShareClient(
+            adjust=getattr(settings, "akshare_adjust", "qfq"),
+            request_timeout_seconds=getattr(settings, "real_request_timeout_seconds", 30),
+            enable_basic_enrichment=False,
+            enable_valuation_enrichment=False,
+        )
+        provider_stock_basic = resolved_client.get_stock_basic()
+    except Exception as exc:
+        local_summary = resolve_full_a_share_universe(stock_basic, include_bse=getattr(settings, "include_bse", False))
+        local_result = _without_frame(local_summary)
+        if local_result.get("base_universe_count", 0):
+            local_result["warnings"] = [
+                f"AKShare 基础股票列表获取失败：{type(exc).__name__}: {exc}；已回退使用本地 stock_basic 诊断。",
+                *list(local_result.get("warnings", [])),
+            ]
+            return local_result
+        return {
+            "source": "REAL_UNIVERSE_PRESET=full",
+            "label": "沪深 A 股全市场，不含北交所",
+            "symbols": [],
+            "ts_codes": [],
+            "raw_symbol_count": 0,
+            "excluded_bse_count": 0,
+            "excluded_abnormal_count": 0,
+            "base_universe_count": 0,
+            "warnings": [f"AKShare 基础股票列表获取失败：{type(exc).__name__}: {exc}"],
+        }
+    provider_summary = resolve_full_a_share_universe(
+        provider_stock_basic,
+        include_bse=getattr(settings, "include_bse", False),
+    )
+    return _without_frame(provider_summary)
+
+
+def _without_frame(summary: dict[str, Any]) -> dict[str, Any]:
+    """Drop DataFrame values from a universe summary."""
+    return {key: value for key, value in summary.items() if key != "stock_basic"}
 
 
 def _rows_for_symbol(df: pd.DataFrame, ts_code: str) -> pd.DataFrame:
@@ -212,6 +287,14 @@ def _next_steps(priced_count: int, configured_count: int) -> list[str]:
         "python -m core.jobs.run_daily_selection",
         "python -m core.jobs.diagnose_backtest",
     ]
+
+
+def _format_symbol_list(symbols: list[str], limit: int = 50) -> str:
+    """Return a concise symbol list for full-universe diagnostics."""
+    if len(symbols) <= limit:
+        return ", ".join(symbols)
+    preview = ", ".join(symbols[:limit])
+    return f"{preview}, ...（共 {len(symbols)} 只）"
 
 
 if __name__ == "__main__":

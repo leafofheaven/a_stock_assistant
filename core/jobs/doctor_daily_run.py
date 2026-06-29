@@ -9,6 +9,7 @@ import subprocess
 from typing import Any
 
 from app.config import Settings, get_settings
+from core.data_sources.real_universe import is_full_universe_preset
 from core.jobs.diagnose_data_quality import diagnose_data_quality
 from core.jobs.local_backup_utils import PROJECT_ROOT, tracked_local_data_paths
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
@@ -120,7 +121,8 @@ def _build_checks(
     checks.append(_check("git_status", "OK" if not status_short else "WARNING", "工作区干净。" if not status_short else "工作区存在未提交改动。", "提交或确认这些改动不影响日常运行。"))
     checks.append(_check(".env", "OK" if (root / ".env").exists() else "WARNING", ".env 已存在。" if (root / ".env").exists() else ".env 不存在。", "cp .env.example .env 后按需填写配置。"))
     checks.append(_check("data_provider", "OK" if settings.data_provider in {"sample", "tushare", "akshare"} else "FAILED", f"DATA_PROVIDER={settings.data_provider}", "设置 DATA_PROVIDER=sample/tushare/akshare。"))
-    checks.append(_check("real_symbols", "OK" if settings.akshare_symbols or settings.sample_symbols else "WARNING", f"AKSHARE_SAMPLE_SYMBOLS={settings.akshare_sample_symbols or '空'}; REAL_UNIVERSE_PRESET={settings.real_universe_preset}", "确认样本股票或预设样本已配置。"))
+    has_real_universe = bool(settings.akshare_symbols or settings.sample_symbols or is_full_universe_preset(settings.real_universe_preset))
+    checks.append(_check("real_symbols", "OK" if has_real_universe else "WARNING", f"AKSHARE_SAMPLE_SYMBOLS={settings.akshare_sample_symbols or '空'}; REAL_UNIVERSE_PRESET={settings.real_universe_preset}", "确认样本股票或预设样本已配置。"))
     checks.append(_check("enrichment_flags", "OK", f"ENABLE_REAL_BASIC_ENRICHMENT={settings.enable_real_basic_enrichment}; ENABLE_REAL_VALUATION_ENRICHMENT={settings.enable_real_valuation_enrichment}", "无需处理。"))
     checks.append(_check("data_dir", "OK" if data_dir.exists() else "WARNING", f"DATA_DIR={data_dir}; {'存在' if data_dir.exists() else '不存在'}", "python -m core.jobs.doctor_daily_run --fix-safe"))
     checks.append(_check("duckdb_path", "OK" if db_path.exists() else "FAILED", f"DUCKDB_PATH={db_path}; {'存在' if db_path.exists() else '不存在'}", "python -m core.jobs.update_real_data 或 python -m core.jobs.restore_local_data"))

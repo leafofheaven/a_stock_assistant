@@ -45,6 +45,49 @@ def build_full_a_share_universe(raw_stock_basic: pd.DataFrame, include_bse: bool
     return result.drop_duplicates("ts_code", keep="last").reset_index(drop=True)
 
 
+def resolve_full_a_share_universe(raw_stock_basic: pd.DataFrame, include_bse: bool = False) -> dict[str, Any]:
+    """Return full-universe rows plus diagnostic counts.
+
+    The result is intentionally plain dict data so jobs can pass it through
+    command output, JSON reports, and tests without importing a custom class.
+    """
+    normalized = normalize_stock_basic_frame(raw_stock_basic)
+    if normalized.empty:
+        return {
+            "source": "REAL_UNIVERSE_PRESET=full",
+            "label": FULL_UNIVERSE_LABEL,
+            "stock_basic": pd.DataFrame(columns=STANDARD_COLUMNS),
+            "symbols": [],
+            "ts_codes": [],
+            "raw_symbol_count": 0,
+            "excluded_bse_count": 0,
+            "excluded_abnormal_count": 0,
+            "base_universe_count": 0,
+            "warnings": ["AKShare 基础股票列表为空，full 股票池暂不可用。"],
+        }
+
+    bse_mask = normalized["exchange"].eq("BSE")
+    abnormal_mask = normalized["name"].map(is_rule_excluded_name)
+    result = normalized.copy()
+    if not include_bse:
+        result = result[~bse_mask].copy()
+    result = result[~result["name"].map(is_rule_excluded_name)].copy()
+    result = result[result["exchange"].isin(["SSE", "SZSE"])].copy()
+    result = result.drop_duplicates("ts_code", keep="last").reset_index(drop=True)
+    return {
+        "source": "REAL_UNIVERSE_PRESET=full",
+        "label": FULL_UNIVERSE_LABEL,
+        "stock_basic": result,
+        "symbols": result["symbol"].dropna().astype(str).tolist() if "symbol" in result.columns else [],
+        "ts_codes": result["ts_code"].dropna().astype(str).tolist() if "ts_code" in result.columns else [],
+        "raw_symbol_count": int(len(normalized)),
+        "excluded_bse_count": int(bse_mask.sum()) if not include_bse else 0,
+        "excluded_abnormal_count": int((~bse_mask & abnormal_mask).sum()) if not include_bse else int(abnormal_mask.sum()),
+        "base_universe_count": int(len(result)),
+        "warnings": [] if not result.empty else ["full 股票池过滤后为空，请检查 AKShare 基础列表返回结构。"],
+    }
+
+
 def normalize_stock_basic_frame(raw_stock_basic: pd.DataFrame) -> pd.DataFrame:
     """Return stock-basic rows with stable project columns."""
     if raw_stock_basic.empty:

@@ -8,6 +8,8 @@ from typing import Any
 import pandas as pd
 
 from core.data_sources.real_universe import build_full_a_share_universe
+from core.config.env_file import validate_env_updates
+from core.jobs.diagnose_update_batch import diagnose_update_batch
 from core.jobs.update_real_data import update_real_data
 from core.storage.duckdb_store import DuckDBStore
 from core.strategy.selector import select_top_stocks
@@ -100,6 +102,18 @@ class MockFullClient:
         )
 
 
+class BrokenBasicClient(MockFullClient):
+    """Mock provider whose basic list call fails."""
+
+    def get_stock_basic(self) -> pd.DataFrame:
+        raise RuntimeError("mock basic list failure")
+
+
+def test_env_validation_accepts_full_preset() -> None:
+    """Local console .env validation should allow REAL_UNIVERSE_PRESET=full."""
+    validate_env_updates({"REAL_UNIVERSE_PRESET": "full"})
+
+
 def test_full_universe_filters_to_hs_a_shares_without_bse_or_abnormal_names() -> None:
     """full mode should mean HS A-shares, excluding BSE, ST, and delisting names."""
     universe = build_full_a_share_universe(MockFullClient().get_stock_basic(), include_bse=False)
@@ -119,6 +133,35 @@ def test_full_update_discovers_symbols_from_stock_basic(tmp_path: Path) -> None:
     assert result["total_symbols"] == 4
     assert set(result["sample_symbols"]) == {"000001", "600000", "300750", "688981"}
     assert "830799" not in client.requested_price_symbols
+
+
+def test_diagnose_full_resolves_provider_basic_list_without_local_prices(tmp_path: Path) -> None:
+    """diagnose_update_batch should not silently report zero configured symbols for full."""
+    result = diagnose_update_batch(
+        settings=FullSettings(),
+        store=DuckDBStore(tmp_path / "missing.duckdb"),
+        client=MockFullClient(),
+    )
+
+    assert result["sample_source"] == "REAL_UNIVERSE_PRESET=full"
+    assert result["raw_symbol_count"] == 7
+    assert result["excluded_bse_count"] == 1
+    assert result["excluded_abnormal_count"] == 2
+    assert result["base_universe_count"] == 4
+    assert result["configured_symbol_count"] == 4
+    assert result["priced_symbol_count"] == 0
+
+
+def test_diagnose_full_provider_failure_has_clear_warning(tmp_path: Path) -> None:
+    """full basic list failures should be explicit instead of silent zero."""
+    result = diagnose_update_batch(
+        settings=FullSettings(),
+        store=DuckDBStore(tmp_path / "missing-failure.duckdb"),
+        client=BrokenBasicClient(),
+    )
+
+    assert result["configured_symbol_count"] == 0
+    assert any("AKShare 基础股票列表获取失败" in reason for reason in result["reasons"])
 
 
 def test_explicit_akshare_symbols_take_priority_over_full(tmp_path: Path) -> None:

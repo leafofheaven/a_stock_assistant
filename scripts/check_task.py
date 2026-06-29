@@ -2128,12 +2128,13 @@ def check_task46(root: Path) -> list[str]:
             "core/data_sources/real_universe.py",
             "core/universe/stock_pool.py",
             "core/jobs/update_real_data.py",
+            "core/config/env_file.py",
             "docs/real_universe.md",
             "tests/test_real_universe_full.py",
             "web/streamlit_app.py",
         ],
     )
-    config_source = read_source(root / "app/config.py") + read_source(root / ".env.example")
+    config_source = read_source(root / "app/config.py") + read_source(root / ".env.example") + read_source(root / "core/config/env_file.py")
     for phrase in [
         "REAL_UNIVERSE_PRESET",
         "MIN_LISTING_DAYS",
@@ -2166,9 +2167,16 @@ def check_task46(root: Path) -> list[str]:
             failures.append(f"core/universe/stock_pool.py is missing {phrase}.")
 
     update_source = read_source(root / "core/jobs/update_real_data.py")
-    for phrase in ["build_full_a_share_universe", "AKSHARE_SAMPLE_SYMBOLS", "sample_symbols", "emit_progress"]:
+    for phrase in ["resolve_full_a_share_universe", "AKSHARE_SAMPLE_SYMBOLS", "sample_symbols", "emit_progress"]:
         if phrase not in update_source:
             failures.append(f"core/jobs/update_real_data.py is missing {phrase}.")
+
+    diagnose_source = read_source(root / "core/jobs/diagnose_update_batch.py")
+    if 'return [], "REAL_UNIVERSE_PRESET=full"' in diagnose_source:
+        failures.append("diagnose_update_batch.py must not silently return [] for full mode.")
+    for phrase in ["resolve_full_a_share_universe", "raw_symbol_count", "excluded_bse_count", "base_universe_count", "AKShare 基础股票列表获取失败"]:
+        if phrase not in diagnose_source:
+            failures.append(f"core/jobs/diagnose_update_batch.py is missing full diagnostic phrase: {phrase}.")
 
     docs = read_source(root / "docs/real_universe.md") + read_source(root / "README.md") + read_source(root / "docs/commands_reference.md")
     for phrase in ["mini / small / medium", "full", "沪深 A 股全市场，不含北交所", "近 20 日平均成交额", "复牌后"]:
@@ -2176,7 +2184,7 @@ def check_task46(root: Path) -> list[str]:
             failures.append(f"Task 46 docs are missing {phrase}.")
 
     tests_source = read_source(root / "tests/test_real_universe_full.py").lower()
-    for phrase in ["full", "akshare_sample_symbols", "bse", "st", "退市", "avg amount", "median amount", "latest amount", "traded days", "total_score"]:
+    for phrase in ["full", "akshare_sample_symbols", "bse", "st", "退市", "avg amount", "median amount", "latest amount", "traded days", "total_score", "validate_env_updates", "diagnose_update_batch"]:
         if phrase.lower() not in tests_source:
             failures.append(f"tests/test_real_universe_full.py should cover {phrase}.")
     return failures
