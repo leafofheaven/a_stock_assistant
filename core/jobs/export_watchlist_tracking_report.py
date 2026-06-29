@@ -15,7 +15,7 @@ from core.reporting.watchlist_tracking_report import (
     build_watchlist_tracking_report,
     save_watchlist_tracking_report,
 )
-from core.review.tracking import read_watchlist_snapshots
+from core.review.tracking import read_watchlist_daily_snapshots, read_watchlist_snapshots
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 
@@ -32,7 +32,9 @@ def export_watchlist_tracking_report(
     """Export watchlist snapshot change reports from local DuckDB data."""
     resolved_settings = settings or get_settings()
     resolved_store = store or DuckDBStore(resolved_settings.duckdb_path)
-    snapshots = read_watchlist_snapshots(resolved_store)
+    snapshots = read_watchlist_daily_snapshots(resolved_store)
+    if snapshots.empty:
+        snapshots = read_watchlist_snapshots(resolved_store)
     snapshots = _attach_basic_fields(snapshots, resolved_store)
     report = build_watchlist_tracking_report(
         metadata={
@@ -96,7 +98,7 @@ def _attach_basic_fields(snapshots: pd.DataFrame, store: DuckDBStore) -> pd.Data
         rows: list[dict[str, Any]] = []
         for item in result.to_dict("records"):
             ts_code = str(item.get("ts_code", ""))
-            latest_date = str(item.get("latest_trade_date") or item.get("snapshot_date") or "")
+            latest_date = str(item.get("latest_trade_date") or item.get("snapshot_date") or item.get("trade_date") or "")
             latest_basic = daily_basic[daily_basic["ts_code"].astype(str) == ts_code].copy()
             if latest_date:
                 latest_basic = latest_basic[latest_basic["trade_date"].astype(str) <= latest_date]

@@ -33,6 +33,8 @@ class DuckDBStore:
         "backtest_result": "start_date",
         "review_decisions": "selection_date",
         "watchlist_snapshots": "snapshot_date",
+        "watchlist_daily_snapshots": "trade_date",
+        "watchlist_events": "event_date",
         "review_decision_history": "created_at",
         "positions": "entry_date",
     }
@@ -50,6 +52,8 @@ class DuckDBStore:
         "backtest_result": ("strategy_name", "start_date", "end_date", "created_at"),
         "review_decisions": ("ts_code", "selection_date"),
         "watchlist_snapshots": ("ts_code", "snapshot_date"),
+        "watchlist_daily_snapshots": ("ts_code", "trade_date"),
+        "watchlist_events": ("event_id",),
         "review_decision_history": ("history_id",),
         "positions": ("position_id",),
     }
@@ -81,6 +85,29 @@ class DuckDBStore:
         }
         if "exchange" not in columns:
             connection.execute("ALTER TABLE stock_basic ADD COLUMN exchange VARCHAR")
+        self._add_columns_if_missing(
+            connection,
+            "watchlist_daily_snapshots",
+            {
+                "pe": "DOUBLE",
+                "pb": "DOUBLE",
+            },
+        )
+
+    def _add_columns_if_missing(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        table_name: str,
+        column_defs: dict[str, str],
+    ) -> None:
+        """Add missing columns to an existing table when the table exists."""
+        try:
+            existing = {row[1] for row in connection.execute(f"PRAGMA table_info('{table_name}')").fetchall()}
+        except Exception:
+            return
+        for column, data_type in column_defs.items():
+            if column not in existing:
+                connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column} {data_type}")
 
     def connect(self) -> duckdb.DuckDBPyConnection:
         """Open a DuckDB connection for this store."""

@@ -58,6 +58,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task45": check_task45,
         "task46": check_task46,
         "task47": check_task47,
+        "task48": check_task48,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2290,6 +2291,76 @@ def check_task47(root: Path) -> list[str]:
     return failures
 
 
+def check_task48(root: Path) -> list[str]:
+    """Check Task 48 watchlist candidate tracking support."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/refresh_watchlist_from_selection.py",
+            "core/jobs/track_watchlist.py",
+            "core/jobs/diagnose_watchlist.py",
+            "core/jobs/export_watchlist_tracking.py",
+            "core/review/tracking.py",
+            "core/reporting/watchlist_tracking_report.py",
+            "tests/test_watchlist_candidate_tracking.py",
+            "docs/watchlist_candidate_tracking.md",
+        ],
+    )
+    schema_source = read_source(root / "core/storage/schema.sql") + read_source(root / "core/storage/duckdb_store.py")
+    for phrase in ["watchlist_daily_snapshots", "watchlist_events", "selected_count_5d", "consecutive_selected_days", "watch_status"]:
+        if phrase not in schema_source:
+            failures.append(f"Task 48 storage support is missing {phrase}.")
+
+    tracking_source = read_source(root / "core/review/tracking.py")
+    for phrase in [
+        "WATCH_STATUS_LABELS",
+        "new_candidate",
+        "active_watch",
+        "strong_watch",
+        "wait_pullback",
+        "near_buy_zone",
+        "overheated",
+        "weakening",
+        "invalidated",
+        "bought",
+        "removed",
+        "refresh_watchlist_from_selection",
+        "read_watchlist_daily_snapshots",
+        "read_watchlist_events",
+        "rank_change",
+        "total_score_change",
+        "selected_count_10d",
+        "watchlist_events",
+    ]:
+        if phrase not in tracking_source:
+            failures.append(f"core/review/tracking.py is missing Task 48 phrase: {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["观察池跟踪", "enrich_selection_with_watchlist_status", "summarize_watchlist_snapshot", "suggest_add_to_watchlist", "selected_count_5d"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 48 phrase: {phrase}.")
+
+    tests_source = read_source(root / "tests/test_watchlist_candidate_tracking.py").lower()
+    for phrase in ["temporary duckdb", "mock", "not duplicate", "top-n", "selected_count_5d", "consecutive", "rank", "events", "export_watchlist_tracking", "streamlit"]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_watchlist_candidate_tracking.py should cover {phrase}.")
+
+    docs = read_source(root / "docs/watchlist_candidate_tracking.md") + read_source(root / "README.md") + read_source(root / "docs/commands_reference.md")
+    for phrase in [
+        "refresh_watchlist_from_selection",
+        "track_watchlist",
+        "export_watchlist_tracking",
+        "new_candidate",
+        "strong_watch",
+        "wait_pullback",
+        "观察池",
+        "仅供个人研究使用，不自动交易",
+    ]:
+        if phrase not in docs:
+            failures.append(f"Task 48 docs are missing {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2368,6 +2439,7 @@ def main(argv: list[str] | None = None) -> int:
             "task45",
             "task46",
             "task47",
+            "task48",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

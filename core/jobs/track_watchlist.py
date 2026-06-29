@@ -12,7 +12,12 @@ from core.reporting.watchlist_tracking_report import (
     build_watchlist_tracking_report,
     save_watchlist_tracking_report,
 )
-from core.review.tracking import create_watchlist_snapshots, read_watchlist_snapshots
+from core.review.tracking import (
+    create_watchlist_snapshots,
+    read_watchlist_daily_snapshots,
+    read_watchlist_snapshots,
+    refresh_watchlist_from_selection,
+)
 from core.storage.duckdb_store import DuckDBStore
 
 
@@ -29,6 +34,11 @@ def track_watchlist(
     """Create watchlist snapshots and optionally export a tracking report."""
     resolved_settings = settings or get_settings()
     resolved_store = store or DuckDBStore(resolved_settings.duckdb_path)
+    candidate_result = refresh_watchlist_from_selection(
+        settings=resolved_settings,
+        store=resolved_store,
+        trade_date=snapshot_date,
+    )
     result = create_watchlist_snapshots(
         settings=resolved_settings,
         store=resolved_store,
@@ -37,7 +47,9 @@ def track_watchlist(
     files: dict[str, str] = {}
     report: dict[str, Any] | None = None
     if export_report:
-        snapshots = read_watchlist_snapshots(resolved_store)
+        snapshots = read_watchlist_daily_snapshots(resolved_store)
+        if snapshots.empty:
+            snapshots = read_watchlist_snapshots(resolved_store)
         report = build_watchlist_tracking_report(
             metadata={
                 "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -51,6 +63,10 @@ def track_watchlist(
 
     result = {
         **result,
+        "candidate_tracking": candidate_result,
+        "daily_snapshot_count": candidate_result.get("snapshot_count", 0),
+        "watch_status_counts": candidate_result.get("status_counts", {}),
+        "event_count": candidate_result.get("event_count", 0),
         "generated_files": files,
         "report": report,
         "output_dir": str(output_dir),
@@ -68,6 +84,8 @@ def build_console_summary(result: dict[str, Any]) -> str:
         f"- DuckDB 路径: {result.get('duckdb_path')}",
         f"- active watch 股票数量: {result.get('active_watch_count', 0)}",
         f"- 成功生成 snapshot 数量: {result.get('snapshot_count', 0)}",
+        f"- 每日候选跟踪 snapshot 数量: {result.get('daily_snapshot_count', 0)}",
+        f"- 观察池事件数量: {result.get('event_count', 0)}",
         f"- 缺少行情股票数量: {result.get('missing_price_count', 0)}",
         f"- 缺少评分股票数量: {result.get('missing_score_count', 0)}",
         f"- snapshot_date: {result.get('snapshot_date') or '暂无'}",
@@ -77,6 +95,20 @@ def build_console_summary(result: dict[str, Any]) -> str:
         lines.append(f"- 说明: {result['message']}")
     if result.get("generated_files"):
         lines.append(f"- 生成报告: {', '.join(result['generated_files'].values())}")
+    counts = result.get("watch_status_counts") or {}
+    if counts:
+        lines.append("- 观察池分层:")
+        for key, label in [
+            ("new_candidate", "新入选"),
+            ("strong_watch", "重点观察"),
+            ("active_watch", "正常观察"),
+            ("wait_pullback", "等待回调"),
+            ("near_buy_zone", "接近买入区间"),
+            ("overheated", "短线过热"),
+            ("weakening", "走势转弱"),
+            ("invalidated", "逻辑失效"),
+        ]:
+            lines.append(f"  - {label}: {counts.get(key, 0)}")
     next_steps = result.get("next_steps") or []
     if next_steps:
         lines.append("- 下一步建议:")

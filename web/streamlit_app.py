@@ -81,6 +81,55 @@ def filter_selection_data(
     return df[SELECTION_COLUMNS].reset_index(drop=True)
 
 
+def enrich_selection_with_watchlist_status(selection_df: pd.DataFrame, tables: dict[str, Any]) -> pd.DataFrame:
+    """Attach watchlist status fields to displayed selection rows without resorting."""
+    if selection_df.empty or "ts_code" not in selection_df.columns:
+        return selection_df
+    snapshot = tables.get("_watchlist_snapshot", pd.DataFrame())
+    result = selection_df.copy()
+    if not isinstance(snapshot, pd.DataFrame) or snapshot.empty or "ts_code" not in snapshot.columns:
+        result["is_in_watchlist"] = False
+        result["watchlist_status"] = ""
+        result["suggest_add_to_watchlist"] = True
+        return result
+    latest = snapshot.copy()
+    date_col = "trade_date" if "trade_date" in latest.columns else "snapshot_date"
+    if date_col in latest.columns:
+        latest_date = latest[date_col].dropna().astype(str).max()
+        latest = latest[latest[date_col].astype(str) == str(latest_date)]
+    fields = [
+        "ts_code",
+        "watch_status",
+        "watch_status_label",
+        "selected_count_5d",
+        "selected_count_10d",
+        "consecutive_selected_days",
+        "rank_change",
+    ]
+    available = [column for column in fields if column in latest.columns]
+    merged = result.merge(latest[available].drop_duplicates("ts_code"), on="ts_code", how="left")
+    merged["is_in_watchlist"] = merged["watch_status"].notna() if "watch_status" in merged.columns else False
+    if "watch_status_label" in merged.columns:
+        merged["watchlist_status"] = merged["watch_status_label"].fillna("")
+    else:
+        merged["watchlist_status"] = merged.get("watch_status", "")
+    merged["suggest_add_to_watchlist"] = ~merged["is_in_watchlist"]
+    return merged.reset_index(drop=True)
+
+
+def summarize_watchlist_snapshot(snapshot_df: pd.DataFrame) -> dict[str, int]:
+    """Summarize latest watchlist daily snapshot by status for Streamlit cards."""
+    if snapshot_df.empty:
+        return {"total": 0}
+    df = snapshot_df.copy()
+    date_col = "trade_date" if "trade_date" in df.columns else "snapshot_date"
+    if date_col in df.columns:
+        latest_date = df[date_col].dropna().astype(str).max()
+        df = df[df[date_col].astype(str) == str(latest_date)]
+    counts = df.get("watch_status", pd.Series(dtype=str)).fillna("active_watch").astype(str).value_counts().to_dict()
+    return {"total": int(len(df)), **{key: int(value) for key, value in counts.items()}}
+
+
 def dataframe_to_csv(df: pd.DataFrame) -> str:
     """Convert a DataFrame to UTF-8 CSV text without the index."""
     buffer = StringIO()
@@ -465,7 +514,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     st.info(f"数据来源：{data_source_status['data_source']}。{data_source_status['message']}")
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
-    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
+    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "观察池跟踪", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
         _render_selection_tab(st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[1]:
@@ -490,12 +539,18 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
             dashboard_data.get("price", pd.DataFrame()),
         )
     with tabs[5]:
-        _render_positions_tab(st, dashboard_data.get("positions", pd.DataFrame()))
+        _render_watchlist_tab(
+            st,
+            dashboard_data.get("watchlist", pd.DataFrame()),
+            dashboard_data.get("watchlist_snapshot", pd.DataFrame()),
+        )
     with tabs[6]:
-        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
+        _render_positions_tab(st, dashboard_data.get("positions", pd.DataFrame()))
     with tabs[7]:
-        _render_status_tab(st, dashboard_data.get("tables", {}))
+        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
     with tabs[8]:
+        _render_status_tab(st, dashboard_data.get("tables", {}))
+    with tabs[9]:
         _render_local_console_tab(st, dashboard_data.get("tables", {}))
 
 
@@ -520,7 +575,7 @@ def _render_selection_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str,
         return
     industry = st.selectbox("行业", get_industry_options(selection_df))
     sort_descending = st.checkbox("按综合分从高到低排序", value=True)
-    filtered = filter_selection_data(selection_df, industry, sort_descending)
+    filtered = enrich_selection_with_watchlist_status(filter_selection_data(selection_df, industry, sort_descending), tables or {})
     st.dataframe(filtered, use_container_width=True)
     st.write("候选股票详情")
     for item in filtered.head(10).to_dict("records"):
@@ -571,12 +626,49 @@ def _render_review_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str, An
     st.write("人工复核模板导出后，可填写 decision、reason、notes、reviewer，再用 import_review_decisions 回填本地 DuckDB。")
 
 
-def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame) -> None:
-    st.subheader("观察池")
-    if watchlist_df.empty:
+def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.DataFrame | None = None) -> None:
+    st.subheader("观察池跟踪")
+    snapshot = snapshot_df if isinstance(snapshot_df, pd.DataFrame) else pd.DataFrame()
+    if watchlist_df.empty and snapshot.empty:
         st.info("暂无 active watch 股票。人工复核导入 watch 决策后会显示在这里。")
         return
-    st.caption("刷新观察池评分：python -m core.jobs.refresh_watchlist_scores")
+    st.caption("刷新观察池：python -m core.jobs.refresh_watchlist_from_selection；每日跟踪：python -m core.jobs.track_watchlist")
+    if not snapshot.empty:
+        counts = summarize_watchlist_snapshot(snapshot)
+        cols = st.columns(7)
+        metrics = [
+            ("总观察", counts.get("total", 0)),
+            ("今日新入选", counts.get("new_candidate", 0)),
+            ("重点观察", counts.get("strong_watch", 0)),
+            ("等待回调", counts.get("wait_pullback", 0)),
+            ("短线过热", counts.get("overheated", 0)),
+            ("走势转弱", counts.get("weakening", 0)),
+            ("建议复核", counts.get("invalidated", 0)),
+        ]
+        for col, (label, value) in zip(cols, metrics):
+            col.metric(label, value)
+        st.write("观察池每日跟踪")
+        snapshot_columns = [
+            "ts_code",
+            "name",
+            "trade_date",
+            "current_close",
+            "today_rank",
+            "rank_change",
+            "total_score",
+            "total_score_change",
+            "selected_count_5d",
+            "selected_count_10d",
+            "consecutive_selected_days",
+            "action_hint",
+            "watch_status_label",
+            "daily_note",
+        ]
+        available_snapshot = [column for column in snapshot_columns if column in snapshot.columns]
+        st.dataframe(snapshot[available_snapshot], use_container_width=True)
+        return
+
+    st.caption("暂无每日跟踪快照，先运行 python -m core.jobs.track_watchlist。")
     display_columns = [
         "ts_code",
         "name",
