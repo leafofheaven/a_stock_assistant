@@ -160,3 +160,21 @@ CREATE TABLE IF NOT EXISTS review_decision_history (
     action_type VARCHAR,
     created_at TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS positions (
+    position_id VARCHAR PRIMARY KEY,
+    ts_code VARCHAR,
+    name VARCHAR,
+    entry_date VARCHAR,
+    entry_price DOUBLE,
+    quantity DOUBLE,
+    entry_reason VARCHAR,
+    source VARCHAR,
+    entry_total_score DOUBLE,
+    entry_elder_score DOUBLE,
+    initial_stop DOUBLE,
+    plan VARCHAR,
+    status VARCHAR,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);

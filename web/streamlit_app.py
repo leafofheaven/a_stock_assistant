@@ -261,6 +261,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_local_state"] = _safe_local_state()
         data.setdefault("watchlist", pd.DataFrame())
         data.setdefault("watchlist_snapshot", pd.DataFrame())
+        data.setdefault("positions", pd.DataFrame())
         return data
 
     store = DuckDBStore(settings.duckdb_path)
@@ -276,6 +277,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_local_state"] = _safe_local_state()
         data.setdefault("watchlist", pd.DataFrame())
         data.setdefault("watchlist_snapshot", pd.DataFrame())
+        data.setdefault("positions", pd.DataFrame())
         return data
 
     try:
@@ -288,6 +290,7 @@ def load_dashboard_data() -> dict[str, Any]:
             "backtest_result": store.read_table("backtest_result"),
             "review_decisions": _safe_read_store_table(store, "review_decisions"),
             "review_decision_history": _safe_read_store_table(store, "review_decision_history"),
+            "positions": _safe_read_store_table(store, "positions"),
         }
     except DuckDBStoreError:
         data = sample_dashboard_data()
@@ -301,6 +304,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_local_state"] = _safe_local_state()
         data.setdefault("watchlist", pd.DataFrame())
         data.setdefault("watchlist_snapshot", pd.DataFrame())
+        data.setdefault("positions", pd.DataFrame())
         return data
 
     if tables["strategy_result"].empty:
@@ -318,6 +322,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("tables", {})["_local_state"] = _safe_local_state()
         data.setdefault("watchlist", pd.DataFrame())
         data.setdefault("watchlist_snapshot", pd.DataFrame())
+        data.setdefault("positions", pd.DataFrame())
         return data
 
     tables["_latest_workflow_report"] = load_latest_workflow_report()
@@ -329,6 +334,7 @@ def load_dashboard_data() -> dict[str, Any]:
     tables["_local_state"] = _safe_local_state()
     watchlist = _load_watchlist_for_dashboard(store)
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
+    positions = _load_positions_for_dashboard(store)
     tables["_watchlist_snapshot"] = watchlist_snapshot
     return {
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
@@ -340,6 +346,7 @@ def load_dashboard_data() -> dict[str, Any]:
         "backtest": {},
         "watchlist": watchlist,
         "watchlist_snapshot": watchlist_snapshot,
+        "positions": positions,
         "tables": tables,
     }
 
@@ -374,7 +381,9 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_local_state"] = _safe_local_state()
     real_tables["review_decisions"] = _safe_read_store_table(store, "review_decisions")
     real_tables["review_decision_history"] = _safe_read_store_table(store, "review_decision_history")
+    real_tables["positions"] = _safe_read_store_table(store, "positions")
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
+    positions = _load_positions_for_dashboard(store)
     real_tables["_watchlist_snapshot"] = watchlist_snapshot
     backtest_result = dict(backtest_diagnostic.get("backtest_result", {}))
     backtest_result["data_quality_notes"] = backtest_diagnostic.get("data_quality_notes", [])
@@ -390,6 +399,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
         "backtest": backtest_result,
         "watchlist": _load_watchlist_for_dashboard(store),
         "watchlist_snapshot": watchlist_snapshot,
+        "positions": positions,
         "backtest_diagnostic": backtest_diagnostic,
         "batch_diagnostic": batch_diagnostic,
         "tables": real_tables,
@@ -408,7 +418,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     st.info(f"数据来源：{data_source_status['data_source']}。{data_source_status['message']}")
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
-    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "策略回测", "数据更新状态", "本地控制台"])
+    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
         _render_selection_tab(st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[1]:
@@ -433,10 +443,12 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
             dashboard_data.get("price", pd.DataFrame()),
         )
     with tabs[5]:
-        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
+        _render_positions_tab(st, dashboard_data.get("positions", pd.DataFrame()))
     with tabs[6]:
-        _render_status_tab(st, dashboard_data.get("tables", {}))
+        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
     with tabs[7]:
+        _render_status_tab(st, dashboard_data.get("tables", {}))
+    with tabs[8]:
         _render_local_console_tab(st, dashboard_data.get("tables", {}))
 
 
@@ -714,6 +726,40 @@ def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.D
     st.dataframe(review_df["action_hint"].value_counts(dropna=False).rename_axis("action_hint").reset_index(name="count"), use_container_width=True)
     st.info("操作建议只用于人工复核流程，不改变今日选股 total_score 排序；“短线过热，不追”表示短期回撤风险偏高，不等于中期趋势一定转弱。批量导出可运行 python -m core.jobs.export_elder_review。")
     st.caption("命令行：python -m core.jobs.run_elder_review 或 python -m core.jobs.export_elder_review --format markdown")
+
+
+def _render_positions_tab(st: Any, positions_df: pd.DataFrame) -> None:
+    st.subheader("持仓池")
+    st.caption("用于手工记录已实际持有的股票；仅做本地持仓记录和基础展示，不自动交易。")
+    st.write("手工录入字段")
+    st.text_input("股票代码", value="", key="position_ts_code")
+    st.text_input("股票名称", value="", key="position_name")
+    st.text_input("买入日期", value="", key="position_entry_date")
+    st.number_input("买入价", min_value=0.0, value=0.0, step=0.01, key="position_entry_price")
+    st.number_input("数量（可选）", min_value=0.0, value=0.0, step=100.0, key="position_quantity")
+    st.selectbox("来源", ["manual", "selection", "watchlist", "elder_review"], key="position_source")
+    st.text_area("买入理由 / 复核记录", value="", key="position_entry_reason")
+    st.text_area("计划（可选）", value="", key="position_plan")
+    st.info("页面第一版只展示录入入口和本地持仓池。批量导入请使用 docs/templates/positions_import_template.csv 与 python -m core.jobs.import_positions --file <csv>。")
+    if positions_df.empty:
+        st.info("暂无持仓记录。可通过导入模板或命令行创建本地持仓记录。")
+        return
+    display_columns = [
+        "ts_code",
+        "name",
+        "entry_date",
+        "entry_price",
+        "latest_close",
+        "pnl_pct",
+        "holding_days",
+        "source",
+        "entry_reason",
+        "status",
+        "data_quality_note",
+    ]
+    available = [column for column in display_columns if column in positions_df.columns]
+    st.dataframe(positions_df[available], use_container_width=True)
+    st.caption("导出：python -m core.jobs.export_positions 或 python -m core.jobs.export_positions --format markdown")
 
 
 def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:
@@ -1277,6 +1323,16 @@ def _load_watchlist_for_dashboard(store: Any) -> pd.DataFrame:
 
     try:
         return build_watchlist_dataframe(store, active_only=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _load_positions_for_dashboard(store: Any) -> pd.DataFrame:
+    """Load local positions enriched with latest close for dashboard display."""
+    from core.positions.position_pool import build_positions_dataframe
+
+    try:
+        return build_positions_dataframe(store, active_only=False)
     except Exception:
         return pd.DataFrame()
 

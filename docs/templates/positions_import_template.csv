@@ -1,0 +1,2 @@
+ts_code,name,entry_date,entry_price,quantity,entry_reason,source,entry_total_score,entry_elder_score,initial_stop,plan
+000001.SZ,示例股票,20240628,10.00,100,示例：来自人工复核,manual,80,70,9.20,示例计划，不代表真实持仓
