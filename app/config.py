@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     full_update_max_batches: int = Field(default=0, validation_alias="FULL_UPDATE_MAX_BATCHES")
     enable_stock_basic_enrichment: bool = Field(default=False, validation_alias="ENABLE_STOCK_BASIC_ENRICHMENT")
     full_enable_stock_basic_enrichment: bool = Field(default=False, validation_alias="FULL_ENABLE_STOCK_BASIC_ENRICHMENT")
+    enable_valuation_enrichment: bool = Field(default=False, validation_alias="ENABLE_VALUATION_ENRICHMENT")
+    full_enable_valuation_enrichment: bool = Field(default=False, validation_alias="FULL_ENABLE_VALUATION_ENRICHMENT")
     enable_real_basic_enrichment: bool = Field(
         default=True,
         validation_alias="ENABLE_REAL_BASIC_ENRICHMENT",
