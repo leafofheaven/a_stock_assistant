@@ -2209,6 +2209,8 @@ def check_task47(root: Path) -> list[str]:
         "FULL_UPDATE_MAX_RETRIES",
         "FULL_UPDATE_SLEEP_SECONDS",
         "FULL_UPDATE_RESUME",
+        "FULL_UPDATE_MAX_SYMBOLS",
+        "FULL_UPDATE_MAX_BATCHES",
         "ENABLE_STOCK_BASIC_ENRICHMENT",
         "FULL_ENABLE_STOCK_BASIC_ENRICHMENT",
     ]:
@@ -2226,6 +2228,9 @@ def check_task47(root: Path) -> list[str]:
         "symbol_start_dates",
         "_should_run_stock_basic_enrichment",
         "full_enable_stock_basic_enrichment",
+        "_effective_max_symbols",
+        "_effective_max_batches",
+        "_limit_symbols",
         "_effective_batch_size",
         "_effective_max_retries",
         "_effective_sleep_seconds",
@@ -2247,7 +2252,7 @@ def check_task47(root: Path) -> list[str]:
             failures.append(f"web/streamlit_app.py is missing Task 47 display phrase: {phrase}.")
 
     tests_source = read_source(root / "tests/test_full_update_stability.py").lower()
-    for phrase in ["batch", "resume", "retry", "progress", "skipped", "total_score", "diagnose_update_batch", "global_max", "initial_update_symbols", "build_date_status", "stock_individual_info_em", "blockingbasicenrichmentclient"]:
+    for phrase in ["batch", "resume", "retry", "progress", "skipped", "total_score", "diagnose_update_batch", "global_max", "initial_update_symbols", "build_date_status", "stock_individual_info_em", "blockingbasicenrichmentclient", "limitedsymbolssettings", "hardfailpriceclient", "missing daily_price"]:
         if phrase not in tests_source:
             failures.append(f"tests/test_full_update_stability.py should cover {phrase}.")
 
@@ -2256,7 +2261,7 @@ def check_task47(root: Path) -> list[str]:
         + read_source(root / "docs/commands_reference.md")
         + read_source(root / "README.md")
     )
-    for phrase in ["FULL_UPDATE_BATCH_SIZE", "FULL_UPDATE_RESUME", "ENABLE_STOCK_BASIC_ENRICHMENT", "FULL_ENABLE_STOCK_BASIC_ENRICHMENT", "断点续跑", "失败重试", "全市场更新可能耗时较长"]:
+    for phrase in ["FULL_UPDATE_BATCH_SIZE", "FULL_UPDATE_RESUME", "FULL_UPDATE_MAX_SYMBOLS", "FULL_UPDATE_MAX_BATCHES", "ENABLE_STOCK_BASIC_ENRICHMENT", "FULL_ENABLE_STOCK_BASIC_ENRICHMENT", "断点续跑", "失败重试", "全市场更新可能耗时较长"]:
         if phrase not in docs:
             failures.append(f"Task 47 docs are missing {phrase}.")
     return failures

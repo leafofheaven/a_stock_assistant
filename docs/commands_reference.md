@@ -47,11 +47,15 @@ FULL_UPDATE_LOOKBACK_DAYS=250
 FULL_UPDATE_MAX_RETRIES=2
 FULL_UPDATE_SLEEP_SECONDS=0.2
 FULL_UPDATE_RESUME=true
+FULL_UPDATE_MAX_SYMBOLS=0
+FULL_UPDATE_MAX_BATCHES=0
 ENABLE_STOCK_BASIC_ENRICHMENT=false
 FULL_ENABLE_STOCK_BASIC_ENRICHMENT=false
 ```
 
 `FULL_UPDATE_RESUME=true` 时，已有目标结束日期行情的股票会跳过；缺数据或最新行情不足的股票会继续更新。少量股票失败不会中断整个流程，失败列表会在摘要中显示。
+
+真实小批量验收时可临时设置 `FULL_UPDATE_MAX_SYMBOLS=20` 或 `FULL_UPDATE_MAX_BATCHES=1`，只处理少量股票后正常结束。`FULL_UPDATE_BATCH_SIZE` 只控制每批多少只，不代表本次最多处理多少只。
 
 full 模式默认不逐只调用 AKShare `stock_individual_info_em` 做基础信息增强，避免全市场更新卡在增强阶段。需要小样本补充行业、地区等增强字段时，可以手动开启 `ENABLE_STOCK_BASIC_ENRICHMENT=true`；full 模式还需要额外开启 `FULL_ENABLE_STOCK_BASIC_ENRICHMENT=true`。
 

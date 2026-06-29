@@ -56,6 +56,18 @@ class NoResumeSettings(FullUpdateSettings):
     full_update_resume = False
 
 
+class LimitedSymbolsSettings(FullUpdateSettings):
+    """Limit one full update run to a tiny smoke batch."""
+
+    full_update_max_symbols = 2
+
+
+class LimitedBatchesSettings(FullUpdateSettings):
+    """Limit one full update run by batch count."""
+
+    full_update_max_batches = 1
+
+
 class FullUpdateClient:
     """Mock AKShare-like client with controllable batch failures."""
 
@@ -108,6 +120,18 @@ class BlockingBasicEnrichmentClient(FullUpdateClient):
 
     def enrich_stock_basic(self, stock_basic: pd.DataFrame, symbols: list[str] | None = None) -> pd.DataFrame:
         raise AssertionError("stock_individual_info_em should not run in full mode by default")
+
+
+class HardFailPriceClient(FullUpdateClient):
+    """Client whose selected batch always raises a non-DataSource exception."""
+
+    def get_daily_price(self, start_date: str, end_date: str, symbols: list[str] | None = None) -> pd.DataFrame:
+        batch = symbols or []
+        self.price_batches.append(batch)
+        self.price_requests.append((start_date, end_date, batch))
+        if "600000" in batch:
+            raise ValueError("mock hard batch failure")
+        return _price_rows(batch, end_date=end_date)
 
 
 def test_full_update_uses_batches_and_progress(tmp_path: Path) -> None:
@@ -183,6 +207,55 @@ def test_full_update_global_max_date_does_not_hide_missing_symbols(tmp_path: Pat
     assert result["skipped_symbols"] == 1
     assert result["initial_update_symbols"] == 3
     assert result["full_universe_symbol_count"] == 4
+
+
+def test_full_update_initial_backfill_prioritizes_missing_daily_price(tmp_path: Path) -> None:
+    """Missing daily_price symbols should be planned before stale symbols."""
+    store = DuckDBStore(tmp_path / "full-missing-first.duckdb")
+    store.initialize()
+    store.upsert_dataframe("daily_price", _price_rows(["000001", "600000"], end_date="20240115"))
+    store.upsert_dataframe("daily_basic", _daily_basic_rows(["000001", "600000"], trade_date="20240115"))
+    store.upsert_dataframe("adj_factor", _adj_factor_rows(["000001", "600000"], trade_date="20240115"))
+    client = FullUpdateClient()
+
+    update_real_data(settings=LimitedBatchesSettings(), store=store, client=client)
+
+    requested = [symbol for batch in client.price_batches for symbol in batch]
+    assert requested == ["300750", "688981"]
+
+
+def test_full_update_max_symbols_limits_one_run(tmp_path: Path) -> None:
+    """FULL_UPDATE_MAX_SYMBOLS should cap the current run without changing the full universe."""
+    client = FullUpdateClient()
+
+    result = update_real_data(
+        settings=LimitedSymbolsSettings(),
+        store=DuckDBStore(tmp_path / "full-limited-symbols.duckdb"),
+        client=client,
+    )
+
+    requested = [symbol for batch in client.price_batches for symbol in batch]
+    assert len(requested) == 2
+    assert result["total_symbols"] == 4
+    assert result["success_symbols"] == 2
+    assert result["full_update_max_symbols"] == 2
+
+
+def test_full_update_hard_batch_failure_does_not_abort(tmp_path: Path) -> None:
+    """Non-DataSource batch failures should be recorded and later batches should continue."""
+    client = HardFailPriceClient()
+
+    result = update_real_data(
+        settings=FullUpdateSettings(),
+        store=DuckDBStore(tmp_path / "full-hard-failure.duckdb"),
+        client=client,
+    )
+
+    requested = [symbol for batch in client.price_batches for symbol in batch]
+    assert "300750" in requested
+    assert result["status"] == "partial_success"
+    assert result["failed_symbols"] == 2
+    assert any("mock hard batch failure" in item["error_message"] for item in result["failure_records"])
 
 
 def test_full_update_missing_daily_basic_or_adj_factor_enters_incremental_queue(tmp_path: Path) -> None:

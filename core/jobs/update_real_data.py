@@ -225,6 +225,9 @@ def _run_provider_update(
             effective_start_date,
             end_date,
             resume=_full_update_resume(settings, provider_name),
+            max_symbols=_effective_max_symbols(settings, _use_full_universe(settings, provider_name)),
+            batch_size=_effective_batch_size(settings, _use_full_universe(settings, provider_name)),
+            max_batches=_effective_max_batches(settings, _use_full_universe(settings, provider_name)),
         )
         symbols_to_fetch = update_plan["symbols_to_fetch"]
         skipped_symbols = update_plan["skipped_symbols"]
@@ -239,7 +242,8 @@ def _run_provider_update(
                 f"全市场股票 {len(sample_symbols)} 只，已跳过 {len(skipped_symbols)} 只，"
                 f"增量更新 {len(update_plan.get('incremental_update_symbols', []))} 只，"
                 f"首次补数据 {len(update_plan.get('initial_update_symbols', []))} 只，"
-                f"本批次待更新数量 {min(_effective_batch_size(settings, _use_full_universe(settings, provider_name)), len(symbols_to_fetch))} 只。"
+                f"总待处理 {update_plan.get('total_pending_symbols', len(symbols_to_fetch))} 只，"
+                f"本次计划处理 {len(symbols_to_fetch)} 只，每批大小 {_effective_batch_size(settings, _use_full_universe(settings, provider_name))}。"
             ),
         )
         frames = {
@@ -308,7 +312,14 @@ def _run_provider_update(
             for table_name, frame in normalized_frames.items()
             if frame.empty
         ]
-        batch_summary = _batch_summary(provider_name, sample_symbols, normalized_frames, client, skipped_symbols=skipped_symbols)
+        batch_summary = _batch_summary(
+            provider_name,
+            sample_symbols,
+            normalized_frames,
+            client,
+            skipped_symbols=skipped_symbols,
+            planned_symbols=symbols_to_fetch,
+        )
         batch_summary.update(_update_runtime_summary(settings, _use_full_universe(settings, provider_name)))
         enrichment_summary = _enrichment_summary(sample_symbols, normalized_frames, client, settings)
         if provider_name == "akshare" and normalized_frames["daily_price"].empty and symbols_to_fetch:
@@ -354,7 +365,14 @@ def _run_provider_update(
             "next_steps": ["检查数据源配置后重试。"],
         }
 
-    batch_summary = _batch_summary(provider_name, sample_symbols, normalized_frames, client, skipped_symbols=skipped_symbols)
+    batch_summary = _batch_summary(
+        provider_name,
+        sample_symbols,
+        normalized_frames,
+        client,
+        skipped_symbols=skipped_symbols,
+        planned_symbols=symbols_to_fetch,
+    )
     batch_summary.update(_update_runtime_summary(settings, _use_full_universe(settings, provider_name)))
     enrichment_summary = _enrichment_summary(sample_symbols, normalized_frames, client, settings)
     status = _status_from_batch_summary(batch_summary)
@@ -410,19 +428,22 @@ def main() -> None:
         print(
             f"- 主行情统计: 总股票数 {result['total_symbols']}，成功 {result['success_symbols']}，"
             f"失败 {result['failed_symbols']}，跳过 {result.get('skipped_symbols', 0)}，"
+            f"本次计划 {result.get('planned_symbols', 0)}，暂未处理 {result.get('deferred_symbols', 0)}，"
             f"完成率 {result.get('completion_rate', result['success_rate']):.2%}"
         )
         if result.get("is_full_update"):
             print(
                 f"- full 更新设置: batch_size={result.get('effective_batch_size')}，"
                 f"lookback_days={result.get('full_update_lookback_days')}，"
-                f"max_retries={result.get('effective_max_retries')}，resume={result.get('full_update_resume')}"
+                f"max_retries={result.get('effective_max_retries')}，resume={result.get('full_update_resume')}，"
+                f"max_symbols={result.get('full_update_max_symbols')}，max_batches={result.get('full_update_max_batches')}"
             )
             print(
                 f"- full 更新队列: 全市场股票 {result.get('full_universe_symbol_count', result.get('total_symbols', 0))}，"
                 f"已跳过 {result.get('skipped_symbols', 0)}，"
                 f"增量更新 {result.get('incremental_update_symbols', 0)}，"
                 f"首次补数据 {result.get('initial_update_symbols', 0)}，"
+                f"本次计划 {result.get('planned_symbols', 0)}，"
                 f"失败 {result.get('failed_symbols', 0)}"
             )
     enrichment = result.get("enrichment_summary", {})
@@ -541,23 +562,28 @@ def _build_symbol_update_plan(
     target_end_date: str,
     *,
     resume: bool,
+    max_symbols: int = 0,
+    batch_size: int = 50,
+    max_batches: int = 0,
 ) -> dict[str, Any]:
     """Return per-symbol update plan across price, daily_basic, and adj_factor."""
     requested = [_to_ts_code(symbol) for symbol in symbols]
     default_start_date = str(default_start_date)
     target_end_date = str(target_end_date)
     if not resume or not requested:
+        planned_symbols = _limit_symbols(list(symbols), max_symbols=max_symbols, batch_size=batch_size, max_batches=max_batches)
         return {
             "target_end_date": target_end_date,
             "default_start_date": default_start_date,
             "resume": resume,
-            "symbols_to_fetch": list(symbols),
+            "symbols_to_fetch": planned_symbols,
+            "total_pending_symbols": len(symbols),
             "skipped_symbols": [],
-            "incremental_update_symbols": requested,
+            "incremental_update_symbols": [_to_ts_code(symbol) for symbol in planned_symbols],
             "initial_update_symbols": [],
             "stale_symbols": [],
             "missing_symbols": [],
-            "symbol_start_dates": {symbol: default_start_date for symbol in requested},
+            "symbol_start_dates": {_to_ts_code(symbol): default_start_date for symbol in planned_symbols},
         }
     latest_by_table = {
         "daily_price": _latest_dates_by_symbol(_safe_read_table(store, "daily_price")),
@@ -569,38 +595,59 @@ def _build_symbol_update_plan(
     missing: list[str] = []
     incremental: list[str] = []
     initial: list[str] = []
-    to_fetch: list[str] = []
+    initial_original: list[str] = []
+    incremental_original: list[str] = []
     start_dates: dict[str, str] = {}
     for original_symbol, ts_code in zip(symbols, requested, strict=False):
         latest_dates = {table: latest.get(ts_code) for table, latest in latest_by_table.items()}
         if all(value is not None and str(value) >= target_end_date for value in latest_dates.values()):
             skipped.append(ts_code)
             continue
-        to_fetch.append(original_symbol)
         if latest_dates["daily_price"] is None:
             missing.append(ts_code)
             initial.append(ts_code)
+            initial_original.append(original_symbol)
             start_dates[ts_code] = default_start_date
             continue
         stale.append(ts_code)
         incremental.append(ts_code)
+        incremental_original.append(original_symbol)
         if any(value is None for value in latest_dates.values()):
             start_dates[ts_code] = default_start_date
         else:
             earliest_latest = min(str(value) for value in latest_dates.values() if value is not None)
             start_dates[ts_code] = min(_next_yyyymmdd(earliest_latest), target_end_date)
+    pending = [*initial_original, *incremental_original]
+    planned_symbols = _limit_symbols(
+        pending,
+        max_symbols=max_symbols,
+        batch_size=batch_size,
+        max_batches=max_batches,
+    )
+    planned_ts_codes = {_to_ts_code(symbol) for symbol in planned_symbols}
     return {
         "target_end_date": target_end_date,
         "default_start_date": default_start_date,
         "resume": resume,
-        "symbols_to_fetch": to_fetch,
+        "symbols_to_fetch": planned_symbols,
+        "total_pending_symbols": len(pending),
         "skipped_symbols": skipped,
-        "incremental_update_symbols": incremental,
-        "initial_update_symbols": initial,
+        "incremental_update_symbols": [symbol for symbol in incremental if symbol in planned_ts_codes],
+        "initial_update_symbols": [symbol for symbol in initial if symbol in planned_ts_codes],
         "stale_symbols": stale,
         "missing_symbols": missing,
-        "symbol_start_dates": start_dates,
+        "symbol_start_dates": {symbol: start for symbol, start in start_dates.items() if symbol in planned_ts_codes},
     }
+
+
+def _limit_symbols(symbols: list[str], *, max_symbols: int, batch_size: int, max_batches: int) -> list[str]:
+    """Limit planned symbols for safe real-world smoke tests."""
+    limit = len(symbols)
+    if max_batches > 0:
+        limit = min(limit, max(1, batch_size) * max_batches)
+    if max_symbols > 0:
+        limit = min(limit, max_symbols)
+    return symbols[:limit]
 
 
 def _safe_read_table(store: DuckDBStore, table_name: str) -> pd.DataFrame:
@@ -847,7 +894,16 @@ def _fetch_symbol_table_in_batches(
                 frame = fetcher(batch_start_date, end_date, batch)
                 break
             except DataSourceError as exc:
-                _record_client_failure(client, batch, fetcher.__name__, str(exc))
+                _record_client_failure(client, batch, f"{table_name}:{fetcher.__name__}", str(exc))
+                if attempt + 1 >= max_retries:
+                    frame = pd.DataFrame()
+            except Exception as exc:
+                _record_client_failure(
+                    client,
+                    batch,
+                    f"{table_name}:{fetcher.__name__}",
+                    f"{type(exc).__name__}: {exc}",
+                )
                 if attempt + 1 >= max_retries:
                     frame = pd.DataFrame()
         if not frame.empty:
@@ -892,6 +948,20 @@ def _effective_sleep_seconds(settings: Settings, full_mode: bool) -> float:
     return max(0.0, float(getattr(settings, key, default) or 0.0))
 
 
+def _effective_max_symbols(settings: Settings, full_mode: bool) -> int:
+    """Return optional maximum symbols for one full update run; 0 means unlimited."""
+    if not full_mode:
+        return 0
+    return max(0, int(getattr(settings, "full_update_max_symbols", 0) or 0))
+
+
+def _effective_max_batches(settings: Settings, full_mode: bool) -> int:
+    """Return optional maximum batches for one full update run; 0 means unlimited."""
+    if not full_mode:
+        return 0
+    return max(0, int(getattr(settings, "full_update_max_batches", 0) or 0))
+
+
 def _update_runtime_summary(settings: Settings, full_mode: bool) -> dict[str, Any]:
     """Return update runtime settings for command summaries."""
     return {
@@ -901,6 +971,8 @@ def _update_runtime_summary(settings: Settings, full_mode: bool) -> dict[str, An
         "effective_sleep_seconds": _effective_sleep_seconds(settings, full_mode),
         "full_update_lookback_days": int(getattr(settings, "full_update_lookback_days", 250) or 250) if full_mode else None,
         "full_update_resume": bool(getattr(settings, "full_update_resume", True)) if full_mode else None,
+        "full_update_max_symbols": _effective_max_symbols(settings, full_mode) if full_mode else None,
+        "full_update_max_batches": _effective_max_batches(settings, full_mode) if full_mode else None,
     }
 
 
@@ -965,17 +1037,24 @@ def _batch_summary(
     frames: dict[str, pd.DataFrame],
     client: StockDataSource,
     skipped_symbols: list[str] | None = None,
+    planned_symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     """Return batch update success and failure summary."""
     requested_ts_codes = [_to_ts_code(symbol) for symbol in sample_symbols]
     skipped_set = {_to_ts_code(symbol) for symbol in (skipped_symbols or [])}
+    planned_set = {_to_ts_code(symbol) for symbol in (planned_symbols if planned_symbols is not None else sample_symbols)}
     daily_price = frames.get("daily_price", pd.DataFrame())
     if daily_price.empty or "ts_code" not in daily_price.columns:
         successful = set()
     else:
         successful = set(daily_price["ts_code"].dropna().astype(str).unique())
     completed = successful.union(skipped_set)
-    empty_symbols = [symbol for symbol in requested_ts_codes if symbol not in completed]
+    deferred_symbols = [
+        symbol
+        for symbol in requested_ts_codes
+        if symbol not in skipped_set and symbol not in planned_set
+    ]
+    empty_symbols = [symbol for symbol in requested_ts_codes if symbol in planned_set and symbol not in completed]
     failure_records = [
         item
         for item in _dedupe_failure_records(getattr(client, "failure_records", []))
@@ -995,15 +1074,18 @@ def _batch_summary(
     success_count = len(successful.intersection(requested_ts_codes))
     skipped_count = len(skipped_set.intersection(requested_ts_codes))
     total = len(requested_ts_codes)
-    failed_count = max(total - success_count - skipped_count, 0)
+    failed_count = len(empty_symbols)
     return {
         "total_symbols": total,
+        "planned_symbols": len(planned_set),
         "success_symbols": success_count,
         "skipped_symbols": skipped_count,
+        "deferred_symbols": len(deferred_symbols),
         "failed_symbols": failed_count,
         "success_rate": (success_count / total) if total else 0.0,
         "completion_rate": ((success_count + skipped_count) / total) if total else 0.0,
         "empty_data_symbols": empty_symbols,
+        "deferred_data_symbols": deferred_symbols,
         "failure_records": failure_records,
         "is_full_update": len(requested_ts_codes) >= 100 and provider_name == "akshare",
         "effective_batch_size": None,

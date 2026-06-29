@@ -1110,6 +1110,8 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             full_update_max_retries = st.number_input("FULL_UPDATE_MAX_RETRIES", min_value=1, value=int(env_values.get("FULL_UPDATE_MAX_RETRIES", "2") or 2), step=1)
             full_update_sleep_seconds = st.number_input("FULL_UPDATE_SLEEP_SECONDS", min_value=0.0, value=float(env_values.get("FULL_UPDATE_SLEEP_SECONDS", "0.2") or 0.2), step=0.1)
             full_update_resume = st.checkbox("FULL_UPDATE_RESUME", value=_bool_value(env_values.get("FULL_UPDATE_RESUME", "true")))
+            full_update_max_symbols = st.number_input("FULL_UPDATE_MAX_SYMBOLS", min_value=0, value=int(env_values.get("FULL_UPDATE_MAX_SYMBOLS", "0") or 0), step=20)
+            full_update_max_batches = st.number_input("FULL_UPDATE_MAX_BATCHES", min_value=0, value=int(env_values.get("FULL_UPDATE_MAX_BATCHES", "0") or 0), step=1)
             min_listing_days = st.number_input("MIN_LISTING_DAYS", min_value=0, value=int(env_values.get("MIN_LISTING_DAYS", "120") or 120), step=10)
             min_avg_amount_20d = st.number_input("MIN_AVG_AMOUNT_20D", min_value=0, value=int(env_values.get("MIN_AVG_AMOUNT_20D", "100000000") or 100000000), step=10_000_000)
             min_median_amount_20d = st.number_input("MIN_MEDIAN_AMOUNT_20D", min_value=0, value=int(env_values.get("MIN_MEDIAN_AMOUNT_20D", "50000000") or 50000000), step=5_000_000)
@@ -1144,6 +1146,8 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         full_update_max_retries=full_update_max_retries,
         full_update_sleep_seconds=full_update_sleep_seconds,
         full_update_resume=full_update_resume,
+        full_update_max_symbols=full_update_max_symbols,
+        full_update_max_batches=full_update_max_batches,
         min_listing_days=min_listing_days,
         min_avg_amount_20d=min_avg_amount_20d,
         min_median_amount_20d=min_median_amount_20d,
@@ -1205,6 +1209,8 @@ def build_settings_updates(
     full_update_max_retries: int = 2,
     full_update_sleep_seconds: float = 0.2,
     full_update_resume: bool = True,
+    full_update_max_symbols: int = 0,
+    full_update_max_batches: int = 0,
     min_listing_days: int = 120,
     min_avg_amount_20d: int = 100_000_000,
     min_median_amount_20d: int = 50_000_000,
@@ -1239,6 +1245,8 @@ def build_settings_updates(
         "FULL_UPDATE_MAX_RETRIES": full_update_max_retries,
         "FULL_UPDATE_SLEEP_SECONDS": full_update_sleep_seconds,
         "FULL_UPDATE_RESUME": full_update_resume,
+        "FULL_UPDATE_MAX_SYMBOLS": full_update_max_symbols,
+        "FULL_UPDATE_MAX_BATCHES": full_update_max_batches,
         "MIN_LISTING_DAYS": min_listing_days,
         "MIN_AVG_AMOUNT_20D": min_avg_amount_20d,
         "MIN_MEDIAN_AMOUNT_20D": min_median_amount_20d,
