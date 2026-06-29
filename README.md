@@ -105,6 +105,7 @@ python -m core.jobs.doctor_daily_run --post-run
 - 埃尔德复核历史回看：`python -m core.jobs.backtest_elder_review`，`python -m core.jobs.backtest_elder_review --start-date 20240101 --end-date 20260625 --format all`，详见 `docs/elder_review_backtest.md`
 - 持仓池基础记录：`python -m core.jobs.import_positions --file <csv>`，`python -m core.jobs.export_positions`，详见 `docs/position_pool.md`
 - 持仓每日跟踪：`python -m core.jobs.track_positions`，`python -m core.jobs.track_positions --format markdown`，详见 `docs/position_tracking.md`
+- 沪深 A 股全市场股票池：`REAL_UNIVERSE_PRESET=full`，`AKSHARE_SAMPLE_SYMBOLS=`，详见 `docs/real_universe.md`
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
@@ -126,7 +127,9 @@ python -m core.jobs.doctor_daily_run --post-run
 streamlit run web/streamlit_app.py
 ```
 
-页面用于查看数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地状态提示。“选股逻辑”Tab 会显示 `total_score` 公式、因子权重、候选排名原因和主要贡献因子。“参数设置 / 本地控制台”提供简化设置向导：切换自定义股票池或预设股票池，修改开始/结束日期，查看“参数日期 vs 数据库日期”，并使用“保存参数”“保存并本地重算”“保存并更新数据”。点击运行后页面会逐行显示当前步骤、当前股票或子任务、成功/失败/跳过数量、实时日志和最终报告路径。修改日期后数据库日期不会立刻变化，需要点击“保存并更新数据”才会联网拉取新行情。
+页面用于查看数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地状态提示。“选股逻辑”Tab 会显示 `total_score` 公式、因子权重、候选排名原因和主要贡献因子。“参数设置 / 本地控制台”提供简化设置向导：切换自定义股票池或预设股票池，修改开始/结束日期，查看“参数日期 vs 数据库日期”，并使用“保存参数”“保存并本地重算”“保存并更新数据”。预设股票池中 `mini / small / medium` 是样本池，`full` 是沪深 A 股全市场，不含北交所；如果 `AKSHARE_SAMPLE_SYMBOLS` 不为空，自定义股票池优先于 full。点击运行后页面会逐行显示当前步骤、当前股票或子任务、成功/失败/跳过数量、实时日志和最终报告路径。修改日期后数据库日期不会立刻变化，需要点击“保存并更新数据”才会联网拉取新行情。
+
+full 模式会经过可交易过滤：默认剔除 ST、退市整理、北交所、上市不足 120 天、近 20 日成交不连续和流动性不足股票。近 20 日平均成交额默认门槛为 1 亿元，停牌股票复牌后重新满足成交连续性和流动性规则会自动重新纳入。
 
 Mac 双击启动器：
 
@@ -150,6 +153,7 @@ open scripts/mac/A股选股助手.command
 - [埃尔德复核历史回看](docs/elder_review_backtest.md)
 - [持仓池](docs/position_pool.md)
 - [持仓每日跟踪](docs/position_tracking.md)
+- [沪深 A 股全市场股票池](docs/real_universe.md)
 - [Task 35-38 交接说明](docs/task_35_38_handoff.md)
 - [常见问题排查](docs/troubleshooting.md)
 - [数据与备份](docs/data_and_backup.md)

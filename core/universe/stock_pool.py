@@ -13,6 +13,9 @@ OUTPUT_COLUMNS = [
     "list_date",
     "trade_date",
     "avg_amount_20d",
+    "median_amount_20d",
+    "latest_amount",
+    "traded_days_20d",
     "avg_turnover_20d",
     "is_tradeable",
     "exclude_reason",
@@ -27,6 +30,12 @@ def build_tradeable_universe(
     allow_missing_list_date_with_price_history: bool = False,
     min_price_history_days: int = 60,
     allow_missing_valuation: bool = False,
+    min_listing_days: int = 120,
+    min_avg_amount_20d: float = 100_000_000,
+    min_median_amount_20d: float = 50_000_000,
+    min_latest_amount: float = 30_000_000,
+    min_traded_days_20d: int = 18,
+    include_bse: bool = False,
 ) -> pd.DataFrame:
     """Build the tradeable stock universe for a given trade date.
 
@@ -58,10 +67,19 @@ def build_tradeable_universe(
         stock_price_history = _rows_until(daily_price, "trade_date", trade_date, ts_code)
 
         avg_amount_20d = _mean_or_none(stock_price_window, "amount")
+        median_amount_20d = _median_or_none(stock_price_window, "amount")
+        latest_amount = _latest_amount(latest_price)
+        traded_days_20d = _traded_days(stock_price_window)
         avg_turnover_20d = _mean_or_none(stock_basic_window, "turnover_rate")
 
         if _is_st_stock(name):
             reasons.append("ST stock")
+
+        if _is_delisting_stock(name):
+            reasons.append("delisting stock")
+
+        if _is_bse_stock(ts_code, stock) and not include_bse:
+            reasons.append("BSE stock")
 
         if _is_suspended_on_trade_date(latest_price):
             reasons.append("suspended")
@@ -69,15 +87,27 @@ def build_tradeable_universe(
         if _listed_less_than_days(
             list_date,
             trade_date,
-            days=120,
+            days=min_listing_days,
             price_history_days=len(stock_price_history),
             allow_missing_list_date_with_price_history=allow_missing_list_date_with_price_history,
             min_price_history_days=min_price_history_days,
         ):
-            reasons.append("listed less than 120 days")
+            reasons.append(f"listed less than {min_listing_days} days")
 
-        if avg_amount_20d is None or avg_amount_20d < 100_000_000:
-            reasons.append("avg amount 20d below 100 million")
+        if traded_days_20d < min_traded_days_20d:
+            reasons.append(f"traded days 20d below {min_traded_days_20d}")
+
+        if avg_amount_20d is None or avg_amount_20d < min_avg_amount_20d:
+            if int(min_avg_amount_20d) == 100_000_000:
+                reasons.append("avg amount 20d below 100 million")
+            else:
+                reasons.append(f"avg amount 20d below {int(min_avg_amount_20d)}")
+
+        if median_amount_20d is None or median_amount_20d < min_median_amount_20d:
+            reasons.append(f"median amount 20d below {int(min_median_amount_20d)}")
+
+        if latest_amount is None or latest_amount < min_latest_amount:
+            reasons.append(f"latest amount below {int(min_latest_amount)}")
 
         if _suspended_days(stock_price_window) > 3:
             reasons.append("suspended more than 3 days in 20d")
@@ -93,6 +123,9 @@ def build_tradeable_universe(
                 "list_date": list_date,
                 "trade_date": trade_date,
                 "avg_amount_20d": avg_amount_20d,
+                "median_amount_20d": median_amount_20d,
+                "latest_amount": latest_amount,
+                "traded_days_20d": traded_days_20d,
                 "avg_turnover_20d": avg_turnover_20d,
                 "is_tradeable": not reasons,
                 "exclude_reason": "; ".join(reasons),
@@ -139,10 +172,60 @@ def _mean_or_none(df: pd.DataFrame, column: str) -> float | None:
     return float(values.mean())
 
 
+def _median_or_none(df: pd.DataFrame, column: str) -> float | None:
+    """Return a numeric median or None when there is no usable data."""
+    if df.empty or column not in df.columns:
+        return None
+    values = pd.to_numeric(df[column], errors="coerce").dropna()
+    values = values[values > 0]
+    if values.empty:
+        return None
+    return float(values.median())
+
+
+def _latest_amount(price_rows: pd.DataFrame) -> float | None:
+    """Return latest trade-date amount when available."""
+    if price_rows.empty or "amount" not in price_rows.columns:
+        return None
+    values = pd.to_numeric(price_rows["amount"], errors="coerce").dropna()
+    values = values[values > 0]
+    if values.empty:
+        return None
+    return float(values.iloc[-1])
+
+
+def _traded_days(price_window: pd.DataFrame) -> int:
+    """Count recent days with positive volume and amount."""
+    if price_window.empty:
+        return 0
+    if "vol" in price_window.columns:
+        vol = pd.to_numeric(price_window["vol"], errors="coerce").fillna(0)
+    else:
+        vol = pd.Series([1] * len(price_window), index=price_window.index)
+    if "amount" in price_window.columns:
+        amount = pd.to_numeric(price_window["amount"], errors="coerce").fillna(0)
+    else:
+        amount = pd.Series([1] * len(price_window), index=price_window.index)
+    return int(((vol > 0) & (amount > 0)).sum())
+
+
 def _is_st_stock(name: str) -> bool:
     """Return whether a stock name indicates ST status."""
     normalized = name.upper().replace(" ", "")
     return "ST" in normalized
+
+
+def _is_delisting_stock(name: str) -> bool:
+    """Return whether a stock name indicates delisting or abnormal trading."""
+    normalized = name.upper().replace(" ", "")
+    return any(token in normalized for token in ["退市", "退", "PT"])
+
+
+def _is_bse_stock(ts_code: str, stock: dict[str, object]) -> bool:
+    """Return whether a stock is BSE/BJ by exchange, suffix, or prefix."""
+    exchange = str(stock.get("exchange", "")).upper()
+    symbol = str(stock.get("symbol", "") or ts_code.split(".")[0])
+    return exchange in {"BSE", "BJ"} or ts_code.endswith((".BJ", ".BSE")) or symbol.startswith(("4", "8", "9"))
 
 
 def _is_suspended_on_trade_date(price_rows: pd.DataFrame) -> bool:

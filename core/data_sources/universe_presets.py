@@ -184,6 +184,8 @@ PRESET_UNIVERSES: dict[str, list[str]] = {
 def get_universe_preset(name: str) -> list[str]:
     """Return a static preset list of six-digit A-share symbols."""
     normalized = (name or "mini").strip().lower()
+    if normalized == "full":
+        return []
     if normalized not in PRESET_UNIVERSES:
         normalized = "mini"
     return list(PRESET_UNIVERSES[normalized])

@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from core.data_sources.real_universe import is_full_universe_preset
 from core.data_sources.universe_presets import get_universe_preset, to_akshare_symbol
 
 
@@ -61,6 +62,12 @@ class Settings(BaseSettings):
         default=True,
         validation_alias="ENABLE_REAL_VALUATION_ENRICHMENT",
     )
+    min_listing_days: int = Field(default=120, validation_alias="MIN_LISTING_DAYS")
+    min_avg_amount_20d: float = Field(default=100_000_000, validation_alias="MIN_AVG_AMOUNT_20D")
+    min_median_amount_20d: float = Field(default=50_000_000, validation_alias="MIN_MEDIAN_AMOUNT_20D")
+    min_latest_amount: float = Field(default=30_000_000, validation_alias="MIN_LATEST_AMOUNT")
+    min_traded_days_20d: int = Field(default=18, validation_alias="MIN_TRADED_DAYS_20D")
+    include_bse: bool = Field(default=False, validation_alias="INCLUDE_BSE")
 
     @field_validator("log_level")
     @classmethod
@@ -93,6 +100,8 @@ class Settings(BaseSettings):
         ]
         if explicit:
             return explicit
+        if is_full_universe_preset(self.real_universe_preset):
+            return []
         return [to_akshare_symbol(symbol) for symbol in get_universe_preset(self.real_universe_preset)]
 
 

@@ -64,11 +64,21 @@ class DuckDBStore:
         try:
             with self.connect() as connection:
                 connection.execute(schema_sql)
+                self._apply_lightweight_migrations(connection)
         except Exception as exc:
             logger.exception("Failed to initialize DuckDB schema at %s.", self.db_path)
             raise DuckDBStoreError("Failed to initialize DuckDB schema.") from exc
 
         logger.info("Initialized DuckDB schema at %s.", self.db_path)
+
+    def _apply_lightweight_migrations(self, connection: duckdb.DuckDBPyConnection) -> None:
+        """Apply additive schema changes for existing local DuckDB files."""
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info('stock_basic')").fetchall()
+        }
+        if "exchange" not in columns:
+            connection.execute("ALTER TABLE stock_basic ADD COLUMN exchange VARCHAR")
 
     def connect(self) -> duckdb.DuckDBPyConnection:
         """Open a DuckDB connection for this store."""

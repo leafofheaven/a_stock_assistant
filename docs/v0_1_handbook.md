@@ -54,9 +54,9 @@ open scripts/mac/A股选股助手.command
 股票池模式：
 
 - 自定义股票池：输入 `000001,600000,002475`，也支持中文逗号、换行、`000001.SZ`。系统会保存为 `AKSHARE_SAMPLE_SYMBOLS=000001,600000,002475`。
-- 使用预设股票池：选择 `small` 或 `medium`，保存时会清空 `AKSHARE_SAMPLE_SYMBOLS`，让 `REAL_UNIVERSE_PRESET` 生效。
+- 使用预设股票池：选择 `mini`、`small`、`medium` 或 `full`，保存时会清空 `AKSHARE_SAMPLE_SYMBOLS`，让 `REAL_UNIVERSE_PRESET` 生效。`mini / small / medium` 是样本池，`full` 是沪深 A 股全市场，不含北交所。
 
-如果 `AKSHARE_SAMPLE_SYMBOLS` 不为空，预设股票池 small / medium 暂时不会生效。结束日期留空表示尽量拉取到最新可得日期。修改 `REAL_DATA_END_DATE` 后，如果数据库最新行情日期仍较早，需要点击“保存并更新数据”。
+如果 `AKSHARE_SAMPLE_SYMBOLS` 不为空，预设股票池 small / medium / full 暂时不会生效。full 模式会经过可交易过滤：剔除 ST、退市整理、北交所、上市时间不足、近期成交不连续和流动性不足股票；近 20 日平均成交额默认门槛为 1 亿元，停牌股票复牌后达标会重新纳入。结束日期留空表示尽量拉取到最新可得日期。修改 `REAL_DATA_END_DATE` 后，如果数据库最新行情日期仍较早，需要点击“保存并更新数据”。
 
 运行前体检：
 

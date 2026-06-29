@@ -18,16 +18,31 @@ SUPPORTED_ENV_KEYS = [
     "REAL_BATCH_SLEEP_SECONDS",
     "REAL_MAX_RETRIES",
     "REAL_REQUEST_TIMEOUT_SECONDS",
+    "MIN_LISTING_DAYS",
+    "MIN_AVG_AMOUNT_20D",
+    "MIN_MEDIAN_AMOUNT_20D",
+    "MIN_LATEST_AMOUNT",
+    "MIN_TRADED_DAYS_20D",
+    "INCLUDE_BSE",
     "DATA_DIR",
     "DUCKDB_PATH",
     "TUSHARE_TOKEN",
 ]
 
-BOOL_KEYS = {"ENABLE_REAL_BASIC_ENRICHMENT", "ENABLE_REAL_VALUATION_ENRICHMENT"}
-INT_KEYS = {"REAL_BATCH_SIZE", "REAL_MAX_RETRIES", "REAL_REQUEST_TIMEOUT_SECONDS"}
+BOOL_KEYS = {"ENABLE_REAL_BASIC_ENRICHMENT", "ENABLE_REAL_VALUATION_ENRICHMENT", "INCLUDE_BSE"}
+INT_KEYS = {
+    "REAL_BATCH_SIZE",
+    "REAL_MAX_RETRIES",
+    "REAL_REQUEST_TIMEOUT_SECONDS",
+    "MIN_LISTING_DAYS",
+    "MIN_AVG_AMOUNT_20D",
+    "MIN_MEDIAN_AMOUNT_20D",
+    "MIN_LATEST_AMOUNT",
+    "MIN_TRADED_DAYS_20D",
+}
 FLOAT_KEYS = {"REAL_BATCH_SLEEP_SECONDS"}
 DATA_PROVIDERS = {"sample", "tushare", "akshare"}
-PRESETS = {"mini", "small", "medium"}
+PRESETS = {"mini", "small", "medium", "full"}
 
 
 def read_env_file(path: Path | str = ".env") -> dict[str, str]:
@@ -82,7 +97,7 @@ def validate_env_updates(values: dict[str, str]) -> None:
         raise ValueError("DATA_PROVIDER must be sample, tushare, or akshare.")
     preset = values.get("REAL_UNIVERSE_PRESET")
     if preset and preset not in PRESETS:
-        raise ValueError("REAL_UNIVERSE_PRESET must be mini, small, or medium.")
+        raise ValueError("REAL_UNIVERSE_PRESET must be mini, small, medium, or full.")
     for key in INT_KEYS & values.keys():
         if values[key] and int(values[key]) < 0:
             raise ValueError(f"{key} must be a non-negative integer.")
