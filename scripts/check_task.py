@@ -51,6 +51,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task38": check_task38,
         "task39": check_task39,
         "task40": check_task40,
+        "task41": check_task41,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1853,6 +1854,54 @@ def check_task40(root: Path) -> list[str]:
     return failures
 
 
+def check_task41(root: Path) -> list[str]:
+    """Check Task 41 Elder review workflow integration."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/export_elder_review.py",
+            "core/jobs/run_elder_review.py",
+            "core/technical/elder.py",
+            "core/reporting/selection_review_report.py",
+            "docs/elder_review_workflow.md",
+            "tests/test_elder_review_workflow.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    elder_source = read_source(root / "core/technical/elder.py")
+    for phrase in ["review_action", "weekly_trend", "daily_pullback", "force_signal", "elder_ray_signal"]:
+        if phrase not in elder_source:
+            failures.append(f"core/technical/elder.py is missing {phrase}.")
+    export_source = read_source(root / "core/jobs/export_elder_review.py")
+    for phrase in [
+        "export_elder_review",
+        "add_confirmed_elder_to_watchlist",
+        "--add-confirmed-to-watchlist",
+        "skipped_existing",
+        "elder_score",
+        "action_hint",
+    ]:
+        if phrase not in export_source:
+            failures.append(f"core/jobs/export_elder_review.py is missing {phrase}.")
+    report_source = read_source(root / "core/reporting/selection_review_report.py")
+    for phrase in ["elder_score", "action_hint", "elder_reason", "weekly_trend", "daily_pullback", "force_signal", "elder_ray_signal"]:
+        if phrase not in report_source:
+            failures.append(f"selection_review_report.py is missing {phrase}.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["埃尔德复核", "review_action", "最近一次埃尔德复核", "export_elder_review"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing {phrase}.")
+    docs = read_source(root / "docs/elder_review_workflow.md") + read_source(root / "README.md")
+    for phrase in ["加入观察池", "等待回调", "暂缓", "忽略", "不改变", "不自动交易"]:
+        if phrase not in docs:
+            failures.append(f"Task 41 docs are missing {phrase}.")
+    tests_source = read_source(root / "tests/test_elder_review_workflow.py")
+    for phrase in ["selection_review", "total_score", "skipped_existing", "export_elder_review", "数据不足"]:
+        if phrase.lower() not in tests_source.lower():
+            failures.append(f"tests/test_elder_review_workflow.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1924,6 +1973,7 @@ def main(argv: list[str] | None = None) -> int:
             "task38",
             "task39",
             "task40",
+            "task41",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

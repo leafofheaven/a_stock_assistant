@@ -12,6 +12,7 @@
 - 股票池过滤、基础因子计算、综合评分和每日选股。
 - 选股逻辑说明、因子权重、候选排名原因和主要贡献因子解释。
 - 埃尔德复核：在今日候选之后增加 EMA、MACD、Force Index、Elder Ray 和周线趋势二次技术复核，不覆盖原始排序。
+- 埃尔德复核接入人工复核：支持导出带操作建议的 CSV / Markdown，并可显式把趋势确认股票加入观察池。
 - 回测诊断、工作流报告和 Streamlit 页面。
 - 候选股票复核报告、人工复核模板导出和复核结果导入。
 - 观察池管理、观察池跟踪、观察池变化报告、状态调整与历史记录。
@@ -100,6 +101,7 @@ python -m core.jobs.doctor_daily_run --post-run
 - 基础信息与 PE/PB 估值字段补全：`ENABLE_REAL_BASIC_ENRICHMENT=true`，`ENABLE_REAL_VALUATION_ENRICHMENT=true`，`python -m core.jobs.diagnose_data_quality`
 - 选股逻辑说明：`python -m core.jobs.explain_selection_logic`，`python -m core.jobs.explain_selection_logic --format markdown`，详见 `docs/selection_logic.md`
 - 埃尔德复核：`python -m core.jobs.run_elder_review`，`python -m core.jobs.run_elder_review --format markdown`，详见 `docs/elder_review.md`
+- 埃尔德复核导出：`python -m core.jobs.export_elder_review`，`python -m core.jobs.export_elder_review --format markdown`，详见 `docs/elder_review_workflow.md`
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
@@ -141,6 +143,7 @@ open scripts/mac/A股选股助手.command
 - [日常流程](docs/daily_workflow.md)
 - [选股逻辑说明](docs/selection_logic.md)
 - [埃尔德复核](docs/elder_review.md)
+- [埃尔德复核与观察池流程](docs/elder_review_workflow.md)
 - [Task 35-38 交接说明](docs/task_35_38_handoff.md)
 - [常见问题排查](docs/troubleshooting.md)
 - [数据与备份](docs/data_and_backup.md)
