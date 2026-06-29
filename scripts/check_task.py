@@ -53,6 +53,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task40": check_task40,
         "task41": check_task41,
         "task42": check_task42,
+        "task43": check_task43,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1952,6 +1953,54 @@ def check_task42(root: Path) -> list[str]:
     return failures
 
 
+def check_task43(root: Path) -> list[str]:
+    """Check Task 43 Elder threshold and explanation optimization."""
+    failures = check_paths(
+        root,
+        [
+            "core/technical/elder.py",
+            "core/jobs/backtest_elder_review.py",
+            "docs/elder_review.md",
+            "docs/elder_review_backtest.md",
+            "tests/test_elder_threshold_explanation.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    elder_source = read_source(root / "core/technical/elder.py")
+    for phrase in ["技术节奏", "不代表收益预测", "短期回撤风险", "移动止损观察信号", "追高风险"]:
+        if phrase not in elder_source:
+            failures.append(f"core/technical/elder.py is missing Task 43 wording: {phrase}.")
+
+    backtest_source = read_source(root / "core/jobs/backtest_elder_review.py")
+    for phrase in [
+        "candidate_action_hint_summary",
+        "total_score_group_summary",
+        "market_stage_summary",
+        "market_stage_action_hint_summary",
+        "total_score_group",
+        "_market_stage_by_date",
+        "技术状态 / 节奏复核分",
+    ]:
+        if phrase not in backtest_source:
+            failures.append(f"core/jobs/backtest_elder_review.py is missing Task 43 layered backtest phrase: {phrase}.")
+
+    docs = read_source(root / "docs/elder_review.md") + read_source(root / "docs/elder_review_backtest.md")
+    for phrase in ["技术状态 / 节奏复核分", "不是买入优先级", "短期回撤风险", "total_score 分层", "市场阶段分层"]:
+        if phrase not in docs:
+            failures.append(f"Task 43 docs are missing {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["节奏复核层", "不代表买入优先级", "短期回撤风险"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 43 wording: {phrase}.")
+
+    tests_source = read_source(root / "tests/test_elder_threshold_explanation.py")
+    for phrase in ["total_score", "market_stage", "短线过热", "技术状态", "action_hint", "排序"]:
+        if phrase.lower() not in tests_source.lower():
+            failures.append(f"tests/test_elder_threshold_explanation.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2025,6 +2074,7 @@ def main(argv: list[str] | None = None) -> int:
             "task40",
             "task41",
             "task42",
+            "task43",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

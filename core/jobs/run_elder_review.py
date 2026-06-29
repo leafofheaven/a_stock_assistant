@@ -38,7 +38,7 @@ def run_elder_review(
         "review_count": int(len(review_df)),
         "elder_review_df": review_df,
         "notes": [
-            "elder_score 仅用于二次技术复核，不覆盖 total_score。",
+            "elder_score 是技术状态 / 节奏复核分，不覆盖 total_score，也不代表买入优先级。",
             "不自动交易，不接券商；需要人工复核。",
         ],
     }
@@ -84,7 +84,7 @@ def render_elder_review_markdown(result: dict[str, Any]) -> str:
         f"- 最新行情日期: {result.get('latest_price_date') or '暂无'}",
         f"- 候选股票数量: {result['candidate_count']}",
         f"- 复核股票数量: {result['review_count']}",
-        "- 说明: elder_score 仅用于二次技术复核，不覆盖 total_score。",
+        "- 说明: elder_score 是技术状态 / 节奏复核分，不覆盖 total_score，也不代表买入优先级。",
         "- 个人研究工具，结果需自行复核。",
         "",
     ]

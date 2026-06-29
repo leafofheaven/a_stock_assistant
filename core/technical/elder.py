@@ -221,12 +221,22 @@ def _classify_elder_state(
         return min(score, 45), "趋势偏弱，暂缓", "周线趋势尚未改善，先暂缓技术确认。", signals
     if overheat:
         signals["daily_pullback"] = "短线过热"
-        return min(score, 70), "短线过热，不追", "周线趋势尚可，但收盘价明显高于 EMA，短线不宜追高。", signals
+        return (
+            min(score, 70),
+            "短线过热，不追",
+            "周线趋势尚可，但价格明显高于 EMA，短期回撤风险偏高；这不等于中期趋势转弱，更适合作为等待回调或移动止损观察信号。",
+            signals,
+        )
     if pullback_ok and short_trigger:
-        return min(score, 100), "趋势确认，进入人工复核", "周线趋势改善，日线接近 EMA，短线触发信号转强。", signals
+        return (
+            min(score, 100),
+            "趋势确认，进入人工复核",
+            "周线趋势改善，日线仍在 EMA 节奏附近，短线触发信号转强；该状态只表示技术节奏可复核，不代表收益预测或买入优先级。",
+            signals,
+        )
     if pullback_ok:
-        return min(score, 85), "趋势尚可，等待回调", "周线趋势改善，价格仍在趋势结构内，但短线触发信号不够明确。", signals
-    return min(score, 75), "趋势尚可，等待回调", "周线趋势改善，但价格离 EMA 较远，等待更合适的回调位置。", signals
+        return min(score, 85), "趋势尚可，等待回调", "周线趋势改善，价格仍在趋势结构内，但短线触发信号不够明确，适合继续观察节奏。", signals
+    return min(score, 75), "趋势尚可，等待回调", "周线趋势改善，但价格离 EMA 较远，存在追高风险，等待更合适的回调位置。", signals
 
 
 def _review_row(
