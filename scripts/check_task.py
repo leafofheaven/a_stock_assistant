@@ -52,6 +52,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task39": check_task39,
         "task40": check_task40,
         "task41": check_task41,
+        "task42": check_task42,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -1902,6 +1903,55 @@ def check_task41(root: Path) -> list[str]:
     return failures
 
 
+def check_task42(root: Path) -> list[str]:
+    """Check Task 42 Elder review historical validation."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/backtest_elder_review.py",
+            "core/jobs/run_elder_review.py",
+            "core/jobs/export_elder_review.py",
+            "core/technical/elder.py",
+            "docs/elder_review_backtest.md",
+            "tests/test_elder_review_backtest.py",
+        ],
+    )
+    job_source = read_source(root / "core/jobs/backtest_elder_review.py")
+    for phrase in [
+        "backtest_elder_review",
+        "build_elder_backtest_details",
+        "calculate_forward_metrics",
+        "forward_return_5d",
+        "forward_return_10d",
+        "forward_return_20d",
+        "max_drawdown_20d",
+        "max_gain_20d",
+        "elder_score_group",
+        "action_hint",
+        "不构成交易建议",
+    ]:
+        if phrase not in job_source:
+            failures.append(f"core/jobs/backtest_elder_review.py is missing {phrase}.")
+
+    docs = read_source(root / "docs/elder_review_backtest.md") + read_source(root / "README.md") + read_source(root / "docs/commands_reference.md")
+    for phrase in [
+        "python -m core.jobs.backtest_elder_review",
+        "forward_return_5d",
+        "max_drawdown_20d",
+        "elder_score",
+        "action_hint",
+        "未来函数",
+    ]:
+        if phrase not in docs:
+            failures.append(f"Task 42 docs are missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_elder_review_backtest.py")
+    for phrase in ["forward_return", "max_drawdown", "max_gain", "elder_score_group", "action_hint", "future", "markdown", "csv"]:
+        if phrase.lower() not in tests_source.lower():
+            failures.append(f"tests/test_elder_review_backtest.py should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -1974,6 +2024,7 @@ def main(argv: list[str] | None = None) -> int:
             "task39",
             "task40",
             "task41",
+            "task42",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

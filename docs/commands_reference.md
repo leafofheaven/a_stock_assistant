@@ -91,9 +91,12 @@ python -m core.jobs.run_elder_review
 python -m core.jobs.run_elder_review --format markdown
 python -m core.jobs.export_elder_review
 python -m core.jobs.export_elder_review --format markdown
+python -m core.jobs.backtest_elder_review
+python -m core.jobs.backtest_elder_review --format markdown
+python -m core.jobs.backtest_elder_review --start-date 20240101 --end-date 20260625 --format all
 ```
 
-作用：`run_daily_selection` 基于本地数据生成候选股票摘要；`explain_selection_logic` 查看当前 `total_score` 公式、因子权重、候选排名原因和主要贡献因子；`run_elder_review` 在今日候选之后追加埃尔德技术复核；`export_elder_review` 导出带操作建议的人工复核 CSV / Markdown。解释和复核命令只读取本地数据或 sample，不改变选股结果。
+作用：`run_daily_selection` 基于本地数据生成候选股票摘要；`explain_selection_logic` 查看当前 `total_score` 公式、因子权重、候选排名原因和主要贡献因子；`run_elder_review` 在今日候选之后追加埃尔德技术复核；`export_elder_review` 导出带操作建议的人工复核 CSV / Markdown；`backtest_elder_review` 对埃尔德复核结果做历史回看，输出 `forward_return_5d`、`max_drawdown_20d`、`elder_score` 分组和 `action_hint` 分组表现。解释和复核命令只读取本地数据或 sample，不改变选股结果。
 
 如需把“趋势确认，进入人工复核”的股票加入观察池，可显式运行：
 
