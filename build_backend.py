@@ -97,6 +97,7 @@ def _metadata() -> str:
             "Summary: A local A-share stock selection research assistant.",
             "Requires-Python: >=3.12",
             "Requires-Dist: duckdb",
+            "Requires-Dist: openpyxl",
             "Requires-Dist: pandas",
             "Requires-Dist: pydantic-settings",
             "Requires-Dist: pytest",

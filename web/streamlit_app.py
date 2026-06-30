@@ -1861,6 +1861,7 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
 
     st.write("一键操作区")
     _command_button(st, "一键运行", "run_daily_workflow", ["--doctor-before-run", "--backup-before-run", "--format", "all"])
+    _command_button(st, "导出今日研究工作簿 Excel", "export_daily_research_workbook")
     _command_button(st, "运行体检", "doctor_daily_run")
     _open_button(st, "打开报告文件夹", PROJECT_ROOT / "reports")
     _command_button(st, "清理旧报告", "clean_generated_reports", ["--force"])

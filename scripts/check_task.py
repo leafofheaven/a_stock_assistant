@@ -63,6 +63,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task50": check_task50,
         "task51": check_task51,
         "task52": check_task52,
+        "task53": check_task53,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2748,6 +2749,90 @@ def check_task52(root: Path) -> list[str]:
     return failures
 
 
+def check_task53(root: Path) -> list[str]:
+    """Check daily research workbook export support."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/export_daily_research_workbook.py",
+            "tests/test_daily_research_workbook.py",
+            "scripts/verify_task.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    export_source = read_source(root / "core/jobs/export_daily_research_workbook.py")
+    for phrase in [
+        "SHEET_NAMES",
+        "00_摘要",
+        "01_今日候选",
+        "02_埃尔德复核",
+        "03_买入区间",
+        "04_观察池",
+        "05_观察池跟踪",
+        "06_外部模拟持仓",
+        "07_风险提示",
+        "08_数据质量",
+        "09_参数配置",
+        "10_说明",
+        "read_only=True",
+        "display_order",
+        "candidate_rank",
+        "SENSITIVE_KEYWORDS",
+        "openpyxl",
+        "export_daily_research_workbook",
+    ]:
+        if phrase not in export_source:
+            failures.append(f"export_daily_research_workbook.py is missing {phrase}.")
+    for forbidden in [
+        "from core.jobs.update_real_data",
+        "from core.jobs.run_daily_workflow",
+        "from core.jobs.run_daily_selection",
+        "update_real_data(",
+        "run_daily_workflow(",
+        "run_daily_selection(",
+    ]:
+        if forbidden in export_source:
+            failures.append(f"Workbook export should not call heavy command: {forbidden}.")
+
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    if "export_daily_research_workbook" not in command_source:
+        failures.append("command_runner.py is missing export_daily_research_workbook.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["导出今日研究工作簿 Excel", "export_daily_research_workbook"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 53 phrase: {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task53", "export_daily_research_workbook", "/tmp/a_stock_assistant_task53/daily_research.xlsx"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task53 is missing {phrase}.")
+    if "reports/daily_research" in verify_source:
+        failures.append("verify_task.py task53 should not write daily research workbook into reports/.")
+
+    tests_source = read_source(root / "tests/test_daily_research_workbook.py")
+    for phrase in [
+        "SHEET_NAMES",
+        "display_order",
+        "candidate_rank",
+        "SECRET",
+        "read_only",
+        "/tmp/a_stock_assistant_task53",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"Task 53 tests should cover {phrase}.")
+
+    docs = read_source(root / "README.md") + read_source(root / "docs/commands_reference.md")
+    for phrase in ["每日研究工作簿", "export_daily_research_workbook", "Excel"]:
+        if phrase not in docs:
+            failures.append(f"Task 53 docs are missing {phrase}.")
+
+    setup_source = read_source(root / "setup.py") + read_source(root / "build_backend.py")
+    if "openpyxl" not in setup_source:
+        failures.append("Packaging metadata should include openpyxl for xlsx export.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2831,6 +2916,7 @@ def main(argv: list[str] | None = None) -> int:
             "task50",
             "task51",
             "task52",
+            "task53",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
