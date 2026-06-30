@@ -64,6 +64,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task51": check_task51,
         "task52": check_task52,
         "task53": check_task53,
+        "task54": check_task54,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2833,6 +2834,64 @@ def check_task53(root: Path) -> list[str]:
     return failures
 
 
+def check_task54(root: Path) -> list[str]:
+    """Check Streamlit UI clarity and workbook export feedback."""
+    failures = check_paths(
+        root,
+        [
+            "web/streamlit_app.py",
+            "tests/test_streamlit_app.py",
+            "scripts/verify_task.py",
+        ],
+    )
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "prepare_display_table",
+        "display_dataframe",
+        "hide_index=True",
+        "display_order",
+        "candidate_rank",
+        "watch_today_rank",
+        "DISPLAY_COLUMN_LABELS",
+        "display_order 为当前页面显示序号",
+        "candidate_rank 为系统原始选股排名",
+        "本页用于补充 / 更新 full 股票池行情数据",
+        "_export_workbook_button",
+        "_extract_workbook_output_path",
+        "下载 Excel 工作簿",
+        "导出成功",
+        "文件大小",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 54 phrase: {phrase}.")
+    for forbidden in ["保存并更新数据", '"更新真实数据"', '"一键运行"']:
+        if forbidden in streamlit_source:
+            failures.append(f"web/streamlit_app.py should remove ambiguous update entrypoint: {forbidden}.")
+
+    tests_source = read_source(root / "tests/test_streamlit_app.py")
+    for phrase in [
+        "test_streamlit_tables_hide_raw_index",
+        "test_display_order_continuous_after_sort",
+        "test_rank_columns_are_renamed_for_display",
+        "test_elder_review_has_source_and_display_order",
+        "test_update_entrypoints_are_consolidated",
+        "test_export_workbook_page_feedback",
+        "test_export_does_not_run_workflow_or_update",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_streamlit_app.py is missing Task 54 test: {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task54", "pytest", "check_project.py", "check_task.py"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task54 is missing {phrase}.")
+    for forbidden in ["export_daily_research_workbook\", \"--output", "run_daily_workflow", "update_real_data"]:
+        task54_block = verify_source.split('"task54":', 1)[-1].split("]", 1)[0] if '"task54":' in verify_source else ""
+        if forbidden in task54_block:
+            failures.append(f"verify_task.py task54 should not create reports or run update/workflow: {forbidden}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2917,6 +2976,7 @@ def main(argv: list[str] | None = None) -> int:
             "task51",
             "task52",
             "task53",
+            "task54",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

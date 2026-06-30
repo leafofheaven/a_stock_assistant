@@ -53,6 +53,44 @@ SELECTION_COLUMNS = [
     "risk_note",
 ]
 
+DISPLAY_COLUMN_LABELS = {
+    "display_order": "序号",
+    "candidate_rank": "原始选股排名",
+    "watch_today_rank": "观察池当日排名",
+    "previous_rank": "上一日排名",
+    "ts_code": "股票代码",
+    "name": "股票名称",
+    "industry": "行业",
+    "list_date": "上市日期",
+    "pe": "PE",
+    "pb": "PB",
+    "total_score": "综合分",
+    "trend_score": "趋势分",
+    "momentum_score": "动量分",
+    "liquidity_score": "流动性分",
+    "fundamental_score": "基本面分",
+    "volatility_score": "波动分",
+    "elder_score": "埃尔德分",
+    "action_hint": "操作提示",
+    "elder_reason": "复核原因",
+    "source": "来源",
+    "review_date": "复核日期",
+    "latest_trade_date": "最新行情日期",
+    "trade_date": "交易日期",
+    "current_close": "当前价",
+    "close": "收盘价",
+    "entry_low": "区间下沿",
+    "entry_high": "区间上沿",
+    "entry_mid": "区间中值",
+    "stop_loss": "止损位",
+    "target_price": "目标价位",
+    "reward_risk_ratio": "盈亏比",
+    "chase_risk_cn": "追高风险",
+    "entry_zone_status_cn": "区间状态",
+    "select_reason": "候选原因",
+    "risk_note": "风险提示",
+}
+
 FACTOR_SCORE_COLUMNS = [
     "trend_score",
     "momentum_score",
@@ -80,6 +118,43 @@ def filter_selection_data(
         df["total_score"] = pd.to_numeric(df["total_score"], errors="coerce")
         df = df.sort_values("total_score", ascending=not sort_descending, na_position="last")
     return df[SELECTION_COLUMNS].reset_index(drop=True)
+
+
+def prepare_display_table(
+    df: pd.DataFrame,
+    *,
+    columns: list[str] | None = None,
+    add_display_order: bool = True,
+    rename_for_display: bool = True,
+) -> pd.DataFrame:
+    """Return a user-facing table with continuous display_order and clear rank names."""
+    if df.empty:
+        result = df.copy()
+    else:
+        result = df.copy().reset_index(drop=True)
+    if "rank" in result.columns and "candidate_rank" not in result.columns:
+        result = result.rename(columns={"rank": "candidate_rank"})
+    if "today_rank" in result.columns and "watch_today_rank" not in result.columns:
+        result = result.rename(columns={"today_rank": "watch_today_rank"})
+    if columns is not None:
+        available = [column for column in columns if column in result.columns]
+        result = result[available].copy()
+    if add_display_order:
+        if "display_order" in result.columns:
+            result = result.drop(columns=["display_order"])
+        result.insert(0, "display_order", range(1, len(result) + 1))
+    if rename_for_display:
+        result = result.rename(columns={key: value for key, value in DISPLAY_COLUMN_LABELS.items() if key in result.columns})
+    return result.reset_index(drop=True)
+
+
+def display_dataframe(st: Any, df: pd.DataFrame, *, columns: list[str] | None = None) -> None:
+    """Render a dataframe without exposing pandas' raw index."""
+    display_df = prepare_display_table(df, columns=columns)
+    try:
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    except TypeError:
+        st.dataframe(display_df, use_container_width=True)
 
 
 def enrich_selection_with_watchlist_status(selection_df: pd.DataFrame, tables: dict[str, Any]) -> pd.DataFrame:
@@ -850,7 +925,8 @@ def _render_selection_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str,
     industry = st.selectbox("行业", get_industry_options(selection_df))
     sort_descending = st.checkbox("按综合分从高到低排序", value=True)
     filtered = enrich_with_entry_zone_fields(enrich_selection_with_watchlist_status(filter_selection_data(selection_df, industry, sort_descending), tables or {}), tables or {})
-    st.dataframe(filtered, use_container_width=True)
+    st.info("display_order 为当前页面显示序号；candidate_rank 为系统原始选股排名；勾选按综合分排序时，显示顺序按 total_score 调整，不改变原始选股排名。")
+    display_dataframe(st, filtered)
     st.write("候选股票详情")
     for item in filtered.head(10).to_dict("records"):
         title = f"{item.get('rank')}. {item.get('ts_code')} {item.get('name')}"
@@ -908,7 +984,7 @@ def _render_review_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str, An
                 st.warning("行情数据存在，但尚未生成本地因子和选股结果，请运行 python -m core.jobs.run_daily_workflow --skip-update。")
         return
     st.write("候选股票")
-    st.dataframe(filter_selection_data(selection_df).head(20), use_container_width=True)
+    display_dataframe(st, filter_selection_data(selection_df).head(20))
     st.write("人工复核模板导出后，可填写 decision、reason、notes、reviewer，再用 import_review_decisions 回填本地 DuckDB。")
 
 
@@ -958,8 +1034,7 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.D
             "watch_status_label",
             "daily_note",
         ]
-        available_snapshot = [column for column in snapshot_columns if column in snapshot.columns]
-        st.dataframe(snapshot[available_snapshot], use_container_width=True)
+        display_dataframe(st, snapshot, columns=snapshot_columns)
         return
 
     st.caption("暂无每日跟踪快照，先运行 python -m core.jobs.track_watchlist。")
@@ -989,8 +1064,7 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.D
         "chase_risk_cn",
         "entry_zone_status_cn",
     ]
-    available = [column for column in display_columns if column in watchlist_df.columns]
-    st.dataframe(watchlist_df[available], use_container_width=True)
+    display_dataframe(st, watchlist_df, columns=display_columns)
 
 
 def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
@@ -1027,8 +1101,7 @@ def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
         "entry_zone_status_cn",
         "price_action_note",
     ]
-    available = [column for column in display_columns if column in entry_zones.columns]
-    st.dataframe(entry_zones[available], use_container_width=True)
+    display_dataframe(st, entry_zones, columns=display_columns)
     st.caption("生成报告：python -m core.jobs.export_entry_zone_report --format all")
 
 
@@ -1068,13 +1141,13 @@ def _render_external_positions_tab(st: Any, tables: dict[str, Any]) -> None:
     if uploaded is not None:
         preview = pd.read_csv(uploaded, dtype=str, keep_default_na=False)
         st.write("上传预览")
-        st.dataframe(preview.head(20), use_container_width=True)
+        display_dataframe(st, preview.head(20))
     pasted = st.text_area("粘贴 CSV 或制表符分隔内容预览", height=120)
     if pasted.strip():
         try:
             parsed = parse_external_position_text(pasted)
             st.write("粘贴内容预览")
-            st.dataframe(parsed.head(20), use_container_width=True)
+            display_dataframe(st, parsed.head(20))
         except Exception as exc:
             st.warning(f"解析失败：{exc}")
     positions = latest_external_positions(tables)
@@ -1102,8 +1175,7 @@ def _render_external_positions_tab(st: Any, tables: dict[str, Any]) -> None:
         "risk_status_cn",
         "match_note",
     ]
-    available = [column for column in display_columns if column in positions.columns]
-    st.dataframe(positions[available], use_container_width=True)
+    display_dataframe(st, positions, columns=display_columns)
 
 
 def _render_stock_detail_tab(
@@ -1121,7 +1193,7 @@ def _render_stock_detail_tab(
     if basic.empty:
         st.info("暂无该股票基础信息。")
     else:
-        st.dataframe(basic, use_container_width=True)
+        display_dataframe(st, basic)
     price = price_df[price_df["ts_code"] == ts_code].sort_values("trade_date") if "ts_code" in price_df.columns else pd.DataFrame()
     if price.empty:
         st.info("暂无该股票行情数据。")
@@ -1136,7 +1208,7 @@ def _render_stock_detail_tab(
             st.line_chart(price.set_index("trade_date")[[column]])
     factors = factor_df[factor_df["ts_code"] == ts_code] if "ts_code" in factor_df.columns else pd.DataFrame()
     if not factors.empty:
-        st.dataframe(factors[[column for column in FACTOR_SCORE_COLUMNS if column in factors.columns]], use_container_width=True)
+        display_dataframe(st, factors, columns=[column for column in FACTOR_SCORE_COLUMNS if column in factors.columns])
         latest_factor = factors.sort_values("trade_date").iloc[-1].to_dict() if "trade_date" in factors.columns else factors.iloc[-1].to_dict()
         latest_factor.setdefault("ts_code", ts_code)
         if not basic.empty:
@@ -1155,7 +1227,7 @@ def _render_stock_detail_tab(
                 "force_signal",
                 "elder_ray_signal",
             ]
-            st.dataframe(elder[[column for column in elder_columns if column in elder.columns]], use_container_width=True)
+            display_dataframe(st, elder, columns=[column for column in elder_columns if column in elder.columns])
 
 
 def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame, daily_basic: pd.DataFrame | None = None) -> None:
@@ -1170,19 +1242,20 @@ def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame, daily_basic: pd
     valuation_quality = basic_quality.get("daily_basic", {})
     if valuation_quality:
         st.write("估值字段完整率")
-        st.dataframe(
+        display_dataframe(
+            st,
             pd.DataFrame(
                 [
                     {"field": field, "non_null_rate": stats["non_null_rate"], "missing_count": stats["missing_count"]}
                     for field, stats in valuation_quality.items()
                 ]
             ),
-            use_container_width=True,
         )
     missing = summarize_factor_missing(factor_df)
     if missing:
         st.write("因子非空率")
-        st.dataframe(
+        display_dataframe(
+            st,
             pd.DataFrame(
                 [
                     {
@@ -1193,14 +1266,13 @@ def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame, daily_basic: pd
                     for factor, stats in missing.items()
                 ]
             ),
-            use_container_width=True,
         )
     dates = sorted(factor_df["trade_date"].astype(str).unique()) if "trade_date" in factor_df.columns else []
     trade_date = st.selectbox("交易日期", dates) if dates else None
     industry = st.selectbox("行业筛选", get_industry_options(factor_df), key="factor_industry")
     factor_col = st.selectbox("因子", [column for column in FACTOR_SCORE_COLUMNS if column in factor_df.columns])
     ranking = filter_factor_ranking(factor_df, trade_date, industry, factor_col)
-    st.dataframe(ranking, use_container_width=True)
+    display_dataframe(st, ranking)
 
 
 def _render_selection_logic_tab(st: Any, selection_df: pd.DataFrame) -> None:
@@ -1209,7 +1281,8 @@ def _render_selection_logic_tab(st: Any, selection_df: pd.DataFrame) -> None:
     st.write("综合评分公式")
     st.code(summary.formula_summary)
     st.write("因子说明")
-    st.dataframe(
+    display_dataframe(
+        st,
         pd.DataFrame(
             [
                 {
@@ -1222,7 +1295,6 @@ def _render_selection_logic_tab(st: Any, selection_df: pd.DataFrame) -> None:
                 for item in summary.factor_definitions
             ]
         ),
-        use_container_width=True,
     )
     st.write("流程说明")
     for step in summary.workflow_steps:
@@ -1230,7 +1302,7 @@ def _render_selection_logic_tab(st: Any, selection_df: pd.DataFrame) -> None:
     st.write("主要贡献因子 / 排名原因")
     explanations = explain_candidates(selection_df, top_n=10)
     if explanations:
-        st.dataframe(explanations_to_dataframe(explanations), use_container_width=True)
+        display_dataframe(st, explanations_to_dataframe(explanations))
         for item in explanations[:5]:
             with st.expander(f"{item.rank or '-'} {item.ts_code} {item.name or ''}"):
                 st.write(
@@ -1259,7 +1331,7 @@ def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.D
         st.info("暂无埃尔德复核结果。请先运行每日选股并确保本地 daily_price 有足够行情。")
         return
     display_df = format_elder_review_display(review_df, source="今日候选")
-    st.info("rank 为今日选股原始排名；如同时展示观察池，观察池记录会单独分组或使用 display_order 展示。")
+    st.info("埃尔德复核为二次技术状态判断，不改变 total_score 和原始选股排名。display_order 为当前页面显示序号；candidate_rank 为对应股票的原始选股排名；source 表示来源。")
     display_columns = [
         "display_order",
         "source",
@@ -1287,10 +1359,9 @@ def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.D
         "close_to_ema13_pct",
         "close_to_ema22_pct",
     ]
-    available = [column for column in display_columns if column in display_df.columns]
-    st.dataframe(display_df[available], use_container_width=True)
+    display_dataframe(st, display_df, columns=display_columns)
     st.write("状态分布")
-    st.dataframe(review_df["action_hint"].value_counts(dropna=False).rename_axis("action_hint").reset_index(name="count"), use_container_width=True)
+    display_dataframe(st, review_df["action_hint"].value_counts(dropna=False).rename_axis("action_hint").reset_index(name="count"))
     st.info("操作建议只用于人工复核流程，不改变今日选股 total_score 排序；“短线过热，不追”表示短期回撤风险偏高，不等于中期趋势一定转弱。批量导出可运行 python -m core.jobs.export_elder_review。")
     st.caption("命令行：python -m core.jobs.run_elder_review 或 python -m core.jobs.export_elder_review --format markdown")
 
@@ -1360,8 +1431,7 @@ def _render_positions_tab(st: Any, positions_df: pd.DataFrame) -> None:
         "status",
         "data_quality_note",
     ]
-    available = [column for column in display_columns if column in positions_df.columns]
-    st.dataframe(positions_df[available], use_container_width=True)
+    display_dataframe(st, positions_df, columns=display_columns)
     st.caption("导出：python -m core.jobs.export_positions 或 python -m core.jobs.export_positions --format markdown")
 
 
@@ -1383,13 +1453,14 @@ def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:
     st.write("年度收益")
     st.json(backtest.get("yearly_returns", {}))
     st.write("交易记录")
-    st.dataframe(backtest.get("trade_records", pd.DataFrame()), use_container_width=True)
+    display_dataframe(st, backtest.get("trade_records", pd.DataFrame()))
     st.write("持仓记录")
-    st.dataframe(backtest.get("position_records", pd.DataFrame()), use_container_width=True)
+    display_dataframe(st, backtest.get("position_records", pd.DataFrame()))
 
 
 def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.subheader("数据更新状态")
+    st.info("本页用于补充 / 更新 full 股票池行情数据。会执行数据源预检、DuckDB 锁检测、代理检测，通过后才批量更新。")
     status = summarize_update_status(tables)
     st.metric("最新行情日期", status["latest_price_date"] or "暂无")
     st.metric("最新因子日期", status["latest_factor_date"] or "暂无")
@@ -1420,7 +1491,7 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
                         "missing_count": stats["missing_count"],
                     }
                 )
-        st.dataframe(pd.DataFrame(quality_rows), use_container_width=True)
+        display_dataframe(st, pd.DataFrame(quality_rows))
     local_state = status.get("local_state")
     if isinstance(local_state, dict) and local_state:
         st.write("本地状态 / 备份")
@@ -1442,7 +1513,7 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     if status["field_missing"]:
         st.warning(f"存在字段缺失：{status['field_missing']}")
     st.write("核心数据表状态")
-    st.dataframe(pd.DataFrame(status["table_rows"].items(), columns=["table", "rows"]), use_container_width=True)
+    display_dataframe(st, pd.DataFrame(status["table_rows"].items(), columns=["table", "rows"]))
     report = status.get("latest_workflow_report")
     if report:
         st.write("最近 workflow 报告")
@@ -1473,11 +1544,11 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         top_candidates = daily_report.get("top_candidates") or []
         if top_candidates:
             st.write("最近日报 Top10 候选")
-            st.dataframe(pd.DataFrame(top_candidates), use_container_width=True)
+            display_dataframe(st, pd.DataFrame(top_candidates))
         watchlist_items = daily_report.get("watchlist") or []
         if watchlist_items:
             st.write("最近日报观察池摘要")
-            st.dataframe(pd.DataFrame(watchlist_items), use_container_width=True)
+            display_dataframe(st, pd.DataFrame(watchlist_items))
     selection_review = status.get("latest_selection_review_report")
     if selection_review:
         st.write("最近 selection_review 报告")
@@ -1515,8 +1586,7 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             "latest_action_at",
             "history_count",
         ]
-        available = [column for column in watchlist_columns if column in watchlist_df.columns]
-        st.dataframe(watchlist_df[available], use_container_width=True)
+        display_dataframe(st, watchlist_df, columns=watchlist_columns)
     history_df = tables.get("review_decision_history", pd.DataFrame())
     if isinstance(history_df, pd.DataFrame) and not history_df.empty:
         st.write("最近复核历史")
@@ -1532,8 +1602,7 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             "new_review_status",
             "reason",
         ]
-        available = [column for column in history_columns if column in history_display.columns]
-        st.dataframe(history_display[available], use_container_width=True)
+        display_dataframe(st, history_display, columns=history_columns)
     tracking_report = status.get("latest_watchlist_tracking_report")
     if tracking_report:
         st.write("最近 watchlist_tracking 报告")
@@ -1554,8 +1623,7 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             "volatility_score",
             "data_quality_note",
         ]
-        available = [column for column in display_columns if column in snapshot_df.columns]
-        st.dataframe(snapshot_df[available], use_container_width=True)
+        display_dataframe(st, snapshot_df, columns=display_columns)
     st.info(status["last_job_status"])
     _render_full_batch_update_section(st, status)
 
@@ -1695,7 +1763,7 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     """Render local settings and command console."""
     st.subheader("参数设置 / 本地控制台")
     st.caption("仅供个人研究使用，不自动交易。页面只执行预设白名单命令。")
-    st.info("本地控制台用于保存参数、本地重算和日常工作流；full 股票池批量补数据请到“数据更新状态”页的“全市场批量补数据”区域执行。")
+    st.info("本地控制台用于查看参数、保存参数、本地重算和导出报告。如需补充行情数据，请到“数据更新状态”页面执行；本页的本地重算只基于现有数据库，不补行情。")
     env_path = PROJECT_ROOT / ".env"
     env_values = read_env_file(env_path)
     display_values = masked_env_values(env_values)
@@ -1807,7 +1875,6 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             st.write({"TUSHARE_TOKEN 状态": display_values.get("TUSHARE_TOKEN", "未设置")})
         save_only = st.form_submit_button("保存参数")
         save_recalculate = st.form_submit_button("保存并本地重算")
-        save_update = st.form_submit_button("保存并更新数据")
 
     updates, validation = build_settings_updates(
         pool_mode=pool_mode,
@@ -1845,7 +1912,7 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     )
     if validation["invalid"]:
         st.warning(f"以下股票代码不是 6 位数字，未保存：{', '.join(validation['invalid'])}")
-    if save_only or save_recalculate or save_update:
+    if save_only or save_recalculate:
         if validation["invalid"]:
             st.error("请先修正股票代码，再保存参数。")
         else:
@@ -1855,13 +1922,11 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             elif saved and save_recalculate:
                 st.info("该操作不会联网更新行情，只会用本地已有数据重新生成报告。")
                 _run_console_action(st, "保存并本地重算", "run_daily_workflow", ["--doctor-before-run", "--skip-update", "--format", "all"])
-            elif saved and save_update:
-                st.info("该操作会运行完整日常工作流并联网更新真实行情；如果只是给 full 股票池分批补数据，请优先到“数据更新状态”页使用“全市场批量补数据”。")
-                _run_console_action(st, "保存并更新数据", "run_daily_workflow", ["--doctor-before-run", "--backup-before-run", "--format", "all"])
 
     st.write("一键操作区")
-    _command_button(st, "一键运行", "run_daily_workflow", ["--doctor-before-run", "--backup-before-run", "--format", "all"])
-    _command_button(st, "导出今日研究工作簿 Excel", "export_daily_research_workbook")
+    st.caption("一键本地重算不会联网补行情；如需补行情，请到“数据更新状态”页面。")
+    _command_button(st, "一键本地重算（不联网）", "run_daily_workflow", ["--doctor-before-run", "--skip-update", "--format", "all"])
+    _export_workbook_button(st)
     _command_button(st, "运行体检", "doctor_daily_run")
     _open_button(st, "打开报告文件夹", PROJECT_ROOT / "reports")
     _command_button(st, "清理旧报告", "clean_generated_reports", ["--force"])
@@ -1869,7 +1934,6 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     with st.expander("高级操作", expanded=False):
         output_format = st.selectbox("输出格式", ["all", "markdown", "json", "csv"], index=0)
         _command_button(st, "只用本地已有数据，不联网更新行情", "run_daily_workflow", ["--doctor-before-run", "--skip-update", "--format", output_format])
-        _command_button(st, "更新真实数据", "update_real_data")
         _command_button(st, "生成候选", "run_daily_selection")
         _command_button(st, "刷新观察池", "refresh_watchlist_scores")
         _command_button(st, "查看观察池", "diagnose_watchlist")
@@ -2046,6 +2110,83 @@ def _command_button(st: Any, label: str, command_key: str, args: list[str] | Non
     if not st.button(label, key=f"cmd_{label}"):
         return
     _run_streaming_console_action(st, label, command_key, args or [], success_message="命令执行成功。")
+
+
+def _export_workbook_button(st: Any) -> None:
+    """Render the daily research workbook export button with file feedback."""
+    label = "导出今日研究工作簿 Excel"
+    if not st.button(label, key="cmd_export_daily_research_workbook"):
+        return
+    logs: list[str] = []
+    status_box = st.empty()
+    log_box = st.empty()
+    status = {
+        "当前运行步骤": "准备开始",
+        "当前处理任务": label,
+        "已成功数量": 0,
+        "已失败数量": 0,
+        "最终报告路径": "暂无",
+    }
+
+    def on_line(line: str) -> None:
+        logs.append(line)
+        output_path = _extract_workbook_output_path("\n".join(logs))
+        if output_path:
+            status["最终报告路径"] = str(output_path)
+        status_box.write(status)
+        log_box.code("\n".join(logs[-120:]) or "等待输出...")
+
+    status_box.write(status)
+    log_box.code("等待输出...")
+    with st.spinner("正在生成 Excel 工作簿..."):
+        try:
+            result = run_command_streaming("export_daily_research_workbook", [], on_line=on_line)
+        except Exception as exc:
+            status["已失败数量"] = 1
+            status_box.write(status)
+            st.error(f"导出失败：{exc}")
+            return
+    output_path = _extract_workbook_output_path(result.stdout)
+    if result.status != "success":
+        status["已失败数量"] = 1
+        status_box.write(status)
+        st.error(f"导出失败：returncode={result.returncode}")
+        st.code(result.stdout or "无输出")
+        return
+    if output_path is None or not output_path.exists():
+        status["已失败数量"] = 1
+        status_box.write(status)
+        st.error("导出失败：未找到导出的 Excel 文件路径。")
+        st.code(result.stdout or "无输出")
+        return
+    status.update({"当前运行步骤": "已完成", "已成功数量": 1, "已失败数量": 0, "最终报告路径": str(output_path)})
+    status_box.write(status)
+    file_size_kb = output_path.stat().st_size / 1024
+    st.success("导出成功")
+    st.write(
+        {
+            "文件名": output_path.name,
+            "保存位置": str(output_path.resolve()),
+            "文件大小": f"{file_size_kb:.1f} KB",
+        }
+    )
+    st.download_button(
+        "下载 Excel 工作簿",
+        data=output_path.read_bytes(),
+        file_name=output_path.name,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    _open_button(st, "打开 reports 文件夹", PROJECT_ROOT / "reports")
+
+
+def _extract_workbook_output_path(output: str) -> Path | None:
+    """Extract exported workbook path from CLI stdout."""
+    for line in reversed(output.splitlines()):
+        if line.startswith("输出文件:"):
+            raw = line.split(":", 1)[1].strip()
+            if raw:
+                return Path(raw)
+    return None
 
 
 def _run_streaming_console_action(
