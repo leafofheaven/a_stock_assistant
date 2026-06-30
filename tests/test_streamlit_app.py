@@ -11,12 +11,17 @@ from web.streamlit_app import (
     calculate_recent_returns,
     dataframe_to_csv,
     describe_dashboard_data_source,
+    effective_pool_config,
     filter_factor_ranking,
     filter_selection_data,
     get_industry_options,
+    load_dashboard_data,
     render_dashboard,
+    _render_section,
+    _lightweight_database_metrics,
     summarize_update_status,
 )
+from core.storage.duckdb_store import DuckDBStore
 
 
 def test_filter_selection_data_filters_and_sorts() -> None:
@@ -98,6 +103,189 @@ def test_summarize_update_status_returns_dates_and_row_counts() -> None:
     assert status["table_rows"]["daily_price"] == 2
 
 
+def test_effective_pool_config_full_uses_status_count() -> None:
+    """Empty AKSHARE_SAMPLE_SYMBOLS with full preset should use resolved full universe count."""
+    result = effective_pool_config(
+        {"AKSHARE_SAMPLE_SYMBOLS": "", "REAL_UNIVERSE_PRESET": "full"},
+        {"configured_symbol_count": 5048},
+    )
+
+    assert result["symbol_count"] == 5048
+    assert "full 沪深 A 股全市场" in result["symbols_text"]
+
+
+def test_lightweight_database_metrics_uses_real_daily_price_max_and_full_coverage(tmp_path) -> None:
+    """Streamlit status should derive latest date and coverage from real local DuckDB tables."""
+    store = DuckDBStore(tmp_path / "dashboard.duckdb")
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "symbol": "000001", "name": "平安银行", "market": "主板", "exchange": "SZSE"},
+                {"ts_code": "600000.SH", "symbol": "600000", "name": "浦发银行", "market": "主板", "exchange": "SSE"},
+                {"ts_code": "430001.BJ", "symbol": "430001", "name": "北交示例", "market": "北交所", "exchange": "BSE"},
+            ]
+        ),
+    )
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "20240130", "open": 1, "high": 1, "low": 1, "close": 1, "pre_close": 1, "change": 0, "pct_chg": 0, "vol": 1, "amount": 1},
+                {"ts_code": "600000.SH", "trade_date": "20240129", "open": 1, "high": 1, "low": 1, "close": 1, "pre_close": 1, "change": 0, "pct_chg": 0, "vol": 1, "amount": 1},
+            ]
+        ),
+    )
+    settings = SimpleNamespace(akshare_sample_symbols="", real_universe_preset="full", include_bse=False)
+    tables = {"stock_basic": store.read_table("stock_basic"), "daily_price": store.read_table("daily_price")}
+
+    metrics = _lightweight_database_metrics(settings, store, tables)
+
+    assert metrics["configured_symbol_count"] == 2
+    assert metrics["priced_symbol_count"] == 2
+    assert metrics["latest_price_date"] == "20240130"
+    assert metrics["coverage_rate"] == 1.0
+
+
+def test_summarize_update_status_prefers_real_latest_price_override() -> None:
+    """Database latest price date should not come from sample or stale report data."""
+    status = summarize_update_status(
+        {
+            "daily_price": pd.DataFrame({"trade_date": ["20240101"]}),
+            "_latest_price_date": "20240130",
+            "_configured_symbol_count": 5048,
+            "_priced_symbol_count": 197,
+            "_coverage_rate": 197 / 5048,
+        }
+    )
+
+    assert status["latest_price_date"] == "20240130"
+    assert status["configured_symbol_count"] == 5048
+    assert status["priced_symbol_count"] == 197
+
+
+def test_load_dashboard_data_does_not_show_sample_when_strategy_result_empty(tmp_path, monkeypatch) -> None:
+    """Real DuckDB with prices but empty strategy_result should render an empty real state, not demo stocks."""
+    db_path = tmp_path / "real-empty-selection.duckdb"
+    store = DuckDBStore(db_path)
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame([{"ts_code": "000001.SZ", "symbol": "000001", "name": "平安银行", "market": "主板", "exchange": "SZSE"}]),
+    )
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "20240130",
+                    "open": 1,
+                    "high": 1,
+                    "low": 1,
+                    "close": 1,
+                    "pre_close": 1,
+                    "change": 0,
+                    "pct_chg": 0,
+                    "vol": 1,
+                    "amount": 1,
+                }
+            ]
+        ),
+    )
+    settings = SimpleNamespace(
+        data_provider="akshare",
+        duckdb_path=db_path,
+        akshare_sample_symbols="",
+        real_universe_preset="full",
+        include_bse=False,
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("core.storage.duckdb_store.get_settings", lambda: settings)
+
+    data = load_dashboard_data()
+
+    assert "sample" not in data["data_source"].lower()
+    assert data["selection"].empty
+    assert data["tables"]["_latest_price_date"] == "20240130"
+
+
+def test_load_dashboard_data_reads_latest_strategy_result_from_duckdb(tmp_path, monkeypatch) -> None:
+    """Streamlit should display persisted local strategy_result rows instead of sample data."""
+    db_path = tmp_path / "real-selection.duckdb"
+    store = DuckDBStore(db_path)
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame([{"ts_code": "603986.SH", "symbol": "603986", "name": "兆易创新", "industry": "半导体", "market": "主板", "exchange": "SSE"}]),
+    )
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": "603986.SH",
+                    "trade_date": "20260626",
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "pre_close": 100.0,
+                    "change": 0.5,
+                    "pct_chg": 0.5,
+                    "vol": 1_000_000,
+                    "amount": 200_000_000,
+                }
+            ]
+        ),
+    )
+    store.upsert_dataframe(
+        "strategy_result",
+        pd.DataFrame(
+            [
+                {
+                    "trade_date": "20260626",
+                    "rank": 1,
+                    "ts_code": "603986.SH",
+                    "name": "兆易创新",
+                    "industry": "半导体",
+                    "close": 100.5,
+                    "pe": 32.0,
+                    "pb": 5.1,
+                    "total_score": 68.37,
+                    "trend_score": 70.0,
+                    "momentum_score": 65.0,
+                    "liquidity_score": 80.0,
+                    "fundamental_score": 55.0,
+                    "volatility_score": 60.0,
+                    "quality_score": 55.0,
+                    "valuation_score": 58.0,
+                    "risk_score": 60.0,
+                    "select_reason": "综合分 68.37",
+                    "risk_note": "需人工复核",
+                }
+            ]
+        ),
+    )
+    settings = SimpleNamespace(
+        data_provider="akshare",
+        duckdb_path=db_path,
+        akshare_sample_symbols="",
+        real_universe_preset="full",
+        include_bse=False,
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("core.storage.duckdb_store.get_settings", lambda: settings)
+
+    data = load_dashboard_data()
+
+    assert "sample" not in data["data_source"].lower()
+    assert data["selection"]["ts_code"].tolist() == ["603986.SH"]
+    assert data["selection"]["total_score"].tolist() == [68.37]
+    assert summarize_update_status(data["tables"])["latest_selection_date"] == "20260626"
+
+
 def test_describe_dashboard_data_source_marks_sample_and_real_data() -> None:
     """Dashboard data source helper should label sample and real data clearly."""
     sample = describe_dashboard_data_source({"data_source": "sample 数据（演示）", "tables": {}})
@@ -144,6 +332,44 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
     assert fake_streamlit.info_messages
 
 
+def test_render_dashboard_shows_database_locked_status(monkeypatch) -> None:
+    """Dashboard should render a locked database warning instead of crashing."""
+    fake_streamlit = FakeStreamlit()
+    monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
+
+    render_dashboard(
+        {
+            "selection": pd.DataFrame(),
+            "stock_basic": pd.DataFrame(),
+            "price": pd.DataFrame(),
+            "factor_scores": pd.DataFrame(),
+            "backtest": {},
+            "tables": {
+                "_database_status": {
+                    "status": "locked",
+                    "message": "DuckDB is locked by another process. Please stop other running jobs or Streamlit first.",
+                    "duckdb_path": "data/a_stock_assistant.duckdb",
+                }
+            },
+        }
+    )
+
+    assert fake_streamlit.error_messages
+    assert "DuckDB 被锁定" in fake_streamlit.error_messages[0]
+
+
+def test_render_section_catches_block_errors() -> None:
+    """A failing page section should not raise through the top-level dashboard."""
+    fake_streamlit = FakeStreamlit()
+
+    def fail_section() -> None:
+        raise RuntimeError("mock block failure")
+
+    _render_section(fake_streamlit, "测试区块", fail_section)
+
+    assert any("测试区块 加载失败" in message for message in fake_streamlit.error_messages)
+
+
 def _selection_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -188,6 +414,8 @@ class FakeStreamlit:
         self.title_text = ""
         self.tab_names: list[str] = []
         self.info_messages: list[str] = []
+        self.error_messages: list[str] = []
+        self.warning_messages: list[str] = []
 
     def set_page_config(self, **kwargs) -> None:
         return None
@@ -209,7 +437,7 @@ class FakeStreamlit:
         self.info_messages.append(text)
 
     def warning(self, text: str) -> None:
-        return None
+        self.warning_messages.append(text)
 
     def metric(self, label: str, value) -> None:
         return None
@@ -257,7 +485,7 @@ class FakeStreamlit:
         return None
 
     def error(self, text: str) -> None:
-        return None
+        self.error_messages.append(text)
 
     def spinner(self, text: str) -> FakeTab:
         return FakeTab()

@@ -313,9 +313,14 @@ python -m core.jobs.clean_generated_reports --force
 
 ```bash
 streamlit run web/streamlit_app.py
+python -m core.jobs.diagnose_streamlit_startup
+python scripts/start_streamlit_safe.py --dry-run
+python scripts/start_streamlit_safe.py
 ```
 
-作用：启动本地页面。页面显示数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地备份提示。
+作用：启动本地页面，或在页面黑屏 / DuckDB 文件锁时先做启动诊断。页面显示数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地备份提示。
+
+`start_streamlit_safe.py` 会检查 8501 端口和 DuckDB 占用，并使用 `--server.fileWatcherType none` 启动。若 `lsof data/a_stock_assistant.duckdb` 显示 `fileprovi/fileproviderd`，说明 DuckDB 可能被 macOS FileProvider 或云同步占用，可考虑迁移到非云同步目录。
 
 ## 测试与检查
 

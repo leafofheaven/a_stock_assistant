@@ -111,7 +111,7 @@ def run_daily_workflow(
     )
     steps["run_daily_selection"] = _run_progress_step(
         "run_daily_selection",
-        overrides.get("run_daily_selection", lambda: run_daily_selection(settings=resolved_settings, store=resolved_store)),
+        overrides.get("run_daily_selection", lambda: run_daily_selection(settings=resolved_settings, store=resolved_store, top_n=top_n)),
         progress=progress,
     )
     steps["export_selection_review"] = _run_progress_step(
@@ -316,7 +316,11 @@ def _infer_status(name: str, result: dict[str, Any]) -> str:
     if name == "diagnose_factors":
         return "success" if result.get("total_score_non_null_count", 0) > 0 else "partial_success"
     if name == "run_daily_selection":
-        return "success" if result.get("candidate_count", 0) > 0 else "partial_success"
+        if result.get("candidate_count", 0) <= 0:
+            return "partial_success"
+        if result.get("is_real_data") and int(result.get("local_display_selection_count", 0) or 0) <= 0:
+            return "partial_success"
+        return "success"
     if name in {"export_selection_review", "export_watchlist", "export_watchlist_tracking"}:
         return "success" if result.get("generated_files") else "partial_success"
     if name == "refresh_watchlist_scores":

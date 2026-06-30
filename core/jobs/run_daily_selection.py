@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -18,11 +18,47 @@ from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 from core.strategy.selector import select_top_stocks
 from core.universe.stock_pool import build_tradeable_universe
 
+FACTOR_SCORE_TABLE_COLUMNS = [
+    "ts_code",
+    "trade_date",
+    "trend_score",
+    "momentum_score",
+    "liquidity_score",
+    "volatility_score",
+    "fundamental_score",
+    "total_score",
+]
+
+STRATEGY_RESULT_TABLE_COLUMNS = [
+    "trade_date",
+    "rank",
+    "ts_code",
+    "name",
+    "industry",
+    "close",
+    "pe",
+    "pb",
+    "total_score",
+    "trend_score",
+    "momentum_score",
+    "liquidity_score",
+    "fundamental_score",
+    "volatility_score",
+    "quality_score",
+    "valuation_score",
+    "risk_score",
+    "select_reason",
+    "risk_note",
+    "created_at",
+    "updated_at",
+]
+
 
 def run_daily_selection(
     use_sample: bool = True,
     settings: Settings | None = None,
     store: DuckDBStore | None = None,
+    top_n: int | None = None,
 ) -> dict[str, Any]:
     """Run the MVP daily selection command and return a summary.
 
@@ -36,6 +72,7 @@ def run_daily_selection(
         real_summary = _try_real_data_summary(
             store or DuckDBStore(resolved_settings.duckdb_path),
             resolved_settings,
+            top_n=top_n,
         )
         if real_summary["candidate_count"] > 0:
             return real_summary
@@ -92,6 +129,9 @@ def main() -> None:
     print(f"- 评分股票数量: {summary['scored_stock_count']}")
     print(f"- 候选股票数量: {summary['candidate_count']}")
     print(f"- 是否写入数据库: {'是' if summary.get('wrote_to_database') else '否'}")
+    print(f"- factor_scores 写入行数: {summary.get('factor_scores_written_rows', 0)}")
+    print(f"- strategy_result 写入行数: {summary.get('strategy_result_written_rows', 0)}")
+    print(f"- 本地可展示选股结果数量: {summary.get('local_display_selection_count', 0)}")
     print(f"- 是否回退 sample: {'是' if summary.get('fallback_to_sample') else '否'}")
     print("- 前若干只候选股票摘要:")
     if summary["top_candidates"]:
@@ -144,7 +184,7 @@ def _empty_summary(data_source: str) -> dict[str, Any]:
     }
 
 
-def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, Any]:
+def _try_real_data_summary(store: DuckDBStore, settings: Settings, *, top_n: int | None = None) -> dict[str, Any]:
     """Try to summarize real local DuckDB results without crashing on empty data."""
     if not store.db_path.exists():
         summary = _empty_summary("无数据")
@@ -204,7 +244,7 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
             universe=tradeable,
             trade_date=latest_trade_date,
         )
-        selected = select_top_stocks(factor_scores, top_n=settings.default_top_n)
+        selected = select_top_stocks(factor_scores, top_n=top_n or settings.default_top_n)
     except Exception as exc:
         summary = _empty_summary("无数据")
         summary["result_location"] = f"真实数据计算失败：{exc}；可回退 sample 数据。"
@@ -221,7 +261,21 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
         summary["result_location"] = "真实数据已计算，但未生成候选股票；可回退 sample 数据。"
         return summary
 
+    persistence = _persist_real_selection_results(
+        store=store,
+        factor_scores=factor_scores,
+        selected=selected,
+        daily_price=daily_price,
+        daily_basic=daily_basic,
+        trade_date=latest_trade_date,
+    )
     total_score_non_null = _non_null_count(factor_scores, "total_score")
+    persistence_error = persistence.get("persistence_error")
+    result_location = f"基于本地 DuckDB 真实数据完成最小选股试运行，最新行情日期 {latest_trade_date}。"
+    if persistence_error:
+        result_location = f"{result_location} 本地展示结果写入失败：{persistence_error}"
+    elif int(persistence.get("strategy_result_written_rows", 0) or 0) == 0:
+        result_location = f"{result_location} 但本地 strategy_result 未写入候选结果。"
     return {
         "run_date": date.today().isoformat(),
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
@@ -239,11 +293,147 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings) -> dict[str, 
         "candidate_count": int(len(selected)),
         "top_candidates": _top_candidate_records(selected),
         "latest_price_date": latest_trade_date,
-        "wrote_to_database": False,
+        "wrote_to_database": bool(persistence.get("wrote_to_database")),
+        "factor_scores_written_rows": int(persistence.get("factor_scores_written_rows", 0) or 0),
+        "strategy_result_written_rows": int(persistence.get("strategy_result_written_rows", 0) or 0),
+        "local_display_selection_count": int(persistence.get("local_display_selection_count", 0) or 0),
+        "persistence_error": persistence_error,
         "fallback_to_sample": False,
         "data_quality_note": _real_data_quality_note(settings.data_provider, daily_basic),
-        "result_location": f"基于本地 DuckDB 真实数据完成最小选股试运行，最新行情日期 {latest_trade_date}。",
+        "result_location": result_location,
     }
+
+
+def _persist_real_selection_results(
+    *,
+    store: DuckDBStore,
+    factor_scores: pd.DataFrame,
+    selected: pd.DataFrame,
+    daily_price: pd.DataFrame,
+    daily_basic: pd.DataFrame,
+    trade_date: str,
+) -> dict[str, Any]:
+    """Persist factor scores and latest strategy result for local dashboard display."""
+    if selected.empty:
+        return {
+            "wrote_to_database": False,
+            "factor_scores_written_rows": 0,
+            "strategy_result_written_rows": 0,
+            "local_display_selection_count": 0,
+        }
+
+    try:
+        store.initialize()
+        factor_df = _factor_scores_for_storage(factor_scores)
+        strategy_df = _strategy_result_for_storage(selected, daily_price, daily_basic, trade_date)
+        factor_rows = store.upsert_dataframe("factor_scores", factor_df)
+        strategy_rows = _replace_strategy_result_for_date(store, strategy_df, trade_date)
+    except DuckDBStoreError as exc:
+        return {
+            "wrote_to_database": False,
+            "factor_scores_written_rows": 0,
+            "strategy_result_written_rows": 0,
+            "local_display_selection_count": 0,
+            "persistence_error": str(exc),
+        }
+
+    return {
+        "wrote_to_database": strategy_rows > 0,
+        "factor_scores_written_rows": int(factor_rows),
+        "strategy_result_written_rows": int(strategy_rows),
+        "local_display_selection_count": int(len(strategy_df)) if strategy_rows > 0 else 0,
+    }
+
+
+def _replace_strategy_result_for_date(store: DuckDBStore, strategy_df: pd.DataFrame, trade_date: str) -> int:
+    """Replace the full persisted strategy result for one trade date."""
+    if strategy_df.empty:
+        return 0
+    try:
+        with store.connect() as connection:
+            connection.register("input_df", strategy_df)
+            connection.execute("BEGIN TRANSACTION")
+            connection.execute("DELETE FROM strategy_result WHERE trade_date = ?", [str(trade_date)])
+            connection.execute("INSERT INTO strategy_result BY NAME SELECT * FROM input_df")
+            connection.execute("COMMIT")
+            connection.unregister("input_df")
+    except DuckDBStoreError:
+        raise
+    except Exception as exc:
+        raise DuckDBStoreError(str(exc) or "Failed to replace strategy_result rows.") from exc
+    return int(len(strategy_df))
+
+
+def _factor_scores_for_storage(factor_scores: pd.DataFrame) -> pd.DataFrame:
+    """Return only factor score table columns with stable dtypes."""
+    if factor_scores.empty:
+        return pd.DataFrame(columns=FACTOR_SCORE_TABLE_COLUMNS)
+    df = factor_scores.copy()
+    for column in FACTOR_SCORE_TABLE_COLUMNS:
+        if column not in df.columns:
+            df[column] = pd.NA
+    return df[FACTOR_SCORE_TABLE_COLUMNS].dropna(subset=["ts_code", "trade_date"]).reset_index(drop=True)
+
+
+def _strategy_result_for_storage(
+    selected: pd.DataFrame,
+    daily_price: pd.DataFrame,
+    daily_basic: pd.DataFrame,
+    trade_date: str,
+) -> pd.DataFrame:
+    """Build the persisted strategy result table from selected rows and latest market data."""
+    df = selected.copy()
+    if "rank" not in df.columns:
+        df["rank"] = range(1, len(df) + 1)
+    if "trade_date" not in df.columns:
+        df["trade_date"] = trade_date
+
+    latest_price = _latest_rows_for_storage(daily_price, trade_date, ["ts_code", "trade_date", "close"])
+    if not latest_price.empty:
+        latest_price = latest_price.rename(columns={"close": "close"})
+        df = df.merge(latest_price[["ts_code", "trade_date", "close"]], on=["ts_code", "trade_date"], how="left")
+
+    latest_basic = _latest_rows_for_storage(daily_basic, trade_date, ["ts_code", "trade_date", "pe", "pb"])
+    if not latest_basic.empty:
+        df = df.merge(latest_basic[["ts_code", "trade_date", "pe", "pb"]], on=["ts_code", "trade_date"], how="left")
+
+    now = datetime.now().replace(microsecond=0)
+    df["quality_score"] = df.get("fundamental_score", pd.Series([pd.NA] * len(df)))
+    df["valuation_score"] = df.get("pe_score", pd.Series([pd.NA] * len(df)))
+    df["risk_score"] = df.get("volatility_score", pd.Series([pd.NA] * len(df)))
+    df["created_at"] = now
+    df["updated_at"] = now
+    for column in STRATEGY_RESULT_TABLE_COLUMNS:
+        if column not in df.columns:
+            df[column] = pd.NA
+    df["rank"] = pd.to_numeric(df["rank"], errors="coerce").astype("Int64")
+    for column in [
+        "close",
+        "pe",
+        "pb",
+        "total_score",
+        "trend_score",
+        "momentum_score",
+        "liquidity_score",
+        "fundamental_score",
+        "volatility_score",
+        "quality_score",
+        "valuation_score",
+        "risk_score",
+    ]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df[STRATEGY_RESULT_TABLE_COLUMNS].dropna(subset=["trade_date", "rank", "ts_code"]).reset_index(drop=True)
+
+
+def _latest_rows_for_storage(df: pd.DataFrame, trade_date: str, columns: list[str]) -> pd.DataFrame:
+    """Return latest rows for storage joins using only available columns."""
+    if df.empty or "ts_code" not in df.columns or "trade_date" not in df.columns:
+        return pd.DataFrame(columns=columns)
+    available = [column for column in columns if column in df.columns]
+    rows = df[df["trade_date"].astype(str) == str(trade_date)].copy()
+    if rows.empty:
+        return pd.DataFrame(columns=columns)
+    return rows[available].drop_duplicates(subset=["ts_code", "trade_date"], keep="last")
 
 
 def _calculate_minimal_real_scores(

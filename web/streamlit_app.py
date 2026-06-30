@@ -206,7 +206,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     latest_watchlist_tracking_report = tables.get("_latest_watchlist_tracking_report")
     local_state = tables.get("_local_state")
     return {
-        "latest_price_date": _latest_date(daily_price, "trade_date"),
+        "latest_price_date": tables.get("_latest_price_date") or _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
         "latest_selection_date": _latest_date(strategy_result, "trade_date"),
         "is_sample_data": "sample" in data_source or "演示" in data_source,
@@ -302,11 +302,13 @@ def sample_dashboard_data() -> dict[str, Any]:
 def load_dashboard_data() -> dict[str, Any]:
     """Load local real dashboard data when available, otherwise return sample data."""
     from app.config import get_settings
-    from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+    from core.storage.duckdb_store import DUCKDB_LOCK_MESSAGE, DuckDBStore, DuckDBStoreError, DuckDBStoreLockedError
 
     settings = get_settings()
+    database_status = _database_status(str(settings.duckdb_path), exists=Path(settings.duckdb_path).exists())
     if settings.data_provider == "sample":
         data = sample_dashboard_data()
+        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "sample", "message": "当前使用 sample 数据。"}
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -323,6 +325,7 @@ def load_dashboard_data() -> dict[str, Any]:
     if not store.db_path.exists():
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实 DuckDB 文件不存在）"
+        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "missing", "message": "DuckDB 文件不存在。"}
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -336,20 +339,26 @@ def load_dashboard_data() -> dict[str, Any]:
         return data
 
     try:
-        tables = {
-            "stock_basic": store.read_table("stock_basic"),
-            "daily_price": store.read_table("daily_price"),
-            "daily_basic": store.read_table("daily_basic"),
-            "factor_scores": store.read_table("factor_scores"),
-            "strategy_result": store.read_table("strategy_result"),
-            "backtest_result": store.read_table("backtest_result"),
-            "review_decisions": _safe_read_store_table(store, "review_decisions"),
-            "review_decision_history": _safe_read_store_table(store, "review_decision_history"),
-            "positions": _safe_read_store_table(store, "positions"),
-        }
-    except DuckDBStoreError:
+        tables = _safe_load_dashboard_tables(store)
+    except DuckDBStoreLockedError:
+        data = sample_dashboard_data()
+        data["data_source"] = "sample 数据（演示，DuckDB 被锁定）"
+        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "locked", "message": DUCKDB_LOCK_MESSAGE}
+        data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
+        data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
+        data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
+        data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
+        data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
+        data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+        data.setdefault("tables", {})["_local_state"] = _safe_local_state()
+        data.setdefault("watchlist", pd.DataFrame())
+        data.setdefault("watchlist_snapshot", pd.DataFrame())
+        data.setdefault("positions", pd.DataFrame())
+        return data
+    except DuckDBStoreError as exc:
         data = sample_dashboard_data()
         data["data_source"] = "sample 数据（演示，真实数据读取失败）"
+        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "error", "message": str(exc)}
         data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
         data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
         data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -363,22 +372,33 @@ def load_dashboard_data() -> dict[str, Any]:
         return data
 
     if tables["strategy_result"].empty:
-        computed = _computed_real_dashboard_data(settings, store, tables)
-        if computed is not None:
-            return computed
-        data = sample_dashboard_data()
-        data["data_source"] = "sample 数据（演示，真实选股结果不足）"
-        data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
-        data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
-        data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
-        data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
-        data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
-        data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
-        data.setdefault("tables", {})["_local_state"] = _safe_local_state()
-        data.setdefault("watchlist", pd.DataFrame())
-        data.setdefault("watchlist_snapshot", pd.DataFrame())
-        data.setdefault("positions", pd.DataFrame())
-        return data
+        tables["_data_source"] = f"{settings.data_provider} 本地 DuckDB 真实数据"
+        tables["_database_status"] = {**database_status, "status": "ok", "message": "DuckDB 可访问，但尚未生成本地选股结果。"}
+        tables["_latest_workflow_report"] = load_latest_workflow_report()
+        tables["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
+        tables["_latest_selection_review_report"] = load_latest_selection_review_report()
+        tables["_latest_review_template"] = template_metadata(latest_review_template_path())
+        tables["_latest_watchlist_report"] = load_latest_watchlist_report()
+        tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+        tables["_local_state"] = _safe_local_state()
+        _apply_lightweight_database_metrics(tables, _lightweight_database_metrics(settings, store, tables))
+        watchlist = _load_watchlist_for_dashboard(store)
+        watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
+        positions = _load_positions_for_dashboard(store)
+        tables["_watchlist_snapshot"] = watchlist_snapshot
+        return {
+            "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据（尚未生成本地选股结果）",
+            "selection": pd.DataFrame(columns=SELECTION_COLUMNS),
+            "stock_basic": tables["stock_basic"],
+            "price": tables["daily_price"],
+            "daily_basic": tables["daily_basic"],
+            "factor_scores": tables["factor_scores"],
+            "backtest": {},
+            "watchlist": watchlist,
+            "watchlist_snapshot": watchlist_snapshot,
+            "positions": positions,
+            "tables": tables,
+        }
 
     tables["_latest_workflow_report"] = load_latest_workflow_report()
     tables["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
@@ -387,8 +407,7 @@ def load_dashboard_data() -> dict[str, Any]:
     tables["_latest_watchlist_report"] = load_latest_watchlist_report()
     tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
     tables["_local_state"] = _safe_local_state()
-    batch_diagnostic = _safe_batch_diagnostic(settings, store)
-    _apply_batch_diagnostic_to_tables(tables, batch_diagnostic)
+    _apply_lightweight_database_metrics(tables, _lightweight_database_metrics(settings, store, tables))
     watchlist = _load_watchlist_for_dashboard(store)
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
     positions = _load_positions_for_dashboard(store)
@@ -405,6 +424,107 @@ def load_dashboard_data() -> dict[str, Any]:
         "watchlist_snapshot": watchlist_snapshot,
         "positions": positions,
         "tables": tables,
+    }
+
+
+def _safe_load_dashboard_tables(store: Any) -> dict[str, pd.DataFrame]:
+    """Read lightweight dashboard tables with read-only short connections."""
+    tables: dict[str, pd.DataFrame] = {
+        "stock_basic": _safe_read_store_table(store, "stock_basic", limit=10000),
+        "daily_price": _safe_read_store_table(store, "daily_price", limit=30000),
+        "daily_basic": _safe_read_store_table(store, "daily_basic", limit=30000),
+        "factor_scores": _safe_read_store_table(store, "factor_scores", limit=10000),
+        "strategy_result": _safe_read_store_table(store, "strategy_result", limit=5000),
+        "backtest_result": _safe_read_store_table(store, "backtest_result", limit=1000),
+        "review_decisions": _safe_read_store_table(store, "review_decisions", limit=5000),
+        "review_decision_history": _safe_read_store_table(store, "review_decision_history", limit=10000),
+        "positions": _safe_read_store_table(store, "positions", limit=5000),
+    }
+    return tables
+
+
+def _lightweight_database_metrics(settings: Any, store: Any, tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
+    """Return lightweight local universe and coverage metrics without external calls."""
+    metrics: dict[str, Any] = {
+        "configured_symbol_count": 0,
+        "priced_symbol_count": 0,
+        "coverage_rate": 0.0,
+        "missing_symbol_count": 0,
+        "latest_price_date": None,
+        "sample_source": "",
+        "batch_status": "",
+    }
+    stock_basic = tables.get("stock_basic", pd.DataFrame())
+    daily_price = tables.get("daily_price", pd.DataFrame())
+    try:
+        with store.connect(read_only=True) as connection:
+            price_row = connection.execute("SELECT COUNT(DISTINCT ts_code), MAX(trade_date) FROM daily_price").fetchone()
+            metrics["priced_symbol_count"] = int(price_row[0] or 0)
+            metrics["latest_price_date"] = str(price_row[1]) if price_row and price_row[1] is not None else None
+    except Exception:
+        if isinstance(daily_price, pd.DataFrame) and not daily_price.empty:
+            metrics["priced_symbol_count"] = int(daily_price["ts_code"].dropna().astype(str).nunique()) if "ts_code" in daily_price.columns else 0
+            metrics["latest_price_date"] = _latest_date(daily_price, "trade_date")
+
+    explicit = str(getattr(settings, "akshare_sample_symbols", "") or "").strip()
+    preset = str(getattr(settings, "real_universe_preset", "") or "mini").strip().lower()
+    if explicit:
+        symbols = [item.strip() for item in explicit.split(",") if item.strip()]
+        metrics["configured_symbol_count"] = len(symbols)
+        metrics["sample_source"] = "AKSHARE_SAMPLE_SYMBOLS"
+    elif preset == "full":
+        try:
+            from core.data_sources.real_universe import resolve_full_a_share_universe
+
+            universe = resolve_full_a_share_universe(stock_basic, include_bse=getattr(settings, "include_bse", False))
+            configured = int(universe.get("base_universe_count", 0) or 0)
+            metrics.update(
+                {
+                    "configured_symbol_count": configured,
+                    "raw_symbol_count": int(universe.get("raw_symbol_count", configured) or 0),
+                    "base_universe_count": configured,
+                    "excluded_bse_count": int(universe.get("excluded_bse_count", 0) or 0),
+                    "excluded_abnormal_count": int(universe.get("excluded_abnormal_count", 0) or 0),
+                    "bse_filter_note": universe.get("bse_filter_note", ""),
+                    "sample_source": "REAL_UNIVERSE_PRESET=full",
+                }
+            )
+        except Exception:
+            metrics["configured_symbol_count"] = int(stock_basic["ts_code"].dropna().astype(str).nunique()) if isinstance(stock_basic, pd.DataFrame) and "ts_code" in stock_basic.columns else 0
+            metrics["sample_source"] = "REAL_UNIVERSE_PRESET=full"
+    else:
+        try:
+            from core.data_sources.universe_presets import get_universe_preset
+
+            metrics["configured_symbol_count"] = len(get_universe_preset(preset))
+        except Exception:
+            metrics["configured_symbol_count"] = 0
+        metrics["sample_source"] = "REAL_UNIVERSE_PRESET"
+
+    configured_count = int(metrics.get("configured_symbol_count", 0) or 0)
+    priced_count = int(metrics.get("priced_symbol_count", 0) or 0)
+    metrics["coverage_rate"] = float(priced_count / configured_count) if configured_count else 0.0
+    metrics["missing_symbol_count"] = max(configured_count - priced_count, 0)
+    if preset == "full" and configured_count and priced_count < configured_count:
+        metrics["batch_status"] = "全市场数据未完成"
+    elif configured_count:
+        metrics["batch_status"] = "当前股票池已有行情覆盖"
+    return metrics
+
+
+def _apply_lightweight_database_metrics(tables: dict[str, Any], metrics: dict[str, Any]) -> None:
+    """Attach lightweight local coverage metrics to dashboard metadata."""
+    for key, value in metrics.items():
+        tables[f"_{key}"] = value
+
+
+def _database_status(path: str, *, exists: bool) -> dict[str, Any]:
+    """Build a database status payload for the page header."""
+    return {
+        "duckdb_path": path,
+        "exists": exists,
+        "status": "ok" if exists else "missing",
+        "message": "DuckDB 可访问。" if exists else "DuckDB 文件不存在。",
     }
 
 
@@ -512,46 +632,56 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     st.caption("仅用于研究与辅助决策，不构成投资建议。")
     data_source_status = describe_dashboard_data_source(dashboard_data)
     st.info(f"数据来源：{data_source_status['data_source']}。{data_source_status['message']}")
+    _render_database_status(st, dashboard_data.get("tables", {}).get("_database_status", {}))
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
     tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "观察池跟踪", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
-        _render_selection_tab(st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
+        _render_section(st, "今日选股", _render_selection_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[1]:
-        _render_stock_detail_tab(
-            st,
-            dashboard_data.get("stock_basic", pd.DataFrame()),
-            dashboard_data.get("price", pd.DataFrame()),
-            dashboard_data.get("factor_scores", pd.DataFrame()),
-        )
+        _render_section(st, "个股详情", _render_stock_detail_tab, st, dashboard_data.get("stock_basic", pd.DataFrame()), dashboard_data.get("price", pd.DataFrame()), dashboard_data.get("factor_scores", pd.DataFrame()))
     with tabs[2]:
-        _render_factor_ranking_tab(
-            st,
-            dashboard_data.get("factor_scores", pd.DataFrame()),
-            dashboard_data.get("daily_basic", pd.DataFrame()),
-        )
+        _render_section(st, "因子排名", _render_factor_ranking_tab, st, dashboard_data.get("factor_scores", pd.DataFrame()), dashboard_data.get("daily_basic", pd.DataFrame()))
     with tabs[3]:
-        _render_selection_logic_tab(st, dashboard_data.get("selection", pd.DataFrame()))
+        _render_section(st, "选股逻辑", _render_selection_logic_tab, st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[4]:
-        _render_elder_review_tab(
-            st,
-            dashboard_data.get("selection", pd.DataFrame()),
-            dashboard_data.get("price", pd.DataFrame()),
-        )
+        _render_section(st, "埃尔德复核", _render_elder_review_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("price", pd.DataFrame()))
     with tabs[5]:
-        _render_watchlist_tab(
-            st,
-            dashboard_data.get("watchlist", pd.DataFrame()),
-            dashboard_data.get("watchlist_snapshot", pd.DataFrame()),
-        )
+        _render_section(st, "观察池跟踪", _render_watchlist_tab, st, dashboard_data.get("watchlist", pd.DataFrame()), dashboard_data.get("watchlist_snapshot", pd.DataFrame()))
     with tabs[6]:
-        _render_positions_tab(st, dashboard_data.get("positions", pd.DataFrame()))
+        _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
     with tabs[7]:
-        _render_backtest_tab(st, dashboard_data.get("backtest", {}))
+        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}))
     with tabs[8]:
-        _render_status_tab(st, dashboard_data.get("tables", {}))
+        _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
     with tabs[9]:
-        _render_local_console_tab(st, dashboard_data.get("tables", {}))
+        _render_section(st, "本地控制台", _render_local_console_tab, st, dashboard_data.get("tables", {}))
+
+
+def _render_section(st: Any, title: str, func: Any, *args: Any, **kwargs: Any) -> None:
+    """Render one Streamlit section without letting it blank the whole app."""
+    try:
+        func(*args, **kwargs)
+    except Exception as exc:
+        st.error(f"{title} 加载失败：{exc}")
+        st.info("页面其他区域仍可使用。若涉及 DuckDB 锁，请停止其他 core.jobs 或旧 Streamlit 后重试。")
+
+
+def _render_database_status(st: Any, status: dict[str, Any]) -> None:
+    """Render database accessibility status at the top of the dashboard."""
+    if not status:
+        return
+    message = status.get("message") or ""
+    path = status.get("duckdb_path") or "未知"
+    state = status.get("status") or "unknown"
+    if state == "locked":
+        st.error(f"数据库状态：DuckDB 被锁定。{message}")
+        st.warning("DuckDB may be locked by macOS FileProvider or cloud sync. Consider moving the database to a non-synced local directory.")
+        st.code(f"lsof {path}")
+    elif state in {"missing", "error"}:
+        st.warning(f"数据库状态：{message} 路径：{path}")
+    else:
+        st.caption(f"数据库状态：{message} 路径：{path}")
 
 
 def main() -> None:
@@ -620,6 +750,12 @@ def _render_review_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str, An
         st.info("暂无人工复核模板，可运行 python -m core.jobs.export_review_template。")
     if selection_df.empty:
         st.info("暂无候选股票。")
+        if tables and "本地 DuckDB 真实数据" in str(tables.get("_data_source", "")):
+            latest_daily_report = tables.get("_latest_daily_workflow_report")
+            if isinstance(latest_daily_report, dict) and latest_daily_report.get("top_candidates"):
+                st.warning("报告中存在候选结果，但尚未写入 DuckDB，请重新运行日常工作流或执行修复命令。")
+            else:
+                st.warning("行情数据存在，但尚未生成本地因子和选股结果，请运行 python -m core.jobs.run_daily_workflow --skip-update。")
         return
     st.write("候选股票")
     st.dataframe(filter_selection_data(selection_df).head(20), use_container_width=True)
@@ -1116,7 +1252,7 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     env_values = read_env_file(env_path)
     display_values = masked_env_values(env_values)
     status = summarize_update_status(tables)
-    effective = effective_pool_config(env_values)
+    effective = effective_pool_config(env_values, status)
     date_status = build_date_status(env_values, status)
 
     st.write("当前生效配置")
@@ -1365,8 +1501,9 @@ def build_settings_updates(
     return updates, {"invalid": [] if use_preset else parsed["invalid"]}
 
 
-def effective_pool_config(values: dict[str, str]) -> dict[str, Any]:
+def effective_pool_config(values: dict[str, str], status: dict[str, Any] | None = None) -> dict[str, Any]:
     """Describe the currently effective stock-pool configuration."""
+    resolved_status = status or {}
     symbols = parse_stock_symbols(values.get("AKSHARE_SAMPLE_SYMBOLS", ""))
     preset = values.get("REAL_UNIVERSE_PRESET", "mini")
     if symbols["symbols"]:
@@ -1382,12 +1519,19 @@ def effective_pool_config(values: dict[str, str]) -> dict[str, Any]:
             "preset_inactive": True,
             "message": "AKSHARE_SAMPLE_SYMBOLS 不为空，当前优先使用自定义股票池，REAL_UNIVERSE_PRESET 当前不生效。",
         }
+    configured_count = int(resolved_status.get("configured_symbol_count", 0) or 0)
+    if configured_count <= 0 and preset != "full":
+        configured_count = _configured_symbol_count(values)
     return {
         "mode": "preset",
         "mode_label": "REAL_UNIVERSE_PRESET=full（沪深 A 股全市场，不含北交所）" if preset == "full" else "REAL_UNIVERSE_PRESET",
-        "symbol_count": 0,
+        "symbol_count": configured_count,
         "symbols": [],
-        "symbols_text": "使用预设：full（沪深 A 股全市场，不含北交所）" if preset == "full" else f"使用预设：{preset}",
+        "symbols_text": (
+            f"使用 full 沪深 A 股全市场股票池，不含北交所；当前解析 {configured_count} 只"
+            if preset == "full"
+            else f"使用预设：{preset}，当前解析 {configured_count} 只"
+        ),
         "akshare_sample_symbols": "",
         "real_universe_preset": preset,
         "preset_inactive": False,
@@ -1551,7 +1695,15 @@ def _configured_symbol_count(values: dict[str, str]) -> int:
     symbols = values.get("AKSHARE_SAMPLE_SYMBOLS", "")
     if symbols.strip():
         return len([item for item in symbols.split(",") if item.strip()])
-    return 0
+    preset = values.get("REAL_UNIVERSE_PRESET", "mini")
+    if preset == "full":
+        return 0
+    try:
+        from core.data_sources.universe_presets import get_universe_preset
+
+        return len(get_universe_preset(preset))
+    except Exception:
+        return 0
 
 
 def _bool_value(value: str) -> bool:
@@ -1585,10 +1737,14 @@ def _load_positions_for_dashboard(store: Any) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _safe_read_store_table(store: Any, table_name: str) -> pd.DataFrame:
+def _safe_read_store_table(store: Any, table_name: str, limit: int | None = None) -> pd.DataFrame:
     """Read optional local DuckDB tables for the dashboard."""
+    from core.storage.duckdb_store import DuckDBStoreLockedError
+
     try:
-        return store.read_table(table_name)
+        return store.read_table(table_name, limit=limit)
+    except DuckDBStoreLockedError:
+        raise
     except Exception:
         return pd.DataFrame()
 

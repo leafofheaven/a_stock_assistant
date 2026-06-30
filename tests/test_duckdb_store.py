@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+from core.storage.duckdb_store import DUCKDB_LOCK_MESSAGE, DuckDBStore, DuckDBStoreError, DuckDBStoreLockedError, is_duckdb_lock_error
 
 
 def test_initialize_creates_core_tables(tmp_path: Path) -> None:
@@ -149,3 +149,18 @@ def test_upsert_requires_key_columns(tmp_path: Path) -> None:
 
     with pytest.raises(DuckDBStoreError, match="missing key columns"):
         store.upsert_dataframe("daily_price", pd.DataFrame({"ts_code": ["000001.SZ"]}))
+
+
+def test_duckdb_lock_errors_are_user_friendly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """DuckDB lock messages should be converted to a clear user-facing error."""
+    store = DuckDBStore(tmp_path / "locked.duckdb")
+
+    def raise_lock(*args, **kwargs):
+        raise RuntimeError("IO Error: Could not set lock on file; Conflicting lock is held")
+
+    monkeypatch.setattr("core.storage.duckdb_store.duckdb.connect", raise_lock)
+
+    assert is_duckdb_lock_error("Conflicting lock is held")
+    with pytest.raises(DuckDBStoreLockedError, match="DuckDB is locked"):
+        store.read_table("stock_basic")
+    assert DUCKDB_LOCK_MESSAGE.startswith("DuckDB is locked")

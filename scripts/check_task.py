@@ -59,6 +59,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task46": check_task46,
         "task47": check_task47,
         "task48": check_task48,
+        "task49": check_task49,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2361,6 +2362,93 @@ def check_task48(root: Path) -> list[str]:
     return failures
 
 
+def check_task49(root: Path) -> list[str]:
+    """Check Streamlit and DuckDB startup stability guardrails."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/diagnose_streamlit_startup.py",
+            "scripts/start_streamlit_safe.py",
+            "scripts/verify_task.py",
+            "tests/test_streamlit_startup_stability.py",
+            "tests/test_duckdb_store.py",
+            "tests/test_streamlit_app.py",
+        ],
+    )
+    store_source = read_source(root / "core/storage/duckdb_store.py")
+    for phrase in [
+        "DuckDBStoreLockedError",
+        "DUCKDB_LOCK_MESSAGE",
+        "is_duckdb_lock_error",
+        "friendly_duckdb_error",
+        "read_only=True",
+        "Conflicting lock",
+    ]:
+        if phrase not in store_source:
+            failures.append(f"duckdb_store.py is missing Task 49 stability phrase: {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "_render_database_status",
+        "_render_section",
+        "_safe_load_dashboard_tables",
+        "_lightweight_database_metrics",
+        "_apply_lightweight_database_metrics",
+        "_database_status",
+        "configured_symbol_count",
+        "priced_symbol_count",
+        "coverage_rate",
+        "尚未生成本地选股结果",
+        "报告中存在候选结果，但尚未写入 DuckDB",
+        "DuckDB 被锁定",
+        "lsof",
+        "fileprovider",
+    ]:
+        if phrase.lower() not in streamlit_source.lower():
+            failures.append(f"web/streamlit_app.py is missing Task 49 stability phrase: {phrase}.")
+    forbidden_startup_calls = ["update_real_data(", "refresh_watchlist_from_selection(", "track_watchlist(", "run_daily_workflow("]
+    load_section = streamlit_source.split("def load_dashboard_data", 1)[-1].split("def _computed_real_dashboard_data", 1)[0]
+    for phrase in forbidden_startup_calls:
+        if phrase in load_section:
+            failures.append(f"load_dashboard_data should not auto-run heavy task: {phrase}")
+
+    diagnose_source = read_source(root / "core/jobs/diagnose_streamlit_startup.py")
+    for phrase in ["lsof", "read_only=True", "stock_basic", "daily_price", "8501", "FileProvider", "DuckDB is locked"]:
+        if phrase not in diagnose_source:
+            failures.append(f"diagnose_streamlit_startup.py is missing {phrase}.")
+
+    starter_source = read_source(root / "scripts/start_streamlit_safe.py")
+    for phrase in ["--server.fileWatcherType", "none", "--kill-stale", "--dry-run", "diagnose_streamlit_startup"]:
+        if phrase not in starter_source:
+            failures.append(f"start_streamlit_safe.py is missing {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["pytest", "check_project.py", "diagnose_streamlit_startup", "task49"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py is missing {phrase}.")
+
+    selection_source = read_source(root / "core/jobs/run_daily_selection.py")
+    for phrase in ["strategy_result_written_rows", "factor_scores_written_rows", "local_display_selection_count", "_replace_strategy_result_for_date", "upsert_dataframe(\"factor_scores\""]:
+        if phrase not in selection_source:
+            failures.append(f"run_daily_selection.py is missing Task 49A persistence phrase: {phrase}.")
+
+    workflow_source = read_source(root / "core/jobs/run_daily_workflow.py")
+    if "local_display_selection_count" not in workflow_source:
+        failures.append("run_daily_workflow.py should check local_display_selection_count for real selection success.")
+
+    tests_source = (
+        read_source(root / "tests/test_streamlit_startup_stability.py")
+        + read_source(root / "tests/test_duckdb_store.py")
+        + read_source(root / "tests/test_streamlit_app.py")
+        + read_source(root / "tests/test_real_data_e2e_validation.py")
+        + read_source(root / "tests/test_daily_workflow_summary_report.py")
+    ).lower()
+    for phrase in ["locked", "read_only", "dry-run", "friendly", "render_section", "database_locked", "real_universe_preset", "configured_symbol_count", "strategy_result", "local_display_selection_count", "factor_scores_written_rows"]:
+        if phrase not in tests_source:
+            failures.append(f"Task 49 tests should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2440,6 +2528,7 @@ def main(argv: list[str] | None = None) -> int:
             "task46",
             "task47",
             "task48",
+            "task49",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
