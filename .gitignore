@@ -18,6 +18,7 @@ data/*.duckdb.wal
 reports/*.md
 reports/*.json
 reports/*.csv
+reports/templates/
 !reports/.gitkeep
 backups/
 .ipynb_checkpoints/

@@ -2548,9 +2548,11 @@ def check_task50(root: Path) -> list[str]:
     for phrase in [
         "task50",
         "generate_external_position_template",
+        "/tmp/a_stock_assistant_task50_templates",
         "diagnose_external_positions",
         "export_external_position_report",
         "run_daily_workflow",
+        "clean_generated_reports",
     ]:
         if phrase not in verify_source:
             failures.append(f"verify_task.py task50 is missing {phrase}.")
