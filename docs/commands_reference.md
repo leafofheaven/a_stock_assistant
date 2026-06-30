@@ -210,6 +210,21 @@ python -m core.jobs.export_watchlist_tracking_report --format all
 
 状态包括 `new_candidate`、`active_watch`、`strong_watch`、`wait_pullback`、`near_buy_zone`、`overheated`、`weakening`、`invalidated`、`bought`、`removed`。这些状态只用于人工复核，不改变 `total_score`、因子权重或今日选股排序。
 
+## 外部模拟持仓
+
+命令：
+
+```bash
+python -m core.jobs.generate_external_position_template
+python -m core.jobs.import_external_trades --file path/to/external_trades.csv
+python -m core.jobs.import_external_positions --file path/to/external_position_snapshots.csv
+python -m core.jobs.match_external_positions
+python -m core.jobs.diagnose_external_positions
+python -m core.jobs.export_external_position_report --format all
+```
+
+作用：读取用户手工导出的本地 CSV 文件，把外部模拟交易记录写入 `external_trades`，把外部模拟持仓快照写入 `external_position_snapshots`，并匹配本地买入区间、止损位、目标价位和观察池状态。该流程不登录外部平台，不读取 cookie，不接券商，不自动交易。
+
 ## 一键日常工作流
 
 命令：
