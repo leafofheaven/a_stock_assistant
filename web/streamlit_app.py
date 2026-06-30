@@ -227,6 +227,12 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     coverage_rate = float(tables.get("_coverage_rate", 0.0) or 0.0)
     missing_count = int(tables.get("_missing_symbol_count", 0) or 0)
     stale_count = int(tables.get("_stale_symbol_count", 0) or 0)
+    update_failed_count = int(tables.get("_update_failed_count", 0) or 0)
+    empty_data_count = int(tables.get("_empty_data_count", 0) or 0)
+    network_failed_count = int(tables.get("_network_failed_count", 0) or 0)
+    selection_ready_count = int(tables.get("_selection_ready_count", 0) or 0)
+    backtest_ready_count = int(tables.get("_backtest_ready_count", 0) or 0)
+    duckdb_path = str(tables.get("_duckdb_path", ""))
     batch_status = str(tables.get("_batch_status", ""))
     bse_filter_note = str(tables.get("_bse_filter_note", ""))
     latest_workflow_report = tables.get("_latest_workflow_report")
@@ -254,6 +260,12 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "coverage_rate": coverage_rate,
         "missing_symbol_count": missing_count,
         "stale_symbol_count": stale_count,
+        "update_failed_count": update_failed_count,
+        "empty_data_count": empty_data_count,
+        "network_failed_count": network_failed_count,
+        "selection_ready_count": selection_ready_count,
+        "backtest_ready_count": backtest_ready_count,
+        "duckdb_path": duckdb_path,
         "bse_filter_note": bse_filter_note,
         "batch_status": batch_status,
         "table_rows": {name: len(df) for name, df in tables.items() if isinstance(df, pd.DataFrame)},
@@ -584,6 +596,12 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_coverage_rate"] = batch_diagnostic.get("coverage_rate", 0.0)
     real_tables["_missing_symbol_count"] = len(batch_diagnostic.get("missing_symbols", []))
     real_tables["_stale_symbol_count"] = batch_diagnostic.get("stale_symbol_count", 0)
+    real_tables["_update_failed_count"] = batch_diagnostic.get("update_failed_count", 0)
+    real_tables["_empty_data_count"] = batch_diagnostic.get("empty_data_count", 0)
+    real_tables["_network_failed_count"] = batch_diagnostic.get("network_failed_count", 0)
+    real_tables["_selection_ready_count"] = batch_diagnostic.get("selection_ready_count", 0)
+    real_tables["_backtest_ready_count"] = batch_diagnostic.get("backtest_ready_count", 0)
+    real_tables["_duckdb_path"] = batch_diagnostic.get("duckdb_path", str(getattr(store, "db_path", "")))
     real_tables["_batch_status"] = _full_batch_status_text(batch_diagnostic)
     real_tables["_bse_filter_note"] = batch_diagnostic.get("bse_filter_note", "")
     real_tables["_latest_workflow_report"] = load_latest_workflow_report()
@@ -639,6 +657,12 @@ def _apply_batch_diagnostic_to_tables(tables: dict[str, Any], diagnostic: dict[s
     tables["_coverage_rate"] = diagnostic.get("coverage_rate", 0.0)
     tables["_missing_symbol_count"] = len(diagnostic.get("missing_symbols", []))
     tables["_stale_symbol_count"] = diagnostic.get("stale_symbol_count", 0)
+    tables["_update_failed_count"] = diagnostic.get("update_failed_count", 0)
+    tables["_empty_data_count"] = diagnostic.get("empty_data_count", 0)
+    tables["_network_failed_count"] = diagnostic.get("network_failed_count", 0)
+    tables["_selection_ready_count"] = diagnostic.get("selection_ready_count", 0)
+    tables["_backtest_ready_count"] = diagnostic.get("backtest_ready_count", 0)
+    tables["_duckdb_path"] = diagnostic.get("duckdb_path", "")
     tables["_batch_status"] = _full_batch_status_text(diagnostic)
     tables["_bse_filter_note"] = diagnostic.get("bse_filter_note", "")
 
@@ -1258,6 +1282,8 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.metric("已有行情股票数量", status["priced_symbol_count"])
     st.metric("缺数据股票数量", status["missing_symbol_count"])
     st.metric("最新行情不足数量", status["stale_symbol_count"])
+    st.metric("可运行选股股票数量", status.get("selection_ready_count", 0))
+    st.metric("更新失败数量", status.get("update_failed_count", 0))
     st.write({"覆盖率": f"{status['coverage_rate']:.2%}", "全市场状态": status.get("batch_status") or "暂无"})
     if status.get("bse_filter_note"):
         st.caption(status["bse_filter_note"])
@@ -1415,6 +1441,138 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         available = [column for column in display_columns if column in snapshot_df.columns]
         st.dataframe(snapshot_df[available], use_container_width=True)
     st.info(status["last_job_status"])
+    _render_full_batch_update_section(st, status)
+
+
+def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
+    """Render page controls for bounded full-universe batch updates."""
+    st.subheader("全市场批量补数据")
+    st.caption("仅供个人研究使用，不自动交易。页面启动时不会自动更新，只有点击按钮才会联网补数据。")
+    st.write(
+        {
+            "数据源": "akshare",
+            "数据库路径": status.get("duckdb_path") or "暂无",
+            "full 股票池数量": status.get("configured_symbol_count", 0),
+            "已有行情股票数量": status.get("priced_symbol_count", 0),
+            "覆盖率": f"{status.get('coverage_rate', 0.0):.2%}",
+            "缺数据股票数量": status.get("missing_symbol_count", 0),
+            "最新行情不足数量": status.get("stale_symbol_count", 0),
+            "可运行选股股票数量": status.get("selection_ready_count", 0),
+            "更新失败数量": status.get("update_failed_count", 0),
+            "空数据 / 暂不可用股票数量": status.get("empty_data_count", 0),
+            "网络失败股票数量": status.get("network_failed_count", 0),
+            "最新行情日期": status.get("latest_price_date") or "暂无",
+            "最新因子日期": status.get("latest_factor_date") or "暂无",
+            "最新选股日期": status.get("latest_selection_date") or "暂无",
+        }
+    )
+    st.info("全市场更新可能耗时较长；建议先用 50 或 200 只小批量确认网络稳定。")
+    mode_label = st.selectbox(
+        "更新模式",
+        ["优先补缺数据股票", "优先更新已有股票到最新日期", "自动模式"],
+        index=0,
+    )
+    count_choice = st.selectbox("本次计划处理数量", ["50", "200", "500", "1000", "自定义"], index=2)
+    if count_choice == "自定义":
+        max_symbols = int(st.number_input("自定义本次计划处理数量", min_value=1, max_value=2000, value=500, step=50))
+    else:
+        max_symbols = int(count_choice)
+    if max_symbols > 1000:
+        st.warning("本次计划处理数量超过 1000，运行可能较久，也更容易受个别接口卡住影响。")
+    batch_size = int(st.selectbox("每批大小", [20, 50, 100], index=1))
+    lookback_days = int(st.selectbox("回看天数", [120, 250, 500], index=1))
+    max_retries = int(st.selectbox("最大重试次数", [0, 1, 2], index=1))
+    skip_empty = st.checkbox("跳过已知空数据 / 暂不可用股票", value=True)
+    preflight = st.checkbox("更新前做数据源连通性预检", value=True)
+    if not preflight:
+        st.warning("不建议关闭预检。东方财富 K 线接口不可用时，批量更新会浪费时间。")
+    args = build_full_batch_update_args(
+        mode_label=mode_label,
+        max_symbols=max_symbols,
+        batch_size=batch_size,
+        lookback_days=lookback_days,
+        max_retries=max_retries,
+        skip_empty_unavailable=skip_empty,
+        preflight=preflight,
+    )
+    st.write(
+        {
+            "FULL_UPDATE_MAX_SYMBOLS": max_symbols,
+            "FULL_UPDATE_BATCH_SIZE": batch_size,
+            "FULL_UPDATE_LOOKBACK_DAYS": lookback_days,
+            "FULL_UPDATE_MAX_RETRIES": max_retries,
+            "说明": "本次未处理数量表示 full 股票池中本次未纳入计划的股票，不代表永久跳过。",
+        }
+    )
+    if st.button("运行数据源预检", key="full_update_preflight"):
+        _run_streaming_console_action(st, "运行数据源预检", "preflight_data_source", [], success_message="预检完成。")
+    if st.button("开始补数据", key="full_batch_update_start"):
+        st.info("点击后会先做 DuckDB 锁、代理和东方财富 K 线接口预检；预检失败不会启动批量更新。")
+        _run_streaming_console_action(st, "全市场批量补数据", "run_full_batch_update", args, success_message="批量补数据命令执行完成。请刷新页面查看覆盖率变化。")
+
+
+def build_full_batch_update_args(
+    *,
+    mode_label: str,
+    max_symbols: int,
+    batch_size: int,
+    lookback_days: int,
+    max_retries: int,
+    skip_empty_unavailable: bool,
+    preflight: bool,
+) -> list[str]:
+    """Map page controls to run_full_batch_update CLI args."""
+    mode_map = {
+        "优先补缺数据股票": "missing_first",
+        "优先更新已有股票到最新日期": "stale_first",
+        "自动模式": "auto",
+    }
+    args = [
+        "--mode",
+        mode_map.get(mode_label, "missing_first"),
+        "--max-symbols",
+        str(max(1, int(max_symbols))),
+        "--batch-size",
+        str(max(1, int(batch_size))),
+        "--lookback-days",
+        str(max(1, int(lookback_days))),
+        "--max-retries",
+        str(max(0, int(max_retries))),
+    ]
+    if not skip_empty_unavailable:
+        args.append("--no-skip-empty-unavailable")
+    if not preflight:
+        args.append("--no-preflight")
+    return args
+
+
+def summarize_full_batch_update_result(before: dict[str, Any], after: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Calculate user-facing before/after metrics for one full update run."""
+    before_priced = int(before.get("priced_symbol_count", 0) or 0)
+    after_priced = int(after.get("priced_symbol_count", before_priced) or 0)
+    before_missing = int(before.get("missing_symbol_count", 0) or 0)
+    after_missing = int(after.get("missing_symbol_count", before_missing) or 0)
+    before_ready = int(before.get("selection_ready_count", 0) or 0)
+    after_ready = int(after.get("selection_ready_count", before_ready) or 0)
+    before_coverage = float(before.get("coverage_rate", 0.0) or 0.0)
+    after_coverage = float(after.get("coverage_rate", before_coverage) or 0.0)
+    written = result.get("written_rows", {}) if isinstance(result, dict) else {}
+    return {
+        "本次计划处理数量": int(result.get("planned_count", result.get("planned_symbols", 0)) or 0),
+        "本次成功股票数量": int(result.get("success_symbols", 0) or 0),
+        "本次失败股票数量": int(result.get("failed_symbols", 0) or 0),
+        "本次空数据股票数量": len(result.get("empty_data_symbols", []) or []),
+        "本次新增覆盖股票数量": max(after_priced - before_priced, 0),
+        "本次只更新已有股票数量": max(int(result.get("success_symbols", 0) or 0) - max(after_priced - before_priced, 0), 0),
+        "本次未处理股票数量": int(result.get("deferred_symbols", 0) or 0),
+        "daily_price 新增行数": int(written.get("daily_price", 0) or 0),
+        "daily_basic 新增行数": int(written.get("daily_basic", 0) or 0),
+        "adj_factor 新增数量": int(written.get("adj_factor", 0) or 0),
+        "覆盖率变化": f"{before_coverage:.2%} -> {after_coverage:.2%}",
+        "已有行情股票数量变化": f"{before_priced} -> {after_priced}",
+        "缺数据股票数量变化": f"{before_missing} -> {after_missing}",
+        "可运行选股股票数量变化": f"{before_ready} -> {after_ready}",
+    }
 
 
 def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
@@ -1790,7 +1948,7 @@ def _run_streaming_console_action(
         "当前处理股票或子任务": label,
         "已成功数量": 0,
         "已失败数量": 0,
-        "已跳过数量": 0,
+        "本次未处理数量": 0,
         "最终报告路径": "暂无",
     }
 
@@ -1804,7 +1962,7 @@ def _run_streaming_console_action(
                     "当前处理股票或子任务": state.current or "暂无",
                     "已成功数量": state.success,
                     "已失败数量": state.failed,
-                    "已跳过数量": state.skipped,
+                    "本次未处理数量": state.skipped,
                 }
             )
             if "报告 " in state.message:

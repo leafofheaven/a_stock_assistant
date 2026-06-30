@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     full_update_resume: bool = Field(default=True, validation_alias="FULL_UPDATE_RESUME")
     full_update_max_symbols: int = Field(default=0, validation_alias="FULL_UPDATE_MAX_SYMBOLS")
     full_update_max_batches: int = Field(default=0, validation_alias="FULL_UPDATE_MAX_BATCHES")
+    full_update_mode: str = Field(default="missing_first", validation_alias="FULL_UPDATE_MODE")
+    full_update_skip_empty_unavailable: bool = Field(default=True, validation_alias="FULL_UPDATE_SKIP_EMPTY_UNAVAILABLE")
     enable_stock_basic_enrichment: bool = Field(default=False, validation_alias="ENABLE_STOCK_BASIC_ENRICHMENT")
     full_enable_stock_basic_enrichment: bool = Field(default=False, validation_alias="FULL_ENABLE_STOCK_BASIC_ENRICHMENT")
     enable_valuation_enrichment: bool = Field(default=False, validation_alias="ENABLE_VALUATION_ENRICHMENT")

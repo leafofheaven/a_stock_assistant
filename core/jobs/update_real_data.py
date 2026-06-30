@@ -241,6 +241,8 @@ def _run_provider_update(
             max_symbols=_effective_max_symbols(settings, _use_full_universe(settings, provider_name)),
             batch_size=_effective_batch_size(settings, _use_full_universe(settings, provider_name)),
             max_batches=_effective_max_batches(settings, _use_full_universe(settings, provider_name)),
+            mode=_effective_update_mode(settings, _use_full_universe(settings, provider_name)),
+            skip_empty_unavailable=_effective_skip_empty_unavailable(settings, _use_full_universe(settings, provider_name)),
         )
         symbols_to_fetch = update_plan["symbols_to_fetch"]
         skipped_symbols = update_plan["skipped_symbols"]
@@ -257,7 +259,7 @@ def _run_provider_update(
             skipped=len(skipped_symbols),
             message=(
                 f"full 基础股票池数量 {full_universe_count} 只，已有行情 {priced_count} 只，"
-                f"缺数据 {missing_count} 只，已跳过 {len(skipped_symbols)} 只，"
+                f"缺数据 {missing_count} 只，本次未处理 {len(skipped_symbols)} 只，"
                 f"增量更新 {len(update_plan.get('incremental_update_symbols', []))} 只，"
                 f"首次补数据 {len(update_plan.get('initial_update_symbols', []))} 只，"
                 f"待处理队列 {pending_queue_count} 只，"
@@ -477,7 +479,7 @@ def main() -> None:
                 f"已有行情 {result.get('priced_symbol_count', 0)}，"
                 f"缺数据 {result.get('missing_symbol_count', 0)}，"
                 f"待处理队列 {result.get('pending_queue_count', 0)}，"
-                f"已跳过 {result.get('skipped_symbols', 0)}，"
+                f"本次未处理 {result.get('skipped_symbols', 0)}，"
                 f"增量更新 {result.get('incremental_update_symbols', 0)}，"
                 f"首次补数据 {result.get('initial_update_symbols', 0)}，"
                 f"本次计划 {result.get('planned_count', result.get('planned_symbols', 0))}，"
@@ -698,6 +700,8 @@ def _build_symbol_update_plan(
     max_symbols: int = 0,
     batch_size: int = 50,
     max_batches: int = 0,
+    mode: str = "missing_first",
+    skip_empty_unavailable: bool = True,
 ) -> dict[str, Any]:
     """Return per-symbol update plan across price, daily_basic, and adj_factor."""
     requested = [_to_ts_code(symbol) for symbol in symbols]
@@ -723,7 +727,7 @@ def _build_symbol_update_plan(
         "daily_basic": _latest_dates_by_symbol(_safe_read_table(store, "daily_basic")),
         "adj_factor": _latest_dates_by_symbol(_safe_read_table(store, "adj_factor")),
     }
-    deferred_empty_symbols = _empty_data_symbols_for_target(store, target_end_date)
+    deferred_empty_symbols = _empty_data_symbols_for_target(store, target_end_date) if skip_empty_unavailable else set()
     skipped: list[str] = []
     stale: list[str] = []
     missing: list[str] = []
@@ -741,7 +745,7 @@ def _build_symbol_update_plan(
         if latest_dates["daily_price"] is None:
             missing.append(ts_code)
             initial.append(ts_code)
-            if ts_code in deferred_empty_symbols:
+            if skip_empty_unavailable and ts_code in deferred_empty_symbols:
                 deferred_initial_original.append(original_symbol)
             else:
                 initial_original.append(original_symbol)
@@ -755,7 +759,14 @@ def _build_symbol_update_plan(
         else:
             earliest_latest = min(str(value) for value in latest_dates.values() if value is not None)
             start_dates[ts_code] = min(_next_yyyymmdd(earliest_latest), target_end_date)
-    pending = [*initial_original, *incremental_original, *deferred_initial_original]
+    if mode == "stale_first":
+        pending = [*incremental_original, *initial_original]
+    elif mode == "auto":
+        pending = [*initial_original, *incremental_original]
+    else:
+        pending = [*initial_original, *incremental_original]
+    if not skip_empty_unavailable:
+        pending.extend(deferred_initial_original)
     planned_symbols = _limit_symbols(
         pending,
         max_symbols=max_symbols,
@@ -775,6 +786,8 @@ def _build_symbol_update_plan(
         "stale_symbols": stale,
         "missing_symbols": missing,
         "deferred_empty_symbols": sorted(deferred_empty_symbols.intersection(set(missing))),
+        "update_mode": mode,
+        "skip_empty_unavailable": skip_empty_unavailable,
         "symbol_start_dates": {symbol: start for symbol, start in start_dates.items() if symbol in planned_ts_codes},
     }
 
@@ -1117,6 +1130,21 @@ def _effective_max_batches(settings: Settings, full_mode: bool) -> int:
     return max(0, int(getattr(settings, "full_update_max_batches", 0) or 0))
 
 
+def _effective_update_mode(settings: Settings, full_mode: bool) -> str:
+    """Return full update queue mode."""
+    if not full_mode:
+        return "missing_first"
+    value = str(getattr(settings, "full_update_mode", "missing_first") or "missing_first")
+    return value if value in {"missing_first", "stale_first", "auto"} else "missing_first"
+
+
+def _effective_skip_empty_unavailable(settings: Settings, full_mode: bool) -> bool:
+    """Return whether known empty/unavailable symbols should be excluded from this run."""
+    if not full_mode:
+        return False
+    return bool(getattr(settings, "full_update_skip_empty_unavailable", True))
+
+
 def _update_runtime_summary(settings: Settings, full_mode: bool) -> dict[str, Any]:
     """Return update runtime settings for command summaries."""
     return {
@@ -1128,6 +1156,8 @@ def _update_runtime_summary(settings: Settings, full_mode: bool) -> dict[str, An
         "full_update_resume": bool(getattr(settings, "full_update_resume", True)) if full_mode else None,
         "full_update_max_symbols": _effective_max_symbols(settings, full_mode) if full_mode else None,
         "full_update_max_batches": _effective_max_batches(settings, full_mode) if full_mode else None,
+        "full_update_mode": _effective_update_mode(settings, full_mode) if full_mode else None,
+        "full_update_skip_empty_unavailable": _effective_skip_empty_unavailable(settings, full_mode) if full_mode else None,
     }
 
 

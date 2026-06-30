@@ -100,6 +100,8 @@ def main() -> None:
     print(f"- 缺数据股票数量: {len(result['missing_symbols'])}")
     print(f"- 最新行情不足数量: {result['stale_symbol_count']}")
     print(f"- 更新失败数量: {result['update_failed_count']}")
+    print(f"- 空数据股票数量: {result['empty_data_count']}")
+    print(f"- 网络失败股票数量: {result['network_failed_count']}")
     if result.get("empty_data_symbols"):
         print(f"- 空数据 / 暂不可用股票: {_format_symbol_list(result['empty_data_symbols'])}")
     if result["missing_symbols"]:
@@ -184,6 +186,8 @@ def _build_result(
         "stale_symbol_count": len(stale),
         "update_failed_count": len(failure_state),
         "update_failure_symbols": sorted(failure_state),
+        "empty_data_count": sum(1 for status in failure_state.values() if status == "empty_data"),
+        "network_failed_count": sum(1 for status in failure_state.values() if status == "temporarily_unavailable"),
         "empty_data_symbols": sorted(
             symbol for symbol, status in failure_state.items() if status in {"empty_data", "temporarily_unavailable"}
         ),

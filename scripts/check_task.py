@@ -61,6 +61,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task48": check_task48,
         "task49": check_task49,
         "task50": check_task50,
+        "task51": check_task51,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2584,6 +2585,78 @@ def check_task50(root: Path) -> list[str]:
     return failures
 
 
+def check_task51(root: Path) -> list[str]:
+    """Check full-universe batch update UI and datasource preflight support."""
+    failures = check_paths(
+        root,
+        [
+            "core/runtime/data_source_preflight.py",
+            "core/jobs/preflight_data_source.py",
+            "core/jobs/run_full_batch_update.py",
+            "tests/test_full_batch_update_ui_precheck.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    preflight_source = read_source(root / "core/runtime/data_source_preflight.py")
+    for phrase in [
+        "urllib.request.getproxies",
+        "push2his.eastmoney.com",
+        "secid=0.000001",
+        "rc",
+        "klines",
+        "DuckDB is locked by another process",
+        "FileProvider",
+        "curl",
+        "--max-time",
+    ]:
+        if phrase not in preflight_source:
+            failures.append(f"data_source_preflight.py is missing {phrase}.")
+
+    update_source = read_source(root / "core/jobs/update_real_data.py")
+    for phrase in ["full_update_mode", "full_update_skip_empty_unavailable", "missing_first", "stale_first", "本次未处理"]:
+        if phrase not in update_source:
+            failures.append(f"update_real_data.py is missing Task 51 phrase: {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "全市场批量补数据",
+        "build_full_batch_update_args",
+        "summarize_full_batch_update_result",
+        "run_full_batch_update",
+        "preflight_data_source",
+        "本次未处理数量",
+        "本次未纳入计划",
+        "东方财富 K 线接口",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 51 phrase: {phrase}.")
+
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    for phrase in ["run_full_batch_update", "preflight_data_source"]:
+        if phrase not in command_source:
+            failures.append(f"command_runner.py is missing {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task51", "preflight_data_source", "--skip-network", "run_full_batch_update", "--dry-run", "clean_generated_reports"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task51 is missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_full_batch_update_ui_precheck.py")
+    for phrase in [
+        "getproxies",
+        "check_eastmoney_kline",
+        "precheck_failure",
+        "duckdb_lock",
+        "build_full_batch_update_args",
+        "summarize_full_batch_update_result",
+        "本次未处理",
+        "run_full_batch_update",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"Task 51 tests should cover {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2665,6 +2738,7 @@ def main(argv: list[str] | None = None) -> int:
             "task48",
             "task49",
             "task50",
+            "task51",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

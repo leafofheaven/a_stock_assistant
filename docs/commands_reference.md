@@ -168,6 +168,17 @@ python -m core.jobs.run_real_workflow --backup-before-run
 
 作用：串联更新、诊断、选股、回测和报告。`--skip-update` 不更新真实数据；`--backup-before-run` 先备份 DuckDB。
 
+## 全市场批量补数据
+
+命令：
+
+```bash
+python -m core.jobs.preflight_data_source
+python -m core.jobs.run_full_batch_update --max-symbols 500 --batch-size 50 --lookback-days 250 --max-retries 1
+```
+
+作用：为 `REAL_UNIVERSE_PRESET=full` 做页面化同款补数据。`preflight_data_source` 会检查 DuckDB 锁、Python 代理和东方财富 K 线接口；接口不可用时不要启动批量更新。`run_full_batch_update` 会把参数映射到 `FULL_UPDATE_MAX_SYMBOLS`、`FULL_UPDATE_BATCH_SIZE`、`FULL_UPDATE_LOOKBACK_DAYS` 和 `FULL_UPDATE_MAX_RETRIES`，然后调用现有 `update_real_data`。命令和页面都使用“本次未处理数量”描述未纳入本轮计划的股票，不表示永久跳过。
+
 ## 候选复核
 
 命令：
