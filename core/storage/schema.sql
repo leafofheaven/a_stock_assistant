@@ -113,6 +113,43 @@ CREATE TABLE IF NOT EXISTS strategy_result (
     PRIMARY KEY (trade_date, rank, ts_code)
 );
 
+CREATE TABLE IF NOT EXISTS entry_zone_snapshots (
+    ts_code VARCHAR,
+    name VARCHAR,
+    trade_date VARCHAR,
+    close DOUBLE,
+    ema13 DOUBLE,
+    ema22 DOUBLE,
+    ema60 DOUBLE,
+    support_20d DOUBLE,
+    support_60d DOUBLE,
+    resistance_20d DOUBLE,
+    resistance_60d DOUBLE,
+    nearest_support DOUBLE,
+    nearest_resistance DOUBLE,
+    atr_14 DOUBLE,
+    volatility_pct DOUBLE,
+    entry_low DOUBLE,
+    entry_high DOUBLE,
+    entry_mid DOUBLE,
+    stop_loss DOUBLE,
+    target_price DOUBLE,
+    risk_pct DOUBLE,
+    reward_pct DOUBLE,
+    reward_risk_ratio DOUBLE,
+    entry_zone_status VARCHAR,
+    entry_zone_status_cn VARCHAR,
+    chase_risk VARCHAR,
+    chase_risk_cn VARCHAR,
+    price_action_note VARCHAR,
+    entry_reason VARCHAR,
+    risk_note VARCHAR,
+    source VARCHAR,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    PRIMARY KEY (ts_code, trade_date, source)
+);
+
 CREATE TABLE IF NOT EXISTS backtest_result (
     strategy_name VARCHAR,
     start_date VARCHAR,

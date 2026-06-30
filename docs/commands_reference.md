@@ -130,9 +130,12 @@ python -m core.jobs.export_positions --format markdown
 python -m core.jobs.track_positions
 python -m core.jobs.track_positions --format markdown
 python -m core.jobs.track_positions --format all
+python -m core.jobs.calculate_entry_zones
+python -m core.jobs.diagnose_entry_zones
+python -m core.jobs.export_entry_zone_report --format all
 ```
 
-作用：`run_daily_selection` 基于本地数据生成候选股票摘要；`explain_selection_logic` 查看当前 `total_score` 公式、因子权重、候选排名原因和主要贡献因子；`run_elder_review` 在今日候选之后追加埃尔德技术复核；`export_elder_review` 导出带操作建议的人工复核 CSV / Markdown；`backtest_elder_review` 对埃尔德复核结果做历史回看，输出 `forward_return_5d`、`max_drawdown_20d`、`elder_score` 分组和 `action_hint` 分组表现；`import_positions` / `export_positions` 用于本地持仓池手工记录和导出；`track_positions` 对 active 持仓做每日跟踪，输出 `pnl_pct`、`max_gain_pct`、`max_drawdown_pct`、`latest_elder_score` 和 `position_hint`。解释、复核和持仓池命令只读取或写入本地数据，不改变选股结果。
+作用：`run_daily_selection` 基于本地数据生成候选股票摘要；`explain_selection_logic` 查看当前 `total_score` 公式、因子权重、候选排名原因和主要贡献因子；`run_elder_review` 在今日候选之后追加埃尔德技术复核；`export_elder_review` 导出带操作建议的人工复核 CSV / Markdown；`backtest_elder_review` 对埃尔德复核结果做历史回看，输出 `forward_return_5d`、`max_drawdown_20d`、`elder_score` 分组和 `action_hint` 分组表现；`import_positions` / `export_positions` 用于本地持仓池手工记录和导出；`track_positions` 对 active 持仓做每日跟踪，输出 `pnl_pct`、`max_gain_pct`、`max_drawdown_pct`、`latest_elder_score` 和 `position_hint`；`calculate_entry_zones` / `diagnose_entry_zones` / `export_entry_zone_report` 计算并导出买入区间、支撑阻力、止损位和盈亏比。解释、复核、持仓池和买入区间命令只读取或写入本地数据，不改变选股结果。
 
 如需把“趋势确认，进入人工复核”的股票加入观察池，可显式运行：
 

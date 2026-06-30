@@ -117,6 +117,36 @@ def enrich_selection_with_watchlist_status(selection_df: pd.DataFrame, tables: d
     return merged.reset_index(drop=True)
 
 
+def enrich_with_entry_zone_fields(df: pd.DataFrame, tables: dict[str, Any]) -> pd.DataFrame:
+    """Attach latest entry zone fields by ts_code without changing row order."""
+    if df.empty or "ts_code" not in df.columns:
+        return df.copy()
+    entry_zones = _latest_entry_zone_snapshot(tables.get("entry_zone_snapshots", pd.DataFrame()))
+    if entry_zones.empty or "ts_code" not in entry_zones.columns:
+        return df.copy()
+    fields = [
+        "ts_code",
+        "entry_low",
+        "entry_high",
+        "stop_loss",
+        "target_price",
+        "reward_risk_ratio",
+        "chase_risk_cn",
+        "entry_zone_status_cn",
+        "price_action_note",
+    ]
+    available = [column for column in fields if column in entry_zones.columns]
+    return df.merge(entry_zones[available].drop_duplicates("ts_code"), on="ts_code", how="left")
+
+
+def _latest_entry_zone_snapshot(entry_zones: pd.DataFrame) -> pd.DataFrame:
+    """Return latest entry zone snapshot rows."""
+    if entry_zones.empty or "trade_date" not in entry_zones.columns:
+        return pd.DataFrame()
+    latest = _latest_date(entry_zones, "trade_date")
+    return entry_zones[entry_zones["trade_date"].astype(str) == str(latest)].copy()
+
+
 def summarize_watchlist_snapshot(snapshot_df: pd.DataFrame) -> dict[str, int]:
     """Summarize latest watchlist daily snapshot by status for Streamlit cards."""
     if snapshot_df.empty:
@@ -439,6 +469,7 @@ def _safe_load_dashboard_tables(store: Any) -> dict[str, pd.DataFrame]:
         "review_decisions": _safe_read_store_table(store, "review_decisions", limit=5000),
         "review_decision_history": _safe_read_store_table(store, "review_decision_history", limit=10000),
         "positions": _safe_read_store_table(store, "positions", limit=5000),
+        "entry_zone_snapshots": _safe_read_store_table(store, "entry_zone_snapshots", limit=10000),
     }
     return tables
 
@@ -635,7 +666,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     _render_database_status(st, dashboard_data.get("tables", {}).get("_database_status", {}))
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
-    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "观察池跟踪", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
+    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "观察池跟踪", "买入区间分析", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
         _render_section(st, "今日选股", _render_selection_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[1]:
@@ -647,14 +678,16 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     with tabs[4]:
         _render_section(st, "埃尔德复核", _render_elder_review_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("price", pd.DataFrame()))
     with tabs[5]:
-        _render_section(st, "观察池跟踪", _render_watchlist_tab, st, dashboard_data.get("watchlist", pd.DataFrame()), dashboard_data.get("watchlist_snapshot", pd.DataFrame()))
+        _render_section(st, "观察池跟踪", _render_watchlist_tab, st, dashboard_data.get("watchlist", pd.DataFrame()), dashboard_data.get("watchlist_snapshot", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[6]:
-        _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
+        _render_section(st, "买入区间分析", _render_entry_zone_tab, st, dashboard_data.get("tables", {}))
     with tabs[7]:
-        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}))
+        _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
     with tabs[8]:
-        _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
+        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}))
     with tabs[9]:
+        _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
+    with tabs[10]:
         _render_section(st, "本地控制台", _render_local_console_tab, st, dashboard_data.get("tables", {}))
 
 
@@ -705,7 +738,7 @@ def _render_selection_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str,
         return
     industry = st.selectbox("行业", get_industry_options(selection_df))
     sort_descending = st.checkbox("按综合分从高到低排序", value=True)
-    filtered = enrich_selection_with_watchlist_status(filter_selection_data(selection_df, industry, sort_descending), tables or {})
+    filtered = enrich_with_entry_zone_fields(enrich_selection_with_watchlist_status(filter_selection_data(selection_df, industry, sort_descending), tables or {}), tables or {})
     st.dataframe(filtered, use_container_width=True)
     st.write("候选股票详情")
     for item in filtered.head(10).to_dict("records"):
@@ -725,6 +758,12 @@ def _render_selection_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str,
                     "pb": item.get("pb"),
                     "select_reason": item.get("select_reason"),
                     "risk_note": item.get("risk_note"),
+                    "entry_zone": f"{item.get('entry_low') or ''}-{item.get('entry_high') or ''}",
+                    "stop_loss": item.get("stop_loss"),
+                    "target_price": item.get("target_price"),
+                    "reward_risk_ratio": item.get("reward_risk_ratio"),
+                    "chase_risk": item.get("chase_risk_cn"),
+                    "entry_zone_status": item.get("entry_zone_status_cn"),
                     "data_quality_note": item.get("risk_note") or "需结合数据来源与字段完整性人工复核。",
                 }
             )
@@ -762,7 +801,7 @@ def _render_review_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str, An
     st.write("人工复核模板导出后，可填写 decision、reason、notes、reviewer，再用 import_review_decisions 回填本地 DuckDB。")
 
 
-def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.DataFrame | None = None) -> None:
+def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.DataFrame | None = None, tables: dict[str, Any] | None = None) -> None:
     st.subheader("观察池跟踪")
     snapshot = snapshot_df if isinstance(snapshot_df, pd.DataFrame) else pd.DataFrame()
     if watchlist_df.empty and snapshot.empty:
@@ -784,6 +823,7 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.D
         for col, (label, value) in zip(cols, metrics):
             col.metric(label, value)
         st.write("观察池每日跟踪")
+        snapshot = enrich_with_entry_zone_fields(snapshot, tables or {})
         snapshot_columns = [
             "ts_code",
             "name",
@@ -797,6 +837,13 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.D
             "selected_count_10d",
             "consecutive_selected_days",
             "action_hint",
+            "entry_low",
+            "entry_high",
+            "stop_loss",
+            "target_price",
+            "reward_risk_ratio",
+            "chase_risk_cn",
+            "entry_zone_status_cn",
             "watch_status_label",
             "daily_note",
         ]
@@ -805,6 +852,7 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.D
         return
 
     st.caption("暂无每日跟踪快照，先运行 python -m core.jobs.track_watchlist。")
+    watchlist_df = enrich_with_entry_zone_fields(watchlist_df, tables or {})
     display_columns = [
         "ts_code",
         "name",
@@ -822,9 +870,55 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.D
         "total_score",
         "score_missing_reason",
         "data_quality_note",
+        "entry_low",
+        "entry_high",
+        "stop_loss",
+        "target_price",
+        "reward_risk_ratio",
+        "chase_risk_cn",
+        "entry_zone_status_cn",
     ]
     available = [column for column in display_columns if column in watchlist_df.columns]
     st.dataframe(watchlist_df[available], use_container_width=True)
+
+
+def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
+    st.subheader("买入区间分析")
+    st.caption("仅供个人研究使用，不自动交易。")
+    entry_zones = _latest_entry_zone_snapshot(tables.get("entry_zone_snapshots", pd.DataFrame()))
+    if entry_zones.empty:
+        st.info("暂无买入区间快照。请运行 python -m core.jobs.calculate_entry_zones。")
+        return
+    counts = entry_zones["entry_zone_status"].fillna("unknown").value_counts().to_dict() if "entry_zone_status" in entry_zones.columns else {}
+    cols = st.columns(6)
+    metrics = [
+        ("股票数量", len(entry_zones)),
+        ("位于区间", counts.get("in_zone", 0)),
+        ("接近区间", counts.get("near_zone", 0)),
+        ("等待回调", counts.get("above_zone", 0)),
+        ("趋势偏弱", counts.get("weak_no_entry", 0)),
+        ("数据不足", counts.get("insufficient_data", 0)),
+    ]
+    for col, (label, value) in zip(cols, metrics):
+        col.metric(label, value)
+    display_columns = [
+        "ts_code",
+        "name",
+        "trade_date",
+        "source",
+        "close",
+        "entry_low",
+        "entry_high",
+        "stop_loss",
+        "target_price",
+        "reward_risk_ratio",
+        "chase_risk_cn",
+        "entry_zone_status_cn",
+        "price_action_note",
+    ]
+    available = [column for column in display_columns if column in entry_zones.columns]
+    st.dataframe(entry_zones[available], use_container_width=True)
+    st.caption("生成报告：python -m core.jobs.export_entry_zone_report --format all")
 
 
 def _render_stock_detail_tab(
