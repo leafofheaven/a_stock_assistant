@@ -10,6 +10,9 @@ from typing import Any
 GENERATED_PATTERNS = [
     "real_workflow_*.md",
     "real_workflow_*.json",
+    "daily_workflow_*.md",
+    "daily_workflow_*.json",
+    "daily_workflow_*.csv",
     "selection_review_*.md",
     "selection_review_*.json",
     "selection_review_*.csv",
@@ -20,6 +23,11 @@ GENERATED_PATTERNS = [
     "watchlist_tracking_*.md",
     "watchlist_tracking_*.json",
     "watchlist_tracking_*.csv",
+    "external_positions_*.md",
+    "external_positions_*.json",
+    "external_positions_*.csv",
+    "templates/external_trades_template.csv",
+    "templates/external_position_snapshots_template.csv",
 ]
 
 

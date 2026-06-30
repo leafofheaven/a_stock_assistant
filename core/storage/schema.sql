@@ -150,6 +150,70 @@ CREATE TABLE IF NOT EXISTS entry_zone_snapshots (
     PRIMARY KEY (ts_code, trade_date, source)
 );
 
+CREATE TABLE IF NOT EXISTS external_trades (
+    id VARCHAR PRIMARY KEY,
+    platform VARCHAR,
+    account_name VARCHAR,
+    trade_date VARCHAR,
+    ts_code VARCHAR,
+    name VARCHAR,
+    side VARCHAR,
+    quantity DOUBLE,
+    price DOUBLE,
+    amount DOUBLE,
+    fee DOUBLE,
+    note VARCHAR,
+    external_id VARCHAR,
+    matched_plan_id VARCHAR,
+    matched_entry_zone_date VARCHAR,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS external_position_snapshots (
+    id VARCHAR PRIMARY KEY,
+    platform VARCHAR,
+    account_name VARCHAR,
+    snapshot_date VARCHAR,
+    ts_code VARCHAR,
+    name VARCHAR,
+    quantity DOUBLE,
+    cost_price DOUBLE,
+    current_price DOUBLE,
+    market_value DOUBLE,
+    pnl DOUBLE,
+    pnl_pct DOUBLE,
+    note VARCHAR,
+    matched_plan_id VARCHAR,
+    matched_entry_zone_date VARCHAR,
+    stop_loss DOUBLE,
+    target_price DOUBLE,
+    entry_low DOUBLE,
+    entry_high DOUBLE,
+    reward_risk_ratio DOUBLE,
+    position_status VARCHAR,
+    risk_status VARCHAR,
+    risk_status_cn VARCHAR,
+    match_note VARCHAR,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS external_import_batches (
+    batch_id VARCHAR PRIMARY KEY,
+    import_type VARCHAR,
+    source_file VARCHAR,
+    platform VARCHAR,
+    account_name VARCHAR,
+    imported_rows INTEGER,
+    inserted_rows INTEGER,
+    updated_rows INTEGER,
+    skipped_rows INTEGER,
+    error_rows INTEGER,
+    status VARCHAR,
+    created_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS backtest_result (
     strategy_name VARCHAR,
     start_date VARCHAR,

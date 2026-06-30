@@ -60,6 +60,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task47": check_task47,
         "task48": check_task48,
         "task49": check_task49,
+        "task50": check_task50,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2485,6 +2486,104 @@ def check_task49(root: Path) -> list[str]:
     return failures
 
 
+def check_task50(root: Path) -> list[str]:
+    """Check external simulated position import and matching workflow."""
+    failures = check_paths(
+        root,
+        [
+            "core/external_positions/importer.py",
+            "core/jobs/generate_external_position_template.py",
+            "core/jobs/import_external_trades.py",
+            "core/jobs/import_external_positions.py",
+            "core/jobs/match_external_positions.py",
+            "core/jobs/diagnose_external_positions.py",
+            "core/jobs/export_external_position_report.py",
+            "tests/test_external_positions.py",
+            "docs/external_positions.md",
+        ],
+    )
+
+    schema_source = read_source(root / "core/storage/schema.sql")
+    for phrase in ["external_trades", "external_position_snapshots", "external_import_batches"]:
+        if phrase not in schema_source:
+            failures.append(f"schema.sql is missing {phrase}.")
+
+    importer_source = read_source(root / "core/external_positions/importer.py")
+    for phrase in [
+        "normalize_ts_code",
+        "unsupported_bse",
+        "parse_number",
+        "import_external_trades_frame",
+        "import_external_positions_frame",
+        "match_external_positions",
+        "hit_stop_loss",
+        "near_stop_loss",
+        "hit_target",
+        "chased_high",
+        "entered_in_zone",
+        "insufficient_data",
+        "unknown_symbol",
+    ]:
+        if phrase not in importer_source:
+            failures.append(f"external position importer is missing {phrase}.")
+
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    for phrase in [
+        "generate_external_position_template",
+        "import_external_trades",
+        "import_external_positions",
+        "match_external_positions",
+        "diagnose_external_positions",
+        "export_external_position_report",
+    ]:
+        if phrase not in command_source:
+            failures.append(f"command_runner.py is missing {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["外部模拟持仓导入", "external_position_snapshots", "parse_external_position_text", "latest_external_positions"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 50 phrase: {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in [
+        "task50",
+        "generate_external_position_template",
+        "/tmp/a_stock_assistant_task50_templates",
+        "diagnose_external_positions",
+        "export_external_position_report",
+        "run_daily_workflow",
+        "clean_generated_reports",
+    ]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task50 is missing {phrase}.")
+
+    tests_source = read_source(root / "tests/test_external_positions.py")
+    for phrase in [
+        "normalize_ts_code",
+        "unsupported_bse",
+        "parse_number",
+        "import_external_trades_frame",
+        "import_external_positions_frame",
+        "match_external_positions",
+        "hit_stop_loss",
+        "near_stop_loss",
+        "hit_target",
+        "chased_high",
+        "entered_in_zone",
+        "unknown_symbol",
+        "external_positions_to_dataframe",
+        "parse_external_position_text",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"Task 50 tests should cover {phrase}.")
+
+    docs = read_source(root / "README.md") + read_source(root / "docs/commands_reference.md") + read_source(root / "docs/external_positions.md")
+    for phrase in ["外部模拟持仓", "导入模板", "买入区间", "止损", "cookie", "不自动交易"]:
+        if phrase not in docs:
+            failures.append(f"Task 50 docs are missing {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2565,6 +2664,7 @@ def main(argv: list[str] | None = None) -> int:
             "task47",
             "task48",
             "task49",
+            "task50",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

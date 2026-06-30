@@ -16,6 +16,7 @@
 - 回测诊断、工作流报告和 Streamlit 页面。
 - 候选股票复核报告、人工复核模板导出和复核结果导入。
 - 观察池管理、每日候选跟踪、观察池变化报告、状态调整与历史记录。
+- 外部模拟持仓 CSV 导入：支持手工导入交易记录 / 持仓快照，匹配买入区间、止损位、目标价位和观察池状态，不读取 cookie，不自动交易。
 - 本地 DuckDB 备份、恢复 dry-run、报告清理和本地状态诊断。
 - Chrome 本地控制台：Streamlit 页面内可修改常用 `.env` 参数、运行白名单命令、实时查看运行进度、查看 doctor 体检并打开 reports 文件夹。
 
@@ -100,6 +101,19 @@ python -m core.jobs.export_entry_zone_report --format all
 
 该流程基于本地今日候选和观察池股票计算 EMA、支撑阻力、ATR、买入区间、止损位、目标价位和盈亏比，只供个人研究和人工复核，不自动交易。
 
+外部模拟持仓导入：
+
+```bash
+python -m core.jobs.generate_external_position_template
+python -m core.jobs.import_external_trades --file path/to/external_trades.csv
+python -m core.jobs.import_external_positions --file path/to/external_position_snapshots.csv
+python -m core.jobs.match_external_positions
+python -m core.jobs.diagnose_external_positions
+python -m core.jobs.export_external_position_report --format all
+```
+
+该流程只读取用户手工导出的本地 CSV 文件，不登录外部平台，不读取同花顺、雪球 cookie，不接券商，不自动交易。详见 [docs/external_positions.md](docs/external_positions.md)。
+
 ## 历史功能入口索引
 
 这些入口保留用于任务检查和日常查找，详细说明见 `docs/`：
@@ -116,6 +130,7 @@ python -m core.jobs.export_entry_zone_report --format all
 - 持仓池基础记录：`python -m core.jobs.import_positions --file <csv>`，`python -m core.jobs.export_positions`，详见 `docs/position_pool.md`
 - 持仓每日跟踪：`python -m core.jobs.track_positions`，`python -m core.jobs.track_positions --format markdown`，详见 `docs/position_tracking.md`
 - 沪深 A 股全市场股票池：`REAL_UNIVERSE_PRESET=full`，`AKSHARE_SAMPLE_SYMBOLS=`，支持批量更新、断点续跑和失败重试，详见 `docs/real_universe.md`
+- 外部模拟持仓导入与计划匹配：`python -m core.jobs.generate_external_position_template`，`python -m core.jobs.import_external_positions --file <csv>`，`python -m core.jobs.export_external_position_report --format all`，详见 `docs/external_positions.md`
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
@@ -175,6 +190,7 @@ open scripts/mac/A股选股助手.command
 - [观察池每日候选跟踪](docs/watchlist_candidate_tracking.md)
 - [埃尔德复核历史回看](docs/elder_review_backtest.md)
 - [买入区间、支撑阻力和止损位](docs/entry_zones.md)
+- [外部模拟持仓导入](docs/external_positions.md)
 - [持仓池](docs/position_pool.md)
 - [持仓每日跟踪](docs/position_tracking.md)
 - [沪深 A 股全市场股票池](docs/real_universe.md)

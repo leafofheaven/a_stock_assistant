@@ -16,6 +16,8 @@ from web.streamlit_app import (
     filter_selection_data,
     get_industry_options,
     load_dashboard_data,
+    latest_external_positions,
+    parse_external_position_text,
     render_dashboard,
     _render_section,
     _lightweight_database_metrics,
@@ -325,6 +327,7 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
         "埃尔德复核",
         "观察池跟踪",
         "买入区间分析",
+        "外部模拟持仓导入",
         "持仓池",
         "策略回测",
         "数据更新状态",
@@ -369,6 +372,23 @@ def test_render_section_catches_block_errors() -> None:
     _render_section(fake_streamlit, "测试区块", fail_section)
 
     assert any("测试区块 加载失败" in message for message in fake_streamlit.error_messages)
+
+
+def test_external_position_helpers_parse_and_select_latest_snapshot() -> None:
+    """External simulated position helpers should parse text and select latest snapshots."""
+    parsed = parse_external_position_text("ts_code\tquantity\n000725\t100\n")
+    snapshots = pd.DataFrame(
+        {
+            "snapshot_date": ["20260629", "20260630"],
+            "ts_code": ["000001.SZ", "000725.SZ"],
+            "quantity": [1000, 2000],
+        }
+    )
+
+    latest = latest_external_positions({"external_position_snapshots": snapshots})
+
+    assert parsed["ts_code"].tolist() == ["000725"]
+    assert latest["ts_code"].tolist() == ["000725.SZ"]
 
 
 def _selection_df() -> pd.DataFrame:
@@ -473,6 +493,9 @@ class FakeStreamlit:
     def text_area(self, label: str, value: str = "", **kwargs) -> str:
         return value
 
+    def file_uploader(self, label: str, **kwargs):
+        return None
+
     def form(self, key: str) -> FakeForm:
         return FakeForm()
 
@@ -501,4 +524,4 @@ class FakeStreamlit:
         return None
 
     def columns(self, count: int):
-        return [SimpleNamespace(metric=lambda label, value: None) for _ in range(count)]
+        return [self for _ in range(count)]

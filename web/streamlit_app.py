@@ -33,6 +33,7 @@ from core.config.env_file import masked_env_values, parse_stock_symbols, read_en
 from core.runtime.command_runner import open_project_path, run_command_streaming
 from core.runtime.progress import parse_progress_line
 from core.technical.elder import build_elder_review
+from core.external_positions.importer import position_template_frame, trade_template_frame
 
 SELECTION_COLUMNS = [
     "rank",
@@ -470,6 +471,8 @@ def _safe_load_dashboard_tables(store: Any) -> dict[str, pd.DataFrame]:
         "review_decision_history": _safe_read_store_table(store, "review_decision_history", limit=10000),
         "positions": _safe_read_store_table(store, "positions", limit=5000),
         "entry_zone_snapshots": _safe_read_store_table(store, "entry_zone_snapshots", limit=10000),
+        "external_position_snapshots": _safe_read_store_table(store, "external_position_snapshots", limit=10000),
+        "external_trades": _safe_read_store_table(store, "external_trades", limit=10000),
     }
     return tables
 
@@ -666,7 +669,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     _render_database_status(st, dashboard_data.get("tables", {}).get("_database_status", {}))
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
-    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "观察池跟踪", "买入区间分析", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
+    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "观察池跟踪", "买入区间分析", "外部模拟持仓导入", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
         _render_section(st, "今日选股", _render_selection_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[1]:
@@ -682,12 +685,14 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     with tabs[6]:
         _render_section(st, "买入区间分析", _render_entry_zone_tab, st, dashboard_data.get("tables", {}))
     with tabs[7]:
-        _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
+        _render_section(st, "外部模拟持仓导入", _render_external_positions_tab, st, dashboard_data.get("tables", {}))
     with tabs[8]:
-        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}))
+        _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
     with tabs[9]:
-        _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
+        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}))
     with tabs[10]:
+        _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
+    with tabs[11]:
         _render_section(st, "本地控制台", _render_local_console_tab, st, dashboard_data.get("tables", {}))
 
 
@@ -919,6 +924,80 @@ def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
     available = [column for column in display_columns if column in entry_zones.columns]
     st.dataframe(entry_zones[available], use_container_width=True)
     st.caption("生成报告：python -m core.jobs.export_entry_zone_report --format all")
+
+
+def parse_external_position_text(text: str) -> pd.DataFrame:
+    """Parse pasted CSV or TSV text for preview only."""
+    if not text.strip():
+        return pd.DataFrame()
+    separator = "\t" if "\t" in text.splitlines()[0] else ","
+    return pd.read_csv(StringIO(text), sep=separator, dtype=str, keep_default_na=False)
+
+
+def latest_external_positions(tables: dict[str, Any]) -> pd.DataFrame:
+    """Return latest imported external position snapshots."""
+    positions = tables.get("external_position_snapshots", pd.DataFrame())
+    if not isinstance(positions, pd.DataFrame) or positions.empty or "snapshot_date" not in positions.columns:
+        return pd.DataFrame()
+    latest = positions["snapshot_date"].dropna().astype(str).max()
+    return positions[positions["snapshot_date"].astype(str) == str(latest)].copy()
+
+
+def _render_external_positions_tab(st: Any, tables: dict[str, Any]) -> None:
+    st.subheader("外部模拟持仓导入")
+    st.caption("仅供个人研究使用，不自动交易。不会读取同花顺、雪球 cookie 或登录态。")
+    trade_csv = dataframe_to_csv(trade_template_frame())
+    position_csv = dataframe_to_csv(position_template_frame())
+    cols = st.columns(2)
+    cols[0].download_button("下载交易记录模板", trade_csv, file_name="external_trades_template.csv", mime="text/csv")
+    cols[1].download_button("下载持仓快照模板", position_csv, file_name="external_position_snapshots_template.csv", mime="text/csv")
+    st.write("命令行导入")
+    st.code(
+        "python -m core.jobs.import_external_trades --file path/to/external_trades.csv\n"
+        "python -m core.jobs.import_external_positions --file path/to/external_position_snapshots.csv\n"
+        "python -m core.jobs.match_external_positions\n"
+        "python -m core.jobs.export_external_position_report --format all"
+    )
+    uploaded = st.file_uploader("上传 CSV 预览（页面仅预览，正式导入请用命令）", type=["csv"])
+    if uploaded is not None:
+        preview = pd.read_csv(uploaded, dtype=str, keep_default_na=False)
+        st.write("上传预览")
+        st.dataframe(preview.head(20), use_container_width=True)
+    pasted = st.text_area("粘贴 CSV 或制表符分隔内容预览", height=120)
+    if pasted.strip():
+        try:
+            parsed = parse_external_position_text(pasted)
+            st.write("粘贴内容预览")
+            st.dataframe(parsed.head(20), use_container_width=True)
+        except Exception as exc:
+            st.warning(f"解析失败：{exc}")
+    positions = latest_external_positions(tables)
+    if positions.empty:
+        st.info("暂无外部模拟持仓快照。")
+        return
+    st.write("最新外部模拟持仓匹配结果")
+    display_columns = [
+        "platform",
+        "account_name",
+        "snapshot_date",
+        "ts_code",
+        "name",
+        "quantity",
+        "cost_price",
+        "current_price",
+        "market_value",
+        "pnl",
+        "pnl_pct",
+        "entry_low",
+        "entry_high",
+        "stop_loss",
+        "target_price",
+        "reward_risk_ratio",
+        "risk_status_cn",
+        "match_note",
+    ]
+    available = [column for column in display_columns if column in positions.columns]
+    st.dataframe(positions[available], use_container_width=True)
 
 
 def _render_stock_detail_tab(
