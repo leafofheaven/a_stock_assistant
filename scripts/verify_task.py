@@ -51,6 +51,12 @@ VERIFY_COMMANDS = {
         [sys.executable, "-m", "core.jobs.run_daily_workflow", "--doctor-before-run", "--skip-update", "--format", "all"],
         [sys.executable, "-m", "core.jobs.clean_generated_reports", "--force"],
     ],
+    "task53": [
+        [sys.executable, "-m", "pytest"],
+        [sys.executable, "scripts/check_project.py"],
+        [sys.executable, "scripts/check_task.py", "task53"],
+        [sys.executable, "-m", "core.jobs.export_daily_research_workbook", "--output", "/tmp/a_stock_assistant_task53/daily_research.xlsx"],
+    ],
 }
 
 

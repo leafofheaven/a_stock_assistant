@@ -25,6 +25,7 @@ ALLOWED_COMMANDS: dict[str, list[str]] = {
     "calculate_entry_zones": [sys.executable, "-m", "core.jobs.calculate_entry_zones"],
     "diagnose_entry_zones": [sys.executable, "-m", "core.jobs.diagnose_entry_zones"],
     "export_entry_zone_report": [sys.executable, "-m", "core.jobs.export_entry_zone_report"],
+    "export_daily_research_workbook": [sys.executable, "-m", "core.jobs.export_daily_research_workbook"],
     "generate_external_position_template": [sys.executable, "-m", "core.jobs.generate_external_position_template"],
     "import_external_trades": [sys.executable, "-m", "core.jobs.import_external_trades"],
     "import_external_positions": [sys.executable, "-m", "core.jobs.import_external_positions"],

@@ -179,6 +179,19 @@ python -m core.jobs.run_full_batch_update --max-symbols 500 --batch-size 50 --lo
 
 作用：为 `REAL_UNIVERSE_PRESET=full` 做页面化同款补数据。`preflight_data_source` 会检查 DuckDB 锁、Python 代理和东方财富 K 线接口；接口不可用时不要启动批量更新。`run_full_batch_update` 会把参数映射到 `FULL_UPDATE_MAX_SYMBOLS`、`FULL_UPDATE_BATCH_SIZE`、`FULL_UPDATE_LOOKBACK_DAYS` 和 `FULL_UPDATE_MAX_RETRIES`，然后调用现有 `update_real_data`。命令和页面都使用“本次未处理数量”描述未纳入本轮计划的股票，不表示永久跳过。
 
+## 每日研究工作簿 Excel
+
+命令：
+
+```bash
+python -m core.jobs.export_daily_research_workbook
+python -m core.jobs.export_daily_research_workbook --trade-date 20260630 --output reports/daily_research_20260630.xlsx
+```
+
+作用：只读本地 DuckDB 已有结果，导出一份每日研究工作簿 Excel。工作簿包含 `00_摘要`、`01_今日候选`、`02_埃尔德复核`、`03_买入区间`、`04_观察池`、`05_观察池跟踪`、`06_外部模拟持仓`、`07_风险提示`、`08_数据质量`、`09_参数配置`、`10_说明`。`display_order` 是当前工作表连续显示序号，`candidate_rank` 保留今日选股原始排名。该命令不联网更新、不重算因子、不改变 `total_score`、不改变候选排序。
+
+Streamlit 本地控制台中的“导出今日研究工作簿 Excel”按钮调用同一命令。默认输出到 `reports/daily_research_*.xlsx`；自动验收使用 `/tmp/a_stock_assistant_task53/daily_research.xlsx`，不会在工作区留下生成文件。
+
 ## 候选复核
 
 命令：

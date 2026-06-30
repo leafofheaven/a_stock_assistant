@@ -91,6 +91,15 @@ python -m core.jobs.doctor_daily_run --post-run
 
 报告输出在 `reports/`，常看 `daily_workflow_*.md`、`selection_review_*.csv`、`watchlist_*.md`。完整复核流程请见 [docs/v0_1_handbook.md](docs/v0_1_handbook.md) 和 [docs/daily_workflow.md](docs/daily_workflow.md)。
 
+每日研究工作簿 Excel：
+
+```bash
+python -m core.jobs.export_daily_research_workbook
+python -m core.jobs.export_daily_research_workbook --trade-date 20260630 --output reports/daily_research_20260630.xlsx
+```
+
+该命令只读本地 DuckDB 已有结果，导出 `00_摘要`、`01_今日候选`、`02_埃尔德复核`、`03_买入区间`、`04_观察池`、`05_观察池跟踪`、`06_外部模拟持仓`、`07_风险提示`、`08_数据质量`、`09_参数配置`、`10_说明` 等工作表；不会联网更新、不会重算因子、不会改变今日选股排序。
+
 买入区间分析：
 
 ```bash
@@ -131,6 +140,7 @@ python -m core.jobs.export_external_position_report --format all
 - 持仓每日跟踪：`python -m core.jobs.track_positions`，`python -m core.jobs.track_positions --format markdown`，详见 `docs/position_tracking.md`
 - 沪深 A 股全市场股票池：`REAL_UNIVERSE_PRESET=full`，`AKSHARE_SAMPLE_SYMBOLS=`，支持批量更新、断点续跑和失败重试，详见 `docs/real_universe.md`
 - 外部模拟持仓导入与计划匹配：`python -m core.jobs.generate_external_position_template`，`python -m core.jobs.import_external_positions --file <csv>`，`python -m core.jobs.export_external_position_report --format all`，详见 `docs/external_positions.md`
+- 一键导出每日研究工作簿 Excel：`python -m core.jobs.export_daily_research_workbook`，只读本地 DuckDB 已有候选、埃尔德复核、买入区间、观察池、外部模拟持仓和数据质量结果。
 - 真实运行工作流与报告导出：`python -m core.jobs.run_real_workflow`，`python -m core.jobs.run_real_workflow --no-backtest`，`python -m core.jobs.run_real_workflow --format json`
 - 候选股票人工复核清单与结果导出：`python -m core.jobs.export_selection_review`，`python -m core.jobs.export_selection_review --top-n 10`，`python -m core.jobs.export_selection_review --format all`，`--export-selection-review`
 - 人工复核结果回填与观察池管理：`review_decisions`，`python -m core.jobs.export_review_template`，`python -m core.jobs.import_review_decisions`，`python -m core.jobs.refresh_watchlist_scores`，`python -m core.jobs.diagnose_watchlist`，`python -m core.jobs.export_watchlist`，`--export-review-template`，`--export-watchlist`
@@ -174,6 +184,8 @@ python scripts/start_streamlit_safe.py
 ```
 
 页面用于查看数据状态、今日选股、因子排名、选股逻辑、回测诊断、观察池和本地状态提示。“选股逻辑”Tab 会显示 `total_score` 公式、因子权重、候选排名原因和主要贡献因子。“参数设置 / 本地控制台”提供简化设置向导：切换自定义股票池或预设股票池，修改开始/结束日期，查看“参数日期 vs 数据库日期”，并使用“保存参数”“保存并本地重算”“保存并更新数据”。预设股票池中 `mini / small / medium` 是样本池，`full` 是沪深 A 股全市场，不含北交所；如果 `AKSHARE_SAMPLE_SYMBOLS` 不为空，自定义股票池优先于 full。点击运行后页面会逐行显示当前步骤、当前股票或子任务、成功/失败/跳过数量、实时日志和最终报告路径。修改日期后数据库日期不会立刻变化，需要点击“保存并更新数据”才会联网拉取新行情。若提示 DuckDB 被其他进程锁定，请停止其他 `core.jobs` 或旧 Streamlit；如果 `lsof data/a_stock_assistant.duckdb` 显示 `fileprovi/fileproviderd`，建议把 DuckDB 放到非云同步目录。
+
+本地控制台提供“导出今日研究工作簿 Excel”按钮，用于一键导出每日研究工作簿。该按钮只读取本地持久化结果，不会启动数据更新或重算选股。
 
 full 模式会经过可交易过滤：默认剔除 ST、退市整理、北交所、上市不足 120 天、近 20 日成交不连续和流动性不足股票。近 20 日平均成交额默认门槛为 1 亿元，停牌股票复牌后重新满足成交连续性和流动性规则会自动重新纳入。
 
