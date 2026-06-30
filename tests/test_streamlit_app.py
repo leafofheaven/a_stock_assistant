@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -11,6 +12,7 @@ from web.streamlit_app import (
     calculate_recent_returns,
     dataframe_to_csv,
     describe_dashboard_data_source,
+    display_dataframe,
     effective_pool_config,
     filter_factor_ranking,
     filter_selection_data,
@@ -19,7 +21,9 @@ from web.streamlit_app import (
     load_dashboard_data,
     latest_external_positions,
     parse_external_position_text,
+    prepare_display_table,
     render_dashboard,
+    _extract_workbook_output_path,
     _render_section,
     _lightweight_database_metrics,
     summarize_update_status,
@@ -73,6 +77,88 @@ def test_dataframe_to_csv_contains_headers_and_values() -> None:
 
     assert "ts_code,total_score" in csv_text
     assert "000001.SZ,90" in csv_text
+
+
+def test_streamlit_tables_hide_raw_index() -> None:
+    """Display helper should hide pandas raw index through hide_index=True."""
+    fake = FakeStreamlit()
+    df = pd.DataFrame({"rank": [2, 1], "ts_code": ["000002.SZ", "000001.SZ"]}, index=[9, 10])
+
+    display_dataframe(fake, df)
+
+    rendered = fake.dataframes[0]
+    assert rendered["序号"].tolist() == [1, 2]
+    assert 9 not in rendered.index.tolist()
+    assert fake.hide_index_values == [True]
+
+
+def test_display_order_continuous_after_sort() -> None:
+    """Sorting by total_score should keep display_order continuous."""
+    sorted_df = filter_selection_data(_selection_df(), sort_descending=True)
+    display = prepare_display_table(sorted_df)
+
+    assert display["序号"].tolist() == list(range(1, len(display) + 1))
+    assert "原始选股排名" in display.columns
+    assert "rank" not in display.columns
+
+
+def test_rank_columns_are_renamed_for_display() -> None:
+    """Ambiguous rank fields should be renamed for user-facing tables."""
+    display = prepare_display_table(pd.DataFrame({"rank": [1], "today_rank": [2], "previous_rank": [3]}))
+
+    assert "rank" not in display.columns
+    assert "原始选股排名" in display.columns
+    assert "观察池当日排名" in display.columns
+    assert "上一日排名" in display.columns
+
+
+def test_elder_review_has_source_and_display_order() -> None:
+    """Elder review display should include source, candidate_rank, and continuous order."""
+    review = pd.DataFrame({"rank": [2, 1], "ts_code": ["000002.SZ", "000001.SZ"], "total_score": [80, 90]})
+
+    result = format_elder_review_display(review, source="今日候选")
+
+    assert result["display_order"].tolist() == [1, 2]
+    assert result["candidate_rank"].tolist() == [1, 2]
+    assert result["source"].tolist() == ["今日候选", "今日候选"]
+
+
+def test_update_entrypoints_are_consolidated() -> None:
+    """Local console should not keep a second ambiguous data update entrypoint."""
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+
+    assert "保存并更新数据" not in source
+    assert "更新真实数据" not in source
+    assert "全市场批量补数据" in source
+    assert "本页用于补充 / 更新 full 股票池行情数据" in source
+
+
+def test_export_workbook_page_feedback_helpers() -> None:
+    """Workbook export UI should extract a concrete output path for feedback/download."""
+    output = "每日研究工作簿导出完成\n输出文件: /tmp/a_stock_assistant_task53/daily_research.xlsx\n"
+
+    path = _extract_workbook_output_path(output)
+
+    assert path == Path("/tmp/a_stock_assistant_task53/daily_research.xlsx")
+
+
+def test_export_does_not_run_workflow_or_update() -> None:
+    """Workbook export UI should call the export command, not update/workflow commands."""
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    export_section = source.split("def _export_workbook_button", 1)[1].split("def _extract_workbook_output_path", 1)[0]
+
+    assert "export_daily_research_workbook" in export_section
+    assert "update_real_data" not in export_section
+    assert "run_daily_workflow" not in export_section
+
+
+def test_no_algorithm_changes_for_task54() -> None:
+    """Task 54 should stay in the UI layer and leave scoring modules untouched."""
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+
+    assert "calculate_total_score(" not in source
+    assert "DEFAULT_WEIGHTS" not in source
+    assert "normalize_factor(" not in source
 
 
 def test_get_industry_options_handles_missing_data() -> None:
@@ -460,6 +546,8 @@ class FakeStreamlit:
         self.info_messages: list[str] = []
         self.error_messages: list[str] = []
         self.warning_messages: list[str] = []
+        self.dataframes: list[pd.DataFrame] = []
+        self.hide_index_values: list[object] = []
 
     def set_page_config(self, **kwargs) -> None:
         return None
@@ -490,7 +578,8 @@ class FakeStreamlit:
         return None
 
     def dataframe(self, data, **kwargs) -> None:
-        return None
+        self.dataframes.append(data)
+        self.hide_index_values.append(kwargs.get("hide_index"))
 
     def json(self, value) -> None:
         return None
