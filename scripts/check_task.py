@@ -2392,7 +2392,13 @@ def check_task49(root: Path) -> list[str]:
         "_render_database_status",
         "_render_section",
         "_safe_load_dashboard_tables",
+        "_lightweight_database_metrics",
+        "_apply_lightweight_database_metrics",
         "_database_status",
+        "configured_symbol_count",
+        "priced_symbol_count",
+        "coverage_rate",
+        "尚未生成本地选股结果",
         "DuckDB 被锁定",
         "lsof",
         "fileprovider",
@@ -2421,7 +2427,7 @@ def check_task49(root: Path) -> list[str]:
             failures.append(f"verify_task.py is missing {phrase}.")
 
     tests_source = (read_source(root / "tests/test_streamlit_startup_stability.py") + read_source(root / "tests/test_duckdb_store.py") + read_source(root / "tests/test_streamlit_app.py")).lower()
-    for phrase in ["locked", "read_only", "dry-run", "friendly", "render_section", "database_locked"]:
+    for phrase in ["locked", "read_only", "dry-run", "friendly", "render_section", "database_locked", "real_universe_preset", "configured_symbol_count", "strategy_result"]:
         if phrase not in tests_source:
             failures.append(f"Task 49 tests should cover {phrase}.")
     return failures

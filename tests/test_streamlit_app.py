@@ -11,13 +11,17 @@ from web.streamlit_app import (
     calculate_recent_returns,
     dataframe_to_csv,
     describe_dashboard_data_source,
+    effective_pool_config,
     filter_factor_ranking,
     filter_selection_data,
     get_industry_options,
+    load_dashboard_data,
     render_dashboard,
     _render_section,
+    _lightweight_database_metrics,
     summarize_update_status,
 )
+from core.storage.duckdb_store import DuckDBStore
 
 
 def test_filter_selection_data_filters_and_sorts() -> None:
@@ -97,6 +101,114 @@ def test_summarize_update_status_returns_dates_and_row_counts() -> None:
     assert status["latest_factor_date"] == "20240101"
     assert status["latest_selection_date"] == "20240103"
     assert status["table_rows"]["daily_price"] == 2
+
+
+def test_effective_pool_config_full_uses_status_count() -> None:
+    """Empty AKSHARE_SAMPLE_SYMBOLS with full preset should use resolved full universe count."""
+    result = effective_pool_config(
+        {"AKSHARE_SAMPLE_SYMBOLS": "", "REAL_UNIVERSE_PRESET": "full"},
+        {"configured_symbol_count": 5048},
+    )
+
+    assert result["symbol_count"] == 5048
+    assert "full 沪深 A 股全市场" in result["symbols_text"]
+
+
+def test_lightweight_database_metrics_uses_real_daily_price_max_and_full_coverage(tmp_path) -> None:
+    """Streamlit status should derive latest date and coverage from real local DuckDB tables."""
+    store = DuckDBStore(tmp_path / "dashboard.duckdb")
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "symbol": "000001", "name": "平安银行", "market": "主板", "exchange": "SZSE"},
+                {"ts_code": "600000.SH", "symbol": "600000", "name": "浦发银行", "market": "主板", "exchange": "SSE"},
+                {"ts_code": "430001.BJ", "symbol": "430001", "name": "北交示例", "market": "北交所", "exchange": "BSE"},
+            ]
+        ),
+    )
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "20240130", "open": 1, "high": 1, "low": 1, "close": 1, "pre_close": 1, "change": 0, "pct_chg": 0, "vol": 1, "amount": 1},
+                {"ts_code": "600000.SH", "trade_date": "20240129", "open": 1, "high": 1, "low": 1, "close": 1, "pre_close": 1, "change": 0, "pct_chg": 0, "vol": 1, "amount": 1},
+            ]
+        ),
+    )
+    settings = SimpleNamespace(akshare_sample_symbols="", real_universe_preset="full", include_bse=False)
+    tables = {"stock_basic": store.read_table("stock_basic"), "daily_price": store.read_table("daily_price")}
+
+    metrics = _lightweight_database_metrics(settings, store, tables)
+
+    assert metrics["configured_symbol_count"] == 2
+    assert metrics["priced_symbol_count"] == 2
+    assert metrics["latest_price_date"] == "20240130"
+    assert metrics["coverage_rate"] == 1.0
+
+
+def test_summarize_update_status_prefers_real_latest_price_override() -> None:
+    """Database latest price date should not come from sample or stale report data."""
+    status = summarize_update_status(
+        {
+            "daily_price": pd.DataFrame({"trade_date": ["20240101"]}),
+            "_latest_price_date": "20240130",
+            "_configured_symbol_count": 5048,
+            "_priced_symbol_count": 197,
+            "_coverage_rate": 197 / 5048,
+        }
+    )
+
+    assert status["latest_price_date"] == "20240130"
+    assert status["configured_symbol_count"] == 5048
+    assert status["priced_symbol_count"] == 197
+
+
+def test_load_dashboard_data_does_not_show_sample_when_strategy_result_empty(tmp_path, monkeypatch) -> None:
+    """Real DuckDB with prices but empty strategy_result should render an empty real state, not demo stocks."""
+    db_path = tmp_path / "real-empty-selection.duckdb"
+    store = DuckDBStore(db_path)
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame([{"ts_code": "000001.SZ", "symbol": "000001", "name": "平安银行", "market": "主板", "exchange": "SZSE"}]),
+    )
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "20240130",
+                    "open": 1,
+                    "high": 1,
+                    "low": 1,
+                    "close": 1,
+                    "pre_close": 1,
+                    "change": 0,
+                    "pct_chg": 0,
+                    "vol": 1,
+                    "amount": 1,
+                }
+            ]
+        ),
+    )
+    settings = SimpleNamespace(
+        data_provider="akshare",
+        duckdb_path=db_path,
+        akshare_sample_symbols="",
+        real_universe_preset="full",
+        include_bse=False,
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("core.storage.duckdb_store.get_settings", lambda: settings)
+
+    data = load_dashboard_data()
+
+    assert "sample" not in data["data_source"].lower()
+    assert data["selection"].empty
+    assert data["tables"]["_latest_price_date"] == "20240130"
 
 
 def test_describe_dashboard_data_source_marks_sample_and_real_data() -> None:

@@ -206,7 +206,7 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     latest_watchlist_tracking_report = tables.get("_latest_watchlist_tracking_report")
     local_state = tables.get("_local_state")
     return {
-        "latest_price_date": _latest_date(daily_price, "trade_date"),
+        "latest_price_date": tables.get("_latest_price_date") or _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
         "latest_selection_date": _latest_date(strategy_result, "trade_date"),
         "is_sample_data": "sample" in data_source or "演示" in data_source,
@@ -372,20 +372,33 @@ def load_dashboard_data() -> dict[str, Any]:
         return data
 
     if tables["strategy_result"].empty:
-        data = sample_dashboard_data()
-        data["data_source"] = "sample 数据（演示，真实选股结果不足）"
-        data.setdefault("tables", {})["_database_status"] = {**database_status, "status": "ok", "message": "DuckDB 可访问，但暂无可展示的本地选股结果。"}
-        data.setdefault("tables", {})["_latest_workflow_report"] = load_latest_workflow_report()
-        data.setdefault("tables", {})["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
-        data.setdefault("tables", {})["_latest_selection_review_report"] = load_latest_selection_review_report()
-        data.setdefault("tables", {})["_latest_review_template"] = template_metadata(latest_review_template_path())
-        data.setdefault("tables", {})["_latest_watchlist_report"] = load_latest_watchlist_report()
-        data.setdefault("tables", {})["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
-        data.setdefault("tables", {})["_local_state"] = _safe_local_state()
-        data.setdefault("watchlist", pd.DataFrame())
-        data.setdefault("watchlist_snapshot", pd.DataFrame())
-        data.setdefault("positions", pd.DataFrame())
-        return data
+        tables["_data_source"] = f"{settings.data_provider} 本地 DuckDB 真实数据"
+        tables["_database_status"] = {**database_status, "status": "ok", "message": "DuckDB 可访问，但尚未生成本地选股结果。"}
+        tables["_latest_workflow_report"] = load_latest_workflow_report()
+        tables["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
+        tables["_latest_selection_review_report"] = load_latest_selection_review_report()
+        tables["_latest_review_template"] = template_metadata(latest_review_template_path())
+        tables["_latest_watchlist_report"] = load_latest_watchlist_report()
+        tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
+        tables["_local_state"] = _safe_local_state()
+        _apply_lightweight_database_metrics(tables, _lightweight_database_metrics(settings, store, tables))
+        watchlist = _load_watchlist_for_dashboard(store)
+        watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
+        positions = _load_positions_for_dashboard(store)
+        tables["_watchlist_snapshot"] = watchlist_snapshot
+        return {
+            "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据（尚未生成本地选股结果）",
+            "selection": pd.DataFrame(columns=SELECTION_COLUMNS),
+            "stock_basic": tables["stock_basic"],
+            "price": tables["daily_price"],
+            "daily_basic": tables["daily_basic"],
+            "factor_scores": tables["factor_scores"],
+            "backtest": {},
+            "watchlist": watchlist,
+            "watchlist_snapshot": watchlist_snapshot,
+            "positions": positions,
+            "tables": tables,
+        }
 
     tables["_latest_workflow_report"] = load_latest_workflow_report()
     tables["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
@@ -394,8 +407,7 @@ def load_dashboard_data() -> dict[str, Any]:
     tables["_latest_watchlist_report"] = load_latest_watchlist_report()
     tables["_latest_watchlist_tracking_report"] = load_latest_watchlist_tracking_report()
     tables["_local_state"] = _safe_local_state()
-    batch_diagnostic: dict[str, Any] = {}
-    _apply_batch_diagnostic_to_tables(tables, batch_diagnostic)
+    _apply_lightweight_database_metrics(tables, _lightweight_database_metrics(settings, store, tables))
     watchlist = _load_watchlist_for_dashboard(store)
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
     positions = _load_positions_for_dashboard(store)
@@ -429,6 +441,81 @@ def _safe_load_dashboard_tables(store: Any) -> dict[str, pd.DataFrame]:
         "positions": _safe_read_store_table(store, "positions", limit=5000),
     }
     return tables
+
+
+def _lightweight_database_metrics(settings: Any, store: Any, tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
+    """Return lightweight local universe and coverage metrics without external calls."""
+    metrics: dict[str, Any] = {
+        "configured_symbol_count": 0,
+        "priced_symbol_count": 0,
+        "coverage_rate": 0.0,
+        "missing_symbol_count": 0,
+        "latest_price_date": None,
+        "sample_source": "",
+        "batch_status": "",
+    }
+    stock_basic = tables.get("stock_basic", pd.DataFrame())
+    daily_price = tables.get("daily_price", pd.DataFrame())
+    try:
+        with store.connect(read_only=True) as connection:
+            price_row = connection.execute("SELECT COUNT(DISTINCT ts_code), MAX(trade_date) FROM daily_price").fetchone()
+            metrics["priced_symbol_count"] = int(price_row[0] or 0)
+            metrics["latest_price_date"] = str(price_row[1]) if price_row and price_row[1] is not None else None
+    except Exception:
+        if isinstance(daily_price, pd.DataFrame) and not daily_price.empty:
+            metrics["priced_symbol_count"] = int(daily_price["ts_code"].dropna().astype(str).nunique()) if "ts_code" in daily_price.columns else 0
+            metrics["latest_price_date"] = _latest_date(daily_price, "trade_date")
+
+    explicit = str(getattr(settings, "akshare_sample_symbols", "") or "").strip()
+    preset = str(getattr(settings, "real_universe_preset", "") or "mini").strip().lower()
+    if explicit:
+        symbols = [item.strip() for item in explicit.split(",") if item.strip()]
+        metrics["configured_symbol_count"] = len(symbols)
+        metrics["sample_source"] = "AKSHARE_SAMPLE_SYMBOLS"
+    elif preset == "full":
+        try:
+            from core.data_sources.real_universe import resolve_full_a_share_universe
+
+            universe = resolve_full_a_share_universe(stock_basic, include_bse=getattr(settings, "include_bse", False))
+            configured = int(universe.get("base_universe_count", 0) or 0)
+            metrics.update(
+                {
+                    "configured_symbol_count": configured,
+                    "raw_symbol_count": int(universe.get("raw_symbol_count", configured) or 0),
+                    "base_universe_count": configured,
+                    "excluded_bse_count": int(universe.get("excluded_bse_count", 0) or 0),
+                    "excluded_abnormal_count": int(universe.get("excluded_abnormal_count", 0) or 0),
+                    "bse_filter_note": universe.get("bse_filter_note", ""),
+                    "sample_source": "REAL_UNIVERSE_PRESET=full",
+                }
+            )
+        except Exception:
+            metrics["configured_symbol_count"] = int(stock_basic["ts_code"].dropna().astype(str).nunique()) if isinstance(stock_basic, pd.DataFrame) and "ts_code" in stock_basic.columns else 0
+            metrics["sample_source"] = "REAL_UNIVERSE_PRESET=full"
+    else:
+        try:
+            from core.data_sources.universe_presets import get_universe_preset
+
+            metrics["configured_symbol_count"] = len(get_universe_preset(preset))
+        except Exception:
+            metrics["configured_symbol_count"] = 0
+        metrics["sample_source"] = "REAL_UNIVERSE_PRESET"
+
+    configured_count = int(metrics.get("configured_symbol_count", 0) or 0)
+    priced_count = int(metrics.get("priced_symbol_count", 0) or 0)
+    metrics["coverage_rate"] = float(priced_count / configured_count) if configured_count else 0.0
+    metrics["missing_symbol_count"] = max(configured_count - priced_count, 0)
+    if preset == "full" and configured_count and priced_count < configured_count:
+        metrics["batch_status"] = "全市场数据未完成"
+    elif configured_count:
+        metrics["batch_status"] = "当前股票池已有行情覆盖"
+    return metrics
+
+
+def _apply_lightweight_database_metrics(tables: dict[str, Any], metrics: dict[str, Any]) -> None:
+    """Attach lightweight local coverage metrics to dashboard metadata."""
+    for key, value in metrics.items():
+        tables[f"_{key}"] = value
 
 
 def _database_status(path: str, *, exists: bool) -> dict[str, Any]:
@@ -663,6 +750,8 @@ def _render_review_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str, An
         st.info("暂无人工复核模板，可运行 python -m core.jobs.export_review_template。")
     if selection_df.empty:
         st.info("暂无候选股票。")
+        if tables and "本地 DuckDB 真实数据" in str(tables.get("_data_source", "")):
+            st.warning("行情数据存在，但尚未生成本地因子和选股结果，请运行 python -m core.jobs.run_daily_workflow --skip-update。")
         return
     st.write("候选股票")
     st.dataframe(filter_selection_data(selection_df).head(20), use_container_width=True)
@@ -1159,7 +1248,7 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     env_values = read_env_file(env_path)
     display_values = masked_env_values(env_values)
     status = summarize_update_status(tables)
-    effective = effective_pool_config(env_values)
+    effective = effective_pool_config(env_values, status)
     date_status = build_date_status(env_values, status)
 
     st.write("当前生效配置")
@@ -1408,8 +1497,9 @@ def build_settings_updates(
     return updates, {"invalid": [] if use_preset else parsed["invalid"]}
 
 
-def effective_pool_config(values: dict[str, str]) -> dict[str, Any]:
+def effective_pool_config(values: dict[str, str], status: dict[str, Any] | None = None) -> dict[str, Any]:
     """Describe the currently effective stock-pool configuration."""
+    resolved_status = status or {}
     symbols = parse_stock_symbols(values.get("AKSHARE_SAMPLE_SYMBOLS", ""))
     preset = values.get("REAL_UNIVERSE_PRESET", "mini")
     if symbols["symbols"]:
@@ -1425,12 +1515,19 @@ def effective_pool_config(values: dict[str, str]) -> dict[str, Any]:
             "preset_inactive": True,
             "message": "AKSHARE_SAMPLE_SYMBOLS 不为空，当前优先使用自定义股票池，REAL_UNIVERSE_PRESET 当前不生效。",
         }
+    configured_count = int(resolved_status.get("configured_symbol_count", 0) or 0)
+    if configured_count <= 0 and preset != "full":
+        configured_count = _configured_symbol_count(values)
     return {
         "mode": "preset",
         "mode_label": "REAL_UNIVERSE_PRESET=full（沪深 A 股全市场，不含北交所）" if preset == "full" else "REAL_UNIVERSE_PRESET",
-        "symbol_count": 0,
+        "symbol_count": configured_count,
         "symbols": [],
-        "symbols_text": "使用预设：full（沪深 A 股全市场，不含北交所）" if preset == "full" else f"使用预设：{preset}",
+        "symbols_text": (
+            f"使用 full 沪深 A 股全市场股票池，不含北交所；当前解析 {configured_count} 只"
+            if preset == "full"
+            else f"使用预设：{preset}，当前解析 {configured_count} 只"
+        ),
         "akshare_sample_symbols": "",
         "real_universe_preset": preset,
         "preset_inactive": False,
@@ -1594,7 +1691,15 @@ def _configured_symbol_count(values: dict[str, str]) -> int:
     symbols = values.get("AKSHARE_SAMPLE_SYMBOLS", "")
     if symbols.strip():
         return len([item for item in symbols.split(",") if item.strip()])
-    return 0
+    preset = values.get("REAL_UNIVERSE_PRESET", "mini")
+    if preset == "full":
+        return 0
+    try:
+        from core.data_sources.universe_presets import get_universe_preset
+
+        return len(get_universe_preset(preset))
+    except Exception:
+        return 0
 
 
 def _bool_value(value: str) -> bool:
