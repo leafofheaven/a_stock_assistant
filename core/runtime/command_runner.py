@@ -13,6 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ALLOWED_COMMANDS: dict[str, list[str]] = {
     "doctor_daily_run": [sys.executable, "-m", "core.jobs.doctor_daily_run"],
     "update_real_data": [sys.executable, "-m", "core.jobs.update_real_data"],
+    "run_full_batch_update": [sys.executable, "-m", "core.jobs.run_full_batch_update"],
+    "preflight_data_source": [sys.executable, "-m", "core.jobs.preflight_data_source"],
     "run_daily_workflow": [sys.executable, "-m", "core.jobs.run_daily_workflow"],
     "run_daily_selection": [sys.executable, "-m", "core.jobs.run_daily_selection"],
     "diagnose_data_quality": [sys.executable, "-m", "core.jobs.diagnose_data_quality"],
