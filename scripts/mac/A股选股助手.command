@@ -18,10 +18,5 @@ fi
 
 source .venv/bin/activate
 
-if ! command -v streamlit >/dev/null 2>&1; then
-  echo "streamlit is not available. Run: pip install -e .[app]"
-  exit 1
-fi
-
-open "$APP_URL"
-streamlit run web/streamlit_app.py
+echo "Starting local console at $APP_URL"
+python scripts/start_streamlit_safe.py --port 8501

@@ -43,6 +43,14 @@ VERIFY_COMMANDS = {
         [sys.executable, "-m", "core.jobs.run_full_batch_update", "--dry-run", "--skip-network-preflight", "--max-symbols", "50", "--batch-size", "20", "--lookback-days", "120", "--max-retries", "1"],
         [sys.executable, "-m", "core.jobs.clean_generated_reports", "--force"],
     ],
+    "task52": [
+        [sys.executable, "-m", "pytest"],
+        [sys.executable, "scripts/check_project.py"],
+        [sys.executable, "scripts/check_task.py", "task52"],
+        [sys.executable, "-m", "core.jobs.run_elder_review"],
+        [sys.executable, "-m", "core.jobs.run_daily_workflow", "--doctor-before-run", "--skip-update", "--format", "all"],
+        [sys.executable, "-m", "core.jobs.clean_generated_reports", "--force"],
+    ],
 }
 
 

@@ -184,7 +184,7 @@ chmod +x scripts/mac/A股选股助手.command
 open scripts/mac/A股选股助手.command
 ```
 
-也可以双击 `scripts/mac/A股选股助手.command`，它会启动 Streamlit 并打开 Chrome / 默认浏览器访问 `http://localhost:8501`。这不是完整原生 Swift App，不做菜单栏常驻、不做自动后台更新、不做 dmg、不做云同步。
+也可以双击 `scripts/mac/A股选股助手.command`，它会调用 `scripts/start_streamlit_safe.py`，以 headless 方式启动 Streamlit，并在服务可访问后只打开一次 `http://localhost:8501`。如果 8501 已有服务运行，不会重复启动第二个 Streamlit 进程。这不是完整原生 Swift App，不做菜单栏常驻、不做自动后台更新、不做 dmg、不做云同步。
 
 ## 文档目录
 

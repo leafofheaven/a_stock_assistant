@@ -18,6 +18,10 @@ ELDER_REVIEW_COLUMNS = [
     "name",
     "industry",
     "trade_date",
+    "review_date",
+    "price_latest_trade_date",
+    "price_row_count",
+    "price_date_note",
     "total_score",
     "elder_score",
     "action_hint",
@@ -115,7 +119,7 @@ def calculate_weekly_elder_trend(price_df: pd.DataFrame) -> pd.DataFrame:
             .dropna(subset=["close"])
             .reset_index(drop=True)
         )
-        if len(weekly) < 6:
+        if len(weekly) < 12:
             rows.append(
                 {
                     "ts_code": ts_code,
@@ -161,15 +165,45 @@ def build_elder_review(
     rows: list[dict[str, Any]] = []
     for _, candidate in candidates.iterrows():
         ts_code = str(candidate.get("ts_code", ""))
+        candidate_date = str(candidate.get("trade_date") or "")
         history = indicators[indicators["ts_code"].astype(str) == ts_code].sort_values("trade_date")
+        if candidate_date and "trade_date" in history.columns:
+            history = history[history["trade_date"].astype(str) <= candidate_date]
         if history.empty or len(history) < min_daily_rows:
-            rows.append(_review_row(candidate, None, None, 0, "数据不足", "日线数据不足，暂不做技术复核。"))
+            rows.append(
+                _review_row(
+                    candidate,
+                    None,
+                    None,
+                    0,
+                    "数据不足",
+                    f"日线数据不足，当前可用 {len(history)} 行，暂不做技术复核。",
+                    price_row_count=len(history),
+                )
+            )
             continue
         latest = history.iloc[-1]
         previous = history.iloc[-2] if len(history) >= 2 else latest
-        weekly_row = _latest_weekly_row(weekly, ts_code)
-        score, action_hint, reason, signals = _classify_elder_state(latest, previous, weekly_row)
-        rows.append(_review_row(candidate, latest, weekly_row, score, action_hint, reason))
+        review_date = str(latest.get("trade_date") or "")
+        weekly_row = _latest_weekly_row(weekly, ts_code, cutoff_date=review_date)
+        price_date_note = _price_date_note(candidate_date, review_date)
+        if weekly_row is not None and "数据不足" in str(weekly_row.get("weekly_reason") or ""):
+            score, action_hint, reason, signals = (
+                0,
+                "数据不足",
+                "周线样本不足，长周期趋势暂不做技术确认。",
+                {
+                    "weekly_trend": "数据不足",
+                    "daily_pullback": "数据足够",
+                    "force_signal": "数据足够",
+                    "elder_ray_signal": "数据足够",
+                },
+            )
+        else:
+            score, action_hint, reason, signals = _classify_elder_state(latest, previous, weekly_row)
+        if price_date_note:
+            reason = f"{reason} {price_date_note}"
+        rows.append(_review_row(candidate, latest, weekly_row, score, action_hint, reason, price_row_count=len(history), price_date_note=price_date_note))
         rows[-1].update(signals)
     return pd.DataFrame(rows)[ELDER_REVIEW_COLUMNS]
 
@@ -246,11 +280,19 @@ def _review_row(
     elder_score: int,
     action_hint: str,
     reason: str,
+    *,
+    price_row_count: int = 0,
+    price_date_note: str = "",
 ) -> dict[str, Any]:
     """Build one review output row."""
     row = {column: candidate.get(column) for column in ["rank", "ts_code", "name", "industry", "trade_date", "total_score"]}
+    review_date = str(latest.get("trade_date")) if latest is not None and latest.get("trade_date") is not None else None
     row.update(
         {
+            "review_date": review_date,
+            "price_latest_trade_date": review_date,
+            "price_row_count": int(price_row_count),
+            "price_date_note": price_date_note,
             "elder_score": elder_score,
             "action_hint": action_hint,
             "elder_reason": reason,
@@ -281,7 +323,6 @@ def _review_row(
     for column in indicator_columns:
         row[column] = _round_or_none(latest.get(column) if latest is not None else None)
     if latest is not None:
-        row["trade_date"] = str(latest.get("trade_date") or row.get("trade_date") or "")
         close_to_ema13 = _to_float(latest.get("close_to_ema13_pct"))
         close_to_ema22 = _to_float(latest.get("close_to_ema22_pct"))
         row["daily_pullback_ok"] = bool(abs(close_to_ema13) <= 5 or abs(close_to_ema22) <= 8)
@@ -300,13 +341,22 @@ def _review_action(action_hint: str) -> str:
     return "忽略"
 
 
-def _latest_weekly_row(weekly: pd.DataFrame, ts_code: str) -> pd.Series | None:
+def _latest_weekly_row(weekly: pd.DataFrame, ts_code: str, cutoff_date: str | None = None) -> pd.Series | None:
     if weekly.empty or "ts_code" not in weekly.columns:
         return None
     rows = weekly[weekly["ts_code"].astype(str) == ts_code]
+    if cutoff_date and "trade_date" in rows.columns:
+        rows = rows[rows["trade_date"].astype(str) <= str(cutoff_date)]
     if rows.empty:
         return None
     return rows.sort_values("trade_date").iloc[-1]
+
+
+def _price_date_note(candidate_date: str, review_date: str) -> str:
+    """Explain when review uses a stock's latest available date before the candidate date."""
+    if candidate_date and review_date and review_date < candidate_date:
+        return f"缺最新交易日行情，使用该股票最新可用日期 {review_date} 复核。"
+    return ""
 
 
 def _to_float(value: Any) -> float:

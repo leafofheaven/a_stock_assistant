@@ -14,6 +14,7 @@ from web.streamlit_app import (
     effective_pool_config,
     filter_factor_ranking,
     filter_selection_data,
+    format_elder_review_display,
     get_industry_options,
     load_dashboard_data,
     latest_external_positions,
@@ -42,6 +43,28 @@ def test_filter_selection_data_handles_empty_input() -> None:
 
     assert result.empty
     assert "total_score" in result.columns
+
+
+def test_format_elder_review_display_uses_continuous_display_order_and_source() -> None:
+    """Candidate rank may repeat across sources, but display_order must be clear."""
+    review = pd.DataFrame(
+        {
+            "rank": [1, 2, 1],
+            "ts_code": ["000001.SZ", "000002.SZ", "600000.SH"],
+            "name": ["平安银行", "万科A", "浦发银行"],
+            "total_score": [90.0, 80.0, 70.0],
+            "elder_score": [50, 60, 55],
+        }
+    )
+    candidate = format_elder_review_display(review.iloc[:2], source="今日候选")
+    watch = format_elder_review_display(review.iloc[2:], source="观察池")
+    combined = pd.concat([candidate, watch], ignore_index=True)
+    combined["display_order"] = range(1, len(combined) + 1)
+
+    assert combined["display_order"].tolist() == [1, 2, 3]
+    assert combined["candidate_rank"].tolist() == [1, 2, 1]
+    assert combined["source"].tolist() == ["今日候选", "今日候选", "观察池"]
+    assert combined["total_score"].tolist() == [90.0, 80.0, 70.0]
 
 
 def test_dataframe_to_csv_contains_headers_and_values() -> None:
