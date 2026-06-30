@@ -2373,6 +2373,12 @@ def check_task49(root: Path) -> list[str]:
             "tests/test_streamlit_startup_stability.py",
             "tests/test_duckdb_store.py",
             "tests/test_streamlit_app.py",
+            "tests/test_entry_zones.py",
+            "core/entry_zones/calculator.py",
+            "core/jobs/calculate_entry_zones.py",
+            "core/jobs/diagnose_entry_zones.py",
+            "core/jobs/export_entry_zone_report.py",
+            "docs/entry_zones.md",
         ],
     )
     store_source = read_source(root / "core/storage/duckdb_store.py")
@@ -2442,10 +2448,40 @@ def check_task49(root: Path) -> list[str]:
         + read_source(root / "tests/test_streamlit_app.py")
         + read_source(root / "tests/test_real_data_e2e_validation.py")
         + read_source(root / "tests/test_daily_workflow_summary_report.py")
+        + read_source(root / "tests/test_entry_zones.py")
     ).lower()
     for phrase in ["locked", "read_only", "dry-run", "friendly", "render_section", "database_locked", "real_universe_preset", "configured_symbol_count", "strategy_result", "local_display_selection_count", "factor_scores_written_rows"]:
         if phrase not in tests_source:
             failures.append(f"Task 49 tests should cover {phrase}.")
+
+    entry_source = read_source(root / "core/entry_zones/calculator.py")
+    for phrase in ["ema13", "ema22", "ema60", "support_20d", "support_60d", "resistance_20d", "resistance_60d", "atr_14", "entry_low", "entry_high", "stop_loss", "target_price", "reward_risk_ratio", "chase_risk", "entry_zone_status"]:
+        if phrase not in entry_source:
+            failures.append(f"entry zone calculator is missing {phrase}.")
+
+    schema_source = read_source(root / "core/storage/schema.sql")
+    if "entry_zone_snapshots" not in schema_source:
+        failures.append("schema.sql is missing entry_zone_snapshots.")
+
+    streamlit_source_lower = streamlit_source.lower()
+    for phrase in ["买入区间分析", "entry_zone_snapshots", "enrich_with_entry_zone_fields"]:
+        if phrase.lower() not in streamlit_source_lower:
+            failures.append(f"web/streamlit_app.py is missing entry zone UI phrase: {phrase}.")
+
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    for phrase in ["calculate_entry_zones", "diagnose_entry_zones", "export_entry_zone_report"]:
+        if phrase not in command_source:
+            failures.append(f"command_runner.py is missing {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["calculate_entry_zones", "diagnose_entry_zones", "export_entry_zone_report", "run_daily_workflow", "--skip-update"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task49 is missing {phrase}.")
+
+    docs = read_source(root / "README.md") + read_source(root / "docs/commands_reference.md") + read_source(root / "docs/entry_zones.md")
+    for phrase in ["买入区间", "支撑阻力", "止损位", "不自动交易"]:
+        if phrase not in docs:
+            failures.append(f"Task 49 docs are missing {phrase}.")
     return failures
 
 

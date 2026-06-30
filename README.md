@@ -90,6 +90,16 @@ python -m core.jobs.doctor_daily_run --post-run
 
 报告输出在 `reports/`，常看 `daily_workflow_*.md`、`selection_review_*.csv`、`watchlist_*.md`。完整复核流程请见 [docs/v0_1_handbook.md](docs/v0_1_handbook.md) 和 [docs/daily_workflow.md](docs/daily_workflow.md)。
 
+买入区间分析：
+
+```bash
+python -m core.jobs.calculate_entry_zones
+python -m core.jobs.diagnose_entry_zones
+python -m core.jobs.export_entry_zone_report --format all
+```
+
+该流程基于本地今日候选和观察池股票计算 EMA、支撑阻力、ATR、买入区间、止损位、目标价位和盈亏比，只供个人研究和人工复核，不自动交易。
+
 ## 历史功能入口索引
 
 这些入口保留用于任务检查和日常查找，详细说明见 `docs/`：
@@ -164,6 +174,7 @@ open scripts/mac/A股选股助手.command
 - [埃尔德复核与观察池流程](docs/elder_review_workflow.md)
 - [观察池每日候选跟踪](docs/watchlist_candidate_tracking.md)
 - [埃尔德复核历史回看](docs/elder_review_backtest.md)
+- [买入区间、支撑阻力和止损位](docs/entry_zones.md)
 - [持仓池](docs/position_pool.md)
 - [持仓每日跟踪](docs/position_tracking.md)
 - [沪深 A 股全市场股票池](docs/real_universe.md)

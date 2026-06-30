@@ -19,8 +19,11 @@ VERIFY_COMMANDS = {
     "task49": [
         [sys.executable, "-m", "pytest"],
         [sys.executable, "scripts/check_project.py"],
-        [sys.executable, "-m", "core.jobs.diagnose_streamlit_startup"],
         [sys.executable, "scripts/check_task.py", "task49"],
+        [sys.executable, "-m", "core.jobs.calculate_entry_zones"],
+        [sys.executable, "-m", "core.jobs.diagnose_entry_zones"],
+        [sys.executable, "-m", "core.jobs.export_entry_zone_report"],
+        [sys.executable, "-m", "core.jobs.run_daily_workflow", "--doctor-before-run", "--skip-update", "--format", "all"],
     ],
 }
 

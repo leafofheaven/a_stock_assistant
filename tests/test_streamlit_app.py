@@ -324,6 +324,7 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
         "选股逻辑",
         "埃尔德复核",
         "观察池跟踪",
+        "买入区间分析",
         "持仓池",
         "策略回测",
         "数据更新状态",
