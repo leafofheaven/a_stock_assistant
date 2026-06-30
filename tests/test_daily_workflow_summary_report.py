@@ -62,6 +62,9 @@ def _overrides(report_dir: Path, calls: dict[str, int] | None = None) -> dict[st
                 "latest_price_date": "20240628",
                 "stock_pool_count": 3,
                 "candidate_count": 2,
+                "factor_scores_written_rows": 3,
+                "strategy_result_written_rows": 2,
+                "local_display_selection_count": 2,
                 "top_candidates": [
                     {"rank": 1, "ts_code": "002475.SZ", "name": "立讯精密", "total_score": 64.01},
                     {"rank": 2, "ts_code": "000001.SZ", "name": "平安银行", "total_score": 49.6},

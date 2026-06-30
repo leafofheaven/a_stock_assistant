@@ -751,7 +751,11 @@ def _render_review_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str, An
     if selection_df.empty:
         st.info("暂无候选股票。")
         if tables and "本地 DuckDB 真实数据" in str(tables.get("_data_source", "")):
-            st.warning("行情数据存在，但尚未生成本地因子和选股结果，请运行 python -m core.jobs.run_daily_workflow --skip-update。")
+            latest_daily_report = tables.get("_latest_daily_workflow_report")
+            if isinstance(latest_daily_report, dict) and latest_daily_report.get("top_candidates"):
+                st.warning("报告中存在候选结果，但尚未写入 DuckDB，请重新运行日常工作流或执行修复命令。")
+            else:
+                st.warning("行情数据存在，但尚未生成本地因子和选股结果，请运行 python -m core.jobs.run_daily_workflow --skip-update。")
         return
     st.write("候选股票")
     st.dataframe(filter_selection_data(selection_df).head(20), use_container_width=True)

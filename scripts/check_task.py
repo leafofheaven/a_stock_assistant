@@ -2399,6 +2399,7 @@ def check_task49(root: Path) -> list[str]:
         "priced_symbol_count",
         "coverage_rate",
         "尚未生成本地选股结果",
+        "报告中存在候选结果，但尚未写入 DuckDB",
         "DuckDB 被锁定",
         "lsof",
         "fileprovider",
@@ -2426,8 +2427,23 @@ def check_task49(root: Path) -> list[str]:
         if phrase not in verify_source:
             failures.append(f"verify_task.py is missing {phrase}.")
 
-    tests_source = (read_source(root / "tests/test_streamlit_startup_stability.py") + read_source(root / "tests/test_duckdb_store.py") + read_source(root / "tests/test_streamlit_app.py")).lower()
-    for phrase in ["locked", "read_only", "dry-run", "friendly", "render_section", "database_locked", "real_universe_preset", "configured_symbol_count", "strategy_result"]:
+    selection_source = read_source(root / "core/jobs/run_daily_selection.py")
+    for phrase in ["strategy_result_written_rows", "factor_scores_written_rows", "local_display_selection_count", "_replace_strategy_result_for_date", "upsert_dataframe(\"factor_scores\""]:
+        if phrase not in selection_source:
+            failures.append(f"run_daily_selection.py is missing Task 49A persistence phrase: {phrase}.")
+
+    workflow_source = read_source(root / "core/jobs/run_daily_workflow.py")
+    if "local_display_selection_count" not in workflow_source:
+        failures.append("run_daily_workflow.py should check local_display_selection_count for real selection success.")
+
+    tests_source = (
+        read_source(root / "tests/test_streamlit_startup_stability.py")
+        + read_source(root / "tests/test_duckdb_store.py")
+        + read_source(root / "tests/test_streamlit_app.py")
+        + read_source(root / "tests/test_real_data_e2e_validation.py")
+        + read_source(root / "tests/test_daily_workflow_summary_report.py")
+    ).lower()
+    for phrase in ["locked", "read_only", "dry-run", "friendly", "render_section", "database_locked", "real_universe_preset", "configured_symbol_count", "strategy_result", "local_display_selection_count", "factor_scores_written_rows"]:
         if phrase not in tests_source:
             failures.append(f"Task 49 tests should cover {phrase}.")
     return failures

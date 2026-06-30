@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -95,7 +96,7 @@ def _load_selection_payload(
     use_existing: bool,
 ) -> dict[str, Any]:
     """Load existing or computed local selection data for review export."""
-    summary = run_daily_selection(settings=settings, store=store)
+    summary = _run_daily_selection_for_export(settings=settings, store=store, top_n=top_n)
     if use_existing:
         existing = _load_existing_tables(store, top_n)
         if existing is not None:
@@ -163,6 +164,17 @@ def _safe_read_table(store: DuckDBStore, table_name: str) -> pd.DataFrame:
         return store.read_table(table_name)
     except DuckDBStoreError:
         return pd.DataFrame()
+
+
+def _run_daily_selection_for_export(settings: Settings, store: DuckDBStore, top_n: int) -> dict[str, Any]:
+    """Run daily selection with top_n when the callable supports it."""
+    try:
+        parameters = inspect.signature(run_daily_selection).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "top_n" in parameters:
+        return run_daily_selection(settings=settings, store=store, top_n=top_n)
+    return run_daily_selection(settings=settings, store=store)
 
 
 def _attach_stock_basic_fields(selection_df: pd.DataFrame, stock_basic_df: pd.DataFrame) -> pd.DataFrame:

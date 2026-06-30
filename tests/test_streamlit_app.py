@@ -211,6 +211,81 @@ def test_load_dashboard_data_does_not_show_sample_when_strategy_result_empty(tmp
     assert data["tables"]["_latest_price_date"] == "20240130"
 
 
+def test_load_dashboard_data_reads_latest_strategy_result_from_duckdb(tmp_path, monkeypatch) -> None:
+    """Streamlit should display persisted local strategy_result rows instead of sample data."""
+    db_path = tmp_path / "real-selection.duckdb"
+    store = DuckDBStore(db_path)
+    store.initialize()
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame([{"ts_code": "603986.SH", "symbol": "603986", "name": "兆易创新", "industry": "半导体", "market": "主板", "exchange": "SSE"}]),
+    )
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": "603986.SH",
+                    "trade_date": "20260626",
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "pre_close": 100.0,
+                    "change": 0.5,
+                    "pct_chg": 0.5,
+                    "vol": 1_000_000,
+                    "amount": 200_000_000,
+                }
+            ]
+        ),
+    )
+    store.upsert_dataframe(
+        "strategy_result",
+        pd.DataFrame(
+            [
+                {
+                    "trade_date": "20260626",
+                    "rank": 1,
+                    "ts_code": "603986.SH",
+                    "name": "兆易创新",
+                    "industry": "半导体",
+                    "close": 100.5,
+                    "pe": 32.0,
+                    "pb": 5.1,
+                    "total_score": 68.37,
+                    "trend_score": 70.0,
+                    "momentum_score": 65.0,
+                    "liquidity_score": 80.0,
+                    "fundamental_score": 55.0,
+                    "volatility_score": 60.0,
+                    "quality_score": 55.0,
+                    "valuation_score": 58.0,
+                    "risk_score": 60.0,
+                    "select_reason": "综合分 68.37",
+                    "risk_note": "需人工复核",
+                }
+            ]
+        ),
+    )
+    settings = SimpleNamespace(
+        data_provider="akshare",
+        duckdb_path=db_path,
+        akshare_sample_symbols="",
+        real_universe_preset="full",
+        include_bse=False,
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("core.storage.duckdb_store.get_settings", lambda: settings)
+
+    data = load_dashboard_data()
+
+    assert "sample" not in data["data_source"].lower()
+    assert data["selection"]["ts_code"].tolist() == ["603986.SH"]
+    assert data["selection"]["total_score"].tolist() == [68.37]
+    assert summarize_update_status(data["tables"])["latest_selection_date"] == "20260626"
+
+
 def test_describe_dashboard_data_source_marks_sample_and_real_data() -> None:
     """Dashboard data source helper should label sample and real data clearly."""
     sample = describe_dashboard_data_source({"data_source": "sample 数据（演示）", "tables": {}})

@@ -124,6 +124,25 @@ class DuckDBStore:
                 "pb": "DOUBLE",
             },
         )
+        self._add_columns_if_missing(
+            connection,
+            "strategy_result",
+            {
+                "close": "DOUBLE",
+                "pe": "DOUBLE",
+                "pb": "DOUBLE",
+                "trend_score": "DOUBLE",
+                "momentum_score": "DOUBLE",
+                "liquidity_score": "DOUBLE",
+                "fundamental_score": "DOUBLE",
+                "volatility_score": "DOUBLE",
+                "quality_score": "DOUBLE",
+                "valuation_score": "DOUBLE",
+                "risk_score": "DOUBLE",
+                "created_at": "TIMESTAMP",
+                "updated_at": "TIMESTAMP",
+            },
+        )
 
     def _add_columns_if_missing(
         self,

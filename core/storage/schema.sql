@@ -94,9 +94,22 @@ CREATE TABLE IF NOT EXISTS strategy_result (
     ts_code VARCHAR,
     name VARCHAR,
     industry VARCHAR,
+    close DOUBLE,
+    pe DOUBLE,
+    pb DOUBLE,
     total_score DOUBLE,
+    trend_score DOUBLE,
+    momentum_score DOUBLE,
+    liquidity_score DOUBLE,
+    fundamental_score DOUBLE,
+    volatility_score DOUBLE,
+    quality_score DOUBLE,
+    valuation_score DOUBLE,
+    risk_score DOUBLE,
     select_reason VARCHAR,
     risk_note VARCHAR,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
     PRIMARY KEY (trade_date, rank, ts_code)
 );
 
