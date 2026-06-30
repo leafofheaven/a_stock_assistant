@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.runtime import command_runner
-from core.runtime.command_runner import open_project_path, run_allowed_command
+from core.runtime.command_runner import ALLOWED_COMMANDS, open_project_path, run_allowed_command
 
 
 def test_command_runner_allows_whitelisted_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -28,6 +28,14 @@ def test_command_runner_allows_whitelisted_command(monkeypatch: pytest.MonkeyPat
     assert calls["cmd"][1:4] == ["-m", "core.jobs.doctor_daily_run", "--json"]
     assert calls["kwargs"]["cwd"] == tmp_path
     assert calls["kwargs"]["check"] is False
+
+
+def test_task51_update_commands_are_whitelisted() -> None:
+    """Task 51 Streamlit buttons should call registered safe commands."""
+    assert "preflight_data_source" in ALLOWED_COMMANDS
+    assert "run_full_batch_update" in ALLOWED_COMMANDS
+    assert ALLOWED_COMMANDS["preflight_data_source"][1:4] == ["-m", "core.jobs.preflight_data_source"]
+    assert ALLOWED_COMMANDS["run_full_batch_update"][1:4] == ["-m", "core.jobs.run_full_batch_update"]
 
 
 def test_command_runner_rejects_unlisted_command() -> None:

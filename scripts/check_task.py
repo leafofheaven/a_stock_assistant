@@ -62,6 +62,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task49": check_task49,
         "task50": check_task50,
         "task51": check_task51,
+        "task52": check_task52,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2657,6 +2658,96 @@ def check_task51(root: Path) -> list[str]:
     return failures
 
 
+def check_task52(root: Path) -> list[str]:
+    """Check Elder review date handling and Streamlit full-history loading."""
+    failures = check_paths(
+        root,
+        [
+            "core/technical/elder.py",
+            "core/jobs/run_elder_review.py",
+            "web/streamlit_app.py",
+            "tests/test_elder_review_date_handling.py",
+        ],
+    )
+    elder_source = read_source(root / "core/technical/elder.py")
+    for phrase in [
+        "review_date",
+        "price_latest_trade_date",
+        "price_row_count",
+        "price_date_note",
+        "使用该股票最新可用日期",
+        "周线样本不足",
+        "candidate_date",
+        "cutoff_date",
+    ]:
+        if phrase not in elder_source:
+            failures.append(f"core/technical/elder.py is missing Task 52 phrase: {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "_safe_read_dashboard_price_history",
+        "_safe_read_price_history_for_codes",
+        "_dashboard_focus_codes",
+        "format_elder_review_display",
+        "display_order",
+        "candidate_rank",
+        "rank 为今日选股原始排名",
+        "complete history",
+        "日线数据不足",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 52 dashboard phrase: {phrase}.")
+
+    starter_source = read_source(root / "scripts/start_streamlit_safe.py")
+    for phrase in [
+        "--server.headless",
+        "true",
+        "build_open_command",
+        "_open_browser_once",
+        "_wait_for_port",
+        "未启动新的 Streamlit，只打开已有页面一次",
+    ]:
+        if phrase not in starter_source:
+            failures.append(f"start_streamlit_safe.py is missing Task 52 launcher phrase: {phrase}.")
+
+    mac_launcher_source = read_source(root / "scripts/mac/A股选股助手.command")
+    if "python scripts/start_streamlit_safe.py --port 8501" not in mac_launcher_source:
+        failures.append("Mac launcher should delegate to start_streamlit_safe.py.")
+    if 'open "$APP_URL"' in mac_launcher_source or "streamlit run web/streamlit_app.py" in mac_launcher_source:
+        failures.append("Mac launcher should not both open URL and run Streamlit directly.")
+
+    export_source = read_source(root / "core/jobs/export_selection_review.py")
+    for phrase in ["review_date", "price_date_note", "merge(review[available], on=[\"ts_code\"]"]:
+        if phrase not in export_source:
+            failures.append(f"export_selection_review.py is missing Task 52 Elder merge phrase: {phrase}.")
+
+    tests_source = (
+        read_source(root / "tests/test_elder_review_date_handling.py")
+        + read_source(root / "tests/test_streamlit_startup_stability.py")
+        + read_source(root / "tests/test_mac_local_console_docs.py")
+        + read_source(root / "tests/test_streamlit_app.py")
+    )
+    for phrase in [
+        "global latest",
+        "日线数据不足",
+        "周线样本不足",
+        "_safe_read_dashboard_price_history",
+        "track_watchlist",
+        "total_score",
+        "headless",
+        "display_order",
+        "candidate_rank",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"Task 52 tests should cover {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task52", "check_task.py", "clean_generated_reports"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task52 is missing {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -2739,6 +2830,7 @@ def main(argv: list[str] | None = None) -> int:
             "task49",
             "task50",
             "task51",
+            "task52",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

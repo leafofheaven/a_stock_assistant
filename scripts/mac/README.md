@@ -16,9 +16,12 @@ chmod +x scripts/mac/A股选股助手.command
 
 1. 双击 `scripts/mac/A股选股助手.command`；
 2. 脚本会进入项目目录并激活 `.venv`；
-3. 自动打开 `http://localhost:8501`；
-4. 启动 `streamlit run web/streamlit_app.py`；
-5. 在 Chrome 中进入“参数设置 / 本地控制台”。
+3. 调用 `python scripts/start_streamlit_safe.py --port 8501`；
+4. 以 `--server.headless true` 启动 Streamlit，避免 Streamlit 自己再自动打开浏览器；
+5. 等本地服务可访问后，只打开一次 `http://localhost:8501`；
+6. 在 Chrome / 默认浏览器中进入“参数设置 / 本地控制台”。
+
+如果 8501 端口已有服务运行，启动器不会重复启动第二个 Streamlit 进程，只会打开已有页面一次。
 
 ## 参数设置页怎么用
 

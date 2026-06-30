@@ -208,7 +208,10 @@ def _attach_elder_fields(selection_df: pd.DataFrame, price_df: pd.DataFrame) -> 
         return selection_df.copy()
     elder_columns = [
         "ts_code",
-        "trade_date",
+        "review_date",
+        "price_latest_trade_date",
+        "price_row_count",
+        "price_date_note",
         "elder_score",
         "action_hint",
         "elder_reason",
@@ -221,8 +224,7 @@ def _attach_elder_fields(selection_df: pd.DataFrame, price_df: pd.DataFrame) -> 
     available = [column for column in elder_columns if column in review.columns]
     result = selection_df.copy()
     result["_original_order"] = range(len(result))
-    join_keys = ["ts_code", "trade_date"] if "trade_date" in result.columns and "trade_date" in review.columns else ["ts_code"]
-    merged = result.merge(review[available], on=join_keys, how="left", suffixes=("", "_elder"))
+    merged = result.merge(review[available], on=["ts_code"], how="left", suffixes=("", "_elder"))
     merged = merged.sort_values("_original_order").drop(columns=["_original_order"]).reset_index(drop=True)
     return merged
 

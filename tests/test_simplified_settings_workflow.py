@@ -99,7 +99,8 @@ def test_date_status_warns_when_database_date_is_before_target_date() -> None:
     )
 
     assert result["warning"] is True
-    assert "需要点击“保存并更新数据”" in result["message"]
+    assert "数据更新状态" in result["message"]
+    assert "批量补数据" in result["message"]
 
 
 def test_date_status_explains_empty_end_date() -> None:

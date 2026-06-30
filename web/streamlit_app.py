@@ -429,11 +429,13 @@ def load_dashboard_data() -> dict[str, Any]:
         watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
         positions = _load_positions_for_dashboard(store)
         tables["_watchlist_snapshot"] = watchlist_snapshot
+        dashboard_price = _safe_read_dashboard_price_history(store, tables, watchlist=watchlist, positions=positions)
+        tables["_dashboard_price_history"] = dashboard_price
         return {
             "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据（尚未生成本地选股结果）",
             "selection": pd.DataFrame(columns=SELECTION_COLUMNS),
             "stock_basic": tables["stock_basic"],
-            "price": tables["daily_price"],
+            "price": dashboard_price,
             "daily_basic": tables["daily_basic"],
             "factor_scores": tables["factor_scores"],
             "backtest": {},
@@ -455,11 +457,13 @@ def load_dashboard_data() -> dict[str, Any]:
     watchlist_snapshot = _load_tracking_snapshot_for_dashboard(store)
     positions = _load_positions_for_dashboard(store)
     tables["_watchlist_snapshot"] = watchlist_snapshot
+    dashboard_price = _safe_read_dashboard_price_history(store, tables, watchlist=watchlist, positions=positions)
+    tables["_dashboard_price_history"] = dashboard_price
     return {
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
         "selection": tables["strategy_result"],
         "stock_basic": tables["stock_basic"],
-        "price": tables["daily_price"],
+        "price": dashboard_price,
         "daily_basic": tables["daily_basic"],
         "factor_scores": tables["factor_scores"],
         "backtest": {},
@@ -487,6 +491,78 @@ def _safe_load_dashboard_tables(store: Any) -> dict[str, pd.DataFrame]:
         "external_trades": _safe_read_store_table(store, "external_trades", limit=10000),
     }
     return tables
+
+
+def _safe_read_dashboard_price_history(
+    store: Any,
+    tables: dict[str, pd.DataFrame],
+    *,
+    watchlist: pd.DataFrame | None = None,
+    positions: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Read full local price history only for dashboard focus stocks.
+
+    The dashboard intentionally loads large tables with limits so the page can
+    start quickly. Elder review needs complete history for the current
+    candidates/watchlist; otherwise a limited full-universe sample can make
+    valid candidates look like they have "日线数据不足".
+    """
+    codes = _dashboard_focus_codes(tables, watchlist=watchlist, positions=positions)
+    focused = _safe_read_price_history_for_codes(store, codes)
+    if not focused.empty:
+        return focused
+    return tables.get("daily_price", pd.DataFrame())
+
+
+def _dashboard_focus_codes(
+    tables: dict[str, pd.DataFrame],
+    *,
+    watchlist: pd.DataFrame | None = None,
+    positions: pd.DataFrame | None = None,
+) -> list[str]:
+    """Return symbols whose complete price history is useful for page render."""
+    frames = [
+        tables.get("strategy_result", pd.DataFrame()),
+        tables.get("factor_scores", pd.DataFrame()),
+        tables.get("review_decisions", pd.DataFrame()),
+        tables.get("entry_zone_snapshots", pd.DataFrame()),
+        watchlist if isinstance(watchlist, pd.DataFrame) else pd.DataFrame(),
+        positions if isinstance(positions, pd.DataFrame) else pd.DataFrame(),
+    ]
+    codes: list[str] = []
+    seen: set[str] = set()
+    for frame in frames:
+        if frame.empty or "ts_code" not in frame.columns:
+            continue
+        for value in frame["ts_code"].dropna().astype(str).tolist():
+            code = value.strip()
+            if code and code not in seen:
+                seen.add(code)
+                codes.append(code)
+    return codes
+
+
+def _safe_read_price_history_for_codes(store: Any, codes: list[str]) -> pd.DataFrame:
+    """Read complete daily_price rows for specific symbols using read-only DuckDB."""
+    from core.storage.duckdb_store import DuckDBStoreLockedError
+
+    symbols = [code for code in dict.fromkeys(codes) if code]
+    if not symbols:
+        return pd.DataFrame()
+    placeholders = ", ".join(["?"] * len(symbols))
+    query = f"""
+        SELECT *
+        FROM daily_price
+        WHERE ts_code IN ({placeholders})
+        ORDER BY ts_code, trade_date
+    """
+    try:
+        with store.connect(read_only=True) as connection:
+            return connection.execute(query, symbols).fetchdf()
+    except DuckDBStoreLockedError:
+        raise
+    except Exception:
+        return pd.DataFrame()
 
 
 def _lightweight_database_metrics(settings: Any, store: Any, tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
@@ -590,6 +666,12 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables = dict(tables)
     real_tables["factor_scores"] = factor_scores
     real_tables["strategy_result"] = selected
+    focused_price = _safe_read_price_history_for_codes(
+        store,
+        _dashboard_focus_codes({**tables, "strategy_result": selected, "factor_scores": factor_scores}),
+    )
+    if not focused_price.empty:
+        real_tables["_dashboard_price_history"] = focused_price
     real_tables["_data_source"] = f"{settings.data_provider} 本地 DuckDB 真实数据"
     real_tables["_configured_symbol_count"] = batch_diagnostic.get("configured_symbol_count", 0)
     real_tables["_priced_symbol_count"] = batch_diagnostic.get("priced_symbol_count", 0)
@@ -623,7 +705,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
         "selection": selected,
         "stock_basic": tables["stock_basic"],
-        "price": tables["daily_price"],
+        "price": real_tables.get("_dashboard_price_history", tables["daily_price"]),
         "daily_basic": tables["daily_basic"],
         "factor_scores": factor_scores,
         "factor_quality": diagnostic.get("factor_quality", {}),
@@ -1176,8 +1258,12 @@ def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.D
     if review_df.empty:
         st.info("暂无埃尔德复核结果。请先运行每日选股并确保本地 daily_price 有足够行情。")
         return
+    display_df = format_elder_review_display(review_df, source="今日候选")
+    st.info("rank 为今日选股原始排名；如同时展示观察池，观察池记录会单独分组或使用 display_order 展示。")
     display_columns = [
-        "rank",
+        "display_order",
+        "source",
+        "candidate_rank",
         "ts_code",
         "name",
         "industry",
@@ -1201,12 +1287,42 @@ def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.D
         "close_to_ema13_pct",
         "close_to_ema22_pct",
     ]
-    available = [column for column in display_columns if column in review_df.columns]
-    st.dataframe(review_df[available], use_container_width=True)
+    available = [column for column in display_columns if column in display_df.columns]
+    st.dataframe(display_df[available], use_container_width=True)
     st.write("状态分布")
     st.dataframe(review_df["action_hint"].value_counts(dropna=False).rename_axis("action_hint").reset_index(name="count"), use_container_width=True)
     st.info("操作建议只用于人工复核流程，不改变今日选股 total_score 排序；“短线过热，不追”表示短期回撤风险偏高，不等于中期趋势一定转弱。批量导出可运行 python -m core.jobs.export_elder_review。")
     st.caption("命令行：python -m core.jobs.run_elder_review 或 python -m core.jobs.export_elder_review --format markdown")
+
+
+def format_elder_review_display(review_df: pd.DataFrame, *, source: str = "今日候选") -> pd.DataFrame:
+    """Return an Elder review display table with unambiguous ordering fields."""
+    if review_df.empty:
+        return review_df.copy()
+    result = review_df.copy().reset_index(drop=True)
+    result["source"] = source
+    if "rank" in result.columns:
+        result["candidate_rank"] = result["rank"]
+    elif "candidate_rank" not in result.columns:
+        result["candidate_rank"] = pd.NA
+    sort_columns: list[str] = []
+    ascending: list[bool] = []
+    if "source" in result.columns:
+        result["_source_order"] = result["source"].map({"今日候选": 0, "观察池": 1, "持仓池": 2}).fillna(9)
+        sort_columns.append("_source_order")
+        ascending.append(True)
+    if "candidate_rank" in result.columns:
+        result["_candidate_rank_sort"] = pd.to_numeric(result["candidate_rank"], errors="coerce")
+        sort_columns.append("_candidate_rank_sort")
+        ascending.append(True)
+    elif "total_score" in result.columns:
+        sort_columns.append("total_score")
+        ascending.append(False)
+    if sort_columns:
+        result = result.sort_values(sort_columns, ascending=ascending, na_position="last")
+    result = result.reset_index(drop=True)
+    result["display_order"] = range(1, len(result) + 1)
+    return result.drop(columns=[column for column in ["_source_order", "_candidate_rank_sort"] if column in result.columns])
 
 
 def _render_positions_tab(st: Any, positions_df: pd.DataFrame) -> None:
@@ -1288,7 +1404,7 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     if status.get("bse_filter_note"):
         st.caption(status["bse_filter_note"])
     if status.get("batch_status") == "全市场数据未完成":
-        st.warning("全市场数据未完成：当前结果只基于本地已有行情股票。点击“保存并更新数据”会继续补齐缺行情或最新不足的股票。")
+        st.warning("全市场数据未完成：当前结果只基于本地已有行情股票。请在本页下方“全市场批量补数据”区域继续补齐缺行情或最新不足的股票。")
     st.write({"是否 sample 数据": status["is_sample_data"], "是否真实数据": status["is_real_data"]})
     basic_quality = status.get("basic_quality", {})
     if basic_quality:
@@ -1579,6 +1695,7 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     """Render local settings and command console."""
     st.subheader("参数设置 / 本地控制台")
     st.caption("仅供个人研究使用，不自动交易。页面只执行预设白名单命令。")
+    st.info("本地控制台用于保存参数、本地重算和日常工作流；full 股票池批量补数据请到“数据更新状态”页的“全市场批量补数据”区域执行。")
     env_path = PROJECT_ROOT / ".env"
     env_values = read_env_file(env_path)
     display_values = masked_env_values(env_values)
@@ -1734,12 +1851,12 @@ def _render_local_console_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         else:
             saved = _save_console_settings(st, env_path, updates)
             if saved and save_only:
-                st.info("参数已保存，但数据库尚未更新。若要生效，请点击“保存并更新数据”。请点击页面右上角刷新，或按 R 重新加载页面。")
+                st.info("参数已保存，但数据库尚未更新。full 批量补数据请到“数据更新状态”页执行；本页可用于本地重算或日常工作流。请点击页面右上角刷新，或按 R 重新加载页面。")
             elif saved and save_recalculate:
                 st.info("该操作不会联网更新行情，只会用本地已有数据重新生成报告。")
                 _run_console_action(st, "保存并本地重算", "run_daily_workflow", ["--doctor-before-run", "--skip-update", "--format", "all"])
             elif saved and save_update:
-                st.info("该操作会联网更新真实行情数据，可能较慢。")
+                st.info("该操作会运行完整日常工作流并联网更新真实行情；如果只是给 full 股票池分批补数据，请优先到“数据更新状态”页使用“全市场批量补数据”。")
                 _run_console_action(st, "保存并更新数据", "run_daily_workflow", ["--doctor-before-run", "--backup-before-run", "--format", "all"])
 
     st.write("一键操作区")
@@ -1889,13 +2006,13 @@ def build_date_status(env_values: dict[str, str], status: dict[str, Any]) -> dic
         warning = True
         message = (
             f"全市场数据未完成：基础股票池 {configured_count} 只，已有行情 {priced_count} 只，"
-            f"缺行情 {missing_count} 只，最新不足 {stale_count} 只。点击“保存并更新数据”会继续补齐。"
+            f"缺行情 {missing_count} 只，最新不足 {stale_count} 只。请到“数据更新状态”页使用“全市场批量补数据”。"
         )
     elif full_mode and configured_count:
         message = "full 股票池覆盖率已达到当前配置。"
     if end_date and latest_price_date and str(latest_price_date) < str(end_date):
         warning = True
-        message = f"参数结束日期为 {end_date}，但数据库最新行情日期仍为 {latest_price_date}。需要点击“保存并更新数据”才会拉取新数据。"
+        message = f"参数结束日期为 {end_date}，但数据库最新行情日期仍为 {latest_price_date}。请到“数据更新状态”页运行数据源预检和批量补数据。"
     elif end_date and not warning:
         message = "数据库最新行情日期已达到或晚于参数结束日期。"
     return {

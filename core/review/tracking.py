@@ -722,12 +722,15 @@ def _build_watchlist_events(*, store: DuckDBStore, snapshots: pd.DataFrame, trad
         elif old and old.get("watch_status") != item.get("watch_status"):
             event_type = "status_change"
             reason = f"观察池状态从 {old.get('watch_status')} 变为 {item.get('watch_status')}。"
-        elif item.get("rank_change") is not None and abs(int(item.get("rank_change") or 0)) >= 5:
-            event_type = "rank_up" if int(item.get("rank_change") or 0) > 0 else "rank_down"
-            reason = f"排名明显变化 {item.get('rank_change')}。"
-        elif item.get("total_score_change") is not None and abs(float(item.get("total_score_change") or 0)) >= 5:
-            event_type = "score_up" if float(item.get("total_score_change") or 0) > 0 else "score_down"
-            reason = f"综合分明显变化 {float(item.get('total_score_change') or 0):.2f}。"
+        else:
+            rank_change = _optional_int(item.get("rank_change"))
+            score_change = _optional_float(item.get("total_score_change"))
+            if rank_change is not None and abs(rank_change) >= 5:
+                event_type = "rank_up" if rank_change > 0 else "rank_down"
+                reason = f"排名明显变化 {rank_change}。"
+            elif score_change is not None and abs(score_change) >= 5:
+                event_type = "score_up" if score_change > 0 else "score_down"
+                reason = f"综合分明显变化 {score_change:.2f}。"
         if not event_type:
             continue
         rows.append(

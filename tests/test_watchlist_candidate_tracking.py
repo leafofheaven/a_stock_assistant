@@ -10,7 +10,7 @@ import pandas as pd
 from core.jobs.export_watchlist_tracking import export_watchlist_tracking_report
 from core.jobs.refresh_watchlist_from_selection import refresh_watchlist_from_selection
 from core.jobs.track_watchlist import track_watchlist
-from core.review.tracking import read_watchlist_daily_snapshots, read_watchlist_events
+from core.review.tracking import _build_watchlist_events, read_watchlist_daily_snapshots, read_watchlist_events
 from core.storage.duckdb_store import DuckDBStore
 from web.streamlit_app import enrich_selection_with_watchlist_status, summarize_watchlist_snapshot
 
@@ -176,3 +176,26 @@ def test_streamlit_watchlist_helpers_enrich_selection_rows(tmp_path: Path) -> No
     assert bool(enriched.iloc[0]["is_in_watchlist"]) is True
     assert bool(enriched.iloc[0]["suggest_add_to_watchlist"]) is False
     assert summary["total"] == 1
+
+
+def test_watchlist_events_ignore_nan_rank_change(tmp_path: Path) -> None:
+    """NaN rank_change should not crash event generation."""
+    settings = _settings(tmp_path)
+    store = DuckDBStore(settings.duckdb_path)
+    store.initialize()
+    snapshots = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": "20240102",
+                "watch_status": "active_watch",
+                "new_candidate_flag": False,
+                "rank_change": pd.NA,
+                "total_score_change": pd.NA,
+            }
+        ]
+    )
+
+    events = _build_watchlist_events(store=store, snapshots=snapshots, trade_date="20240102")
+
+    assert events.empty

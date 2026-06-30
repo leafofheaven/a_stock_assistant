@@ -19,13 +19,14 @@ def test_mac_launcher_files_exist() -> None:
 
 
 def test_mac_launcher_starts_streamlit_and_opens_localhost() -> None:
-    """Launcher should activate .venv, open localhost, and run Streamlit."""
+    """Launcher should delegate to the safe starter to avoid duplicate browser windows."""
     source = _read("scripts/mac/A股选股助手.command")
 
     assert 'PROJECT_DIR="/Users/wanghao/Documents/股票"' in source
     assert "source .venv/bin/activate" in source
-    assert 'open "$APP_URL"' in source
-    assert "streamlit run web/streamlit_app.py" in source
+    assert "python scripts/start_streamlit_safe.py --port 8501" in source
+    assert 'open "$APP_URL"' not in source
+    assert "streamlit run web/streamlit_app.py" not in source
     assert "http://localhost:8501" in source
 
 

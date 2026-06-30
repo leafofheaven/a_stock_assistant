@@ -60,6 +60,32 @@ def test_streaming_runner_returns_lines_incrementally(monkeypatch, tmp_path: Pat
     assert calls["kwargs"]["stderr"] == command_runner.subprocess.STDOUT
 
 
+def test_streaming_runner_allows_task51_preflight_and_full_batch(monkeypatch, tmp_path: Path) -> None:
+    """Task 51 page buttons should not fail with Command is not allowed."""
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        stdout = iter(["ok\n"])
+
+        def wait(self, timeout=None) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    def fake_popen(cmd, **kwargs):
+        calls.append(cmd)
+        return FakeProcess()
+
+    monkeypatch.setattr(command_runner.subprocess, "Popen", fake_popen)
+
+    assert run_command_streaming("preflight_data_source", cwd=tmp_path).status == "success"
+    assert run_command_streaming("run_full_batch_update", ["--dry-run", "--skip-network-preflight"], cwd=tmp_path).status == "success"
+    assert calls[0][1:3] == ["-m", "core.jobs.preflight_data_source"]
+    assert calls[1][1:3] == ["-m", "core.jobs.run_full_batch_update"]
+    assert calls[1][3:] == ["--dry-run", "--skip-network-preflight"]
+
+
 def test_streaming_runner_returns_failed_status_and_logs(monkeypatch, tmp_path: Path) -> None:
     """Non-zero commands should preserve return code and output logs."""
     class FakeProcess:
