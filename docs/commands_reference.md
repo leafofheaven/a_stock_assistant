@@ -173,9 +173,13 @@ python -m core.jobs.run_real_workflow --backup-before-run
 命令：
 
 ```bash
+python -m core.jobs.diagnose_data_source_network --format text
+python -m core.jobs.diagnose_data_source_network --format json
 python -m core.jobs.preflight_data_source
 python -m core.jobs.run_full_batch_update --max-symbols 500 --batch-size 50 --lookback-days 250 --max-retries 1
 ```
+
+`diagnose_data_source_network` 用于数据源网络诊断，只读检查 DuckDB、代理、DNS、东方财富 K 线接口、Python 请求、curl 默认请求、curl IPv4、curl IPv6 和直连路径，不写 DuckDB，不启动批量更新。Wi-Fi 下东方财富接口失败时，先运行该命令；如果诊断建议切换手机热点，可以切换网络后再重试。
 
 作用：为 `REAL_UNIVERSE_PRESET=full` 做页面化同款补数据。`preflight_data_source` 会检查 DuckDB 锁、Python 代理和东方财富 K 线接口；接口不可用时不要启动批量更新。`run_full_batch_update` 会把参数映射到 `FULL_UPDATE_MAX_SYMBOLS`、`FULL_UPDATE_BATCH_SIZE`、`FULL_UPDATE_LOOKBACK_DAYS` 和 `FULL_UPDATE_MAX_RETRIES`，然后调用现有 `update_real_data`。命令和页面都使用“本次未处理数量”描述未纳入本轮计划的股票，不表示永久跳过。
 

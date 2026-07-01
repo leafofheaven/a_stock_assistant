@@ -67,6 +67,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task54": check_task54,
         "task55": check_task55,
         "task56": check_task56,
+        "task57a": check_task57a,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -3108,6 +3109,85 @@ def check_task56(root: Path) -> list[str]:
     return failures
 
 
+def check_task57a(root: Path) -> list[str]:
+    """Check data source network diagnosis and preflight enhancement."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/diagnose_data_source_network.py",
+            "core/runtime/data_source_preflight.py",
+            "core/jobs/preflight_data_source.py",
+            "tests/test_data_source_network_diagnosis.py",
+            "scripts/verify_task.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    diag_source = read_source(root / "core/jobs/diagnose_data_source_network.py")
+    for phrase in [
+        "数据源网络诊断",
+        "push2his.eastmoney.com",
+        "secid=0.000001",
+        "EASTMONEY_USER_AGENT",
+        "EASTMONEY_REFERER",
+        "diagnose_dns",
+        "curl_ipv4",
+        "curl_ipv6",
+        "curl_noproxy",
+        "python_default",
+        "classify_diagnosis",
+        "suggested_action",
+        "urllib.request.getproxies",
+        "scutil",
+        "DuckDB",
+        "手机热点",
+        "json",
+    ]:
+        if phrase not in diag_source:
+            failures.append(f"diagnose_data_source_network.py is missing Task 57A phrase: {phrase}.")
+    for forbidden in ["update_real_data", "run_daily_workflow", "export_daily_research_workbook"]:
+        if forbidden in diag_source:
+            failures.append(f"diagnose_data_source_network.py should not run heavy task: {forbidden}.")
+
+    preflight_source = read_source(root / "core/runtime/data_source_preflight.py") + read_source(root / "core/jobs/preflight_data_source.py")
+    for phrase in ["dns_status", "ipv4_status", "ipv6_status", "suggested_action", "check_eastmoney_dns"]:
+        if phrase not in preflight_source:
+            failures.append(f"preflight code is missing Task 57A field: {phrase}.")
+
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    if "diagnose_data_source_network" not in command_source:
+        failures.append("command_runner.py is missing diagnose_data_source_network.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["运行数据源网络诊断", "diagnose_data_source_network", "数据源网络诊断"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 57A phrase: {phrase}.")
+
+    tests_source = read_source(root / "tests/test_data_source_network_diagnosis.py")
+    for phrase in [
+        "test_diagnose_data_source_network_outputs_text",
+        "test_diagnose_data_source_network_outputs_json",
+        "test_diagnosis_masks_sensitive_proxy_values",
+        "test_diagnosis_classifies_ipv4_success_ipv6_failure",
+        "test_diagnosis_classifies_all_network_failures",
+        "test_preflight_includes_network_diagnosis_summary_on_failure",
+        "test_streamlit_has_network_diagnosis_button",
+        "test_no_algorithm_changes",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"Task 57A tests are missing {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task57a", "diagnose_data_source_network", "--format", "json"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task57a is missing {phrase}.")
+
+    docs_source = read_source(root / "docs/commands_reference.md")
+    for phrase in ["diagnose_data_source_network", "数据源网络诊断", "Wi-Fi", "手机热点"]:
+        if phrase not in docs_source:
+            failures.append(f"docs/commands_reference.md is missing Task 57A wording: {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -3195,6 +3275,7 @@ def main(argv: list[str] | None = None) -> int:
             "task54",
             "task55",
             "task56",
+            "task57a",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

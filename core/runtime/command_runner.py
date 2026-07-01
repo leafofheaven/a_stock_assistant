@@ -15,6 +15,7 @@ ALLOWED_COMMANDS: dict[str, list[str]] = {
     "update_real_data": [sys.executable, "-m", "core.jobs.update_real_data"],
     "run_full_batch_update": [sys.executable, "-m", "core.jobs.run_full_batch_update"],
     "preflight_data_source": [sys.executable, "-m", "core.jobs.preflight_data_source"],
+    "diagnose_data_source_network": [sys.executable, "-m", "core.jobs.diagnose_data_source_network"],
     "run_daily_workflow": [sys.executable, "-m", "core.jobs.run_daily_workflow"],
     "run_daily_selection": [sys.executable, "-m", "core.jobs.run_daily_selection"],
     "diagnose_data_quality": [sys.executable, "-m", "core.jobs.diagnose_data_quality"],
