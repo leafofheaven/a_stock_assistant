@@ -2958,9 +2958,32 @@ def check_task55(root: Path) -> list[str]:
         "序号只代表当前 Sheet 显示顺序",
         "外部模拟持仓",
         "数据质量",
+        "计算口径总表",
+        "total_score =",
+        "0.30 * trend_score",
+        "return_20d = close / close.shift(20) - 1",
+        "pe_score = 1 / pe",
+        "volatility_20d",
+        "### 7.1 埃尔德复核规则表",
+        "周线趋势改善：+35",
+        "### 8.1 买入区间计算口径",
+        "reward_risk_ratio = reward / risk",
+        "## 15. 源码位置索引",
+        "core/jobs/run_daily_selection.py::_calculate_minimal_real_scores",
+        "core/technical/elder.py::_classify_elder_state",
+        "core/entry_zones/calculator.py::_entry_zone_record",
     ]:
         if phrase not in guide:
             failures.append(f"core_logic_guide.md is missing phrase: {phrase}.")
+    for forbidden in [
+        "来自趋势相关指标。",
+        "来自动量信息",
+        "来自成交额、换手率等流动性信息。",
+        "来自 ROE、PE、PB、营收增长等基础面或估值字段。",
+        "来自波动率、回撤等风险相关指标。",
+    ]:
+        if forbidden in guide:
+            failures.append(f"core_logic_guide.md still contains generic wording: {forbidden}.")
 
     streamlit_source = read_source(root / "web/streamlit_app.py")
     for phrase in [
@@ -2986,6 +3009,11 @@ def check_task55(root: Path) -> list[str]:
         "test_core_logic_guide_mentions_excel_and_no_rank_policy",
         "test_streamlit_has_core_logic_doc_download",
         "test_no_algorithm_changes",
+        "test_core_logic_guide_has_formula_details",
+        "test_core_logic_guide_has_source_locations",
+        "test_core_logic_guide_has_elder_rule_table",
+        "test_core_logic_guide_has_entry_zone_calculation",
+        "test_core_logic_guide_not_generic",
     ]:
         if phrase not in tests_source:
             failures.append(f"tests/test_core_logic_guide.py is missing test: {phrase}.")
