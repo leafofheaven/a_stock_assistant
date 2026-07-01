@@ -2938,40 +2938,40 @@ def check_task55(root: Path) -> list[str]:
 
     guide = read_source(root / "docs/user_guides/core_logic_guide.md")
     for phrase in [
-        "A 股选股辅助系统：核心逻辑说明",
-        "total_score",
-        "trend_score",
-        "momentum_score",
-        "liquidity_score",
-        "fundamental_score",
-        "volatility_score",
+        "A 股选股辅助系统：核心计算逻辑与公式说明",
+        "中文名称（英文名）",
+        "综合分（total_score）",
+        "趋势分（trend_score）",
+        "动量分（momentum_score）",
+        "流动性分（liquidity_score）",
+        "基本面分（fundamental_score）",
+        "波动分（volatility_score）",
         "仅供个人研究使用",
         "不自动交易",
-        "elder_score",
-        "action_hint",
-        "elder_reason",
-        "weekly_trend",
-        "daily_pullback",
-        "不改变 `total_score`",
+        "埃尔德分（elder_score）",
+        "操作提示（action_hint）",
+        "复核原因（elder_reason）",
+        "周线趋势（weekly_trend）",
+        "日线回调（daily_pullback）",
+        "不覆盖 综合分（total_score）",
         "不代表买入优先级",
         "Excel 默认应避免导出 rank 字段",
         "序号只代表当前 Sheet 显示顺序",
         "外部模拟持仓",
         "数据质量",
-        "计算口径总表",
         "total_score =",
-        "0.30 * trend_score",
-        "return_20d = close / close.shift(20) - 1",
-        "pe_score = 1 / pe",
-        "volatility_20d",
-        "### 7.1 埃尔德复核规则表",
+        "0.30 * 趋势分（trend_score）",
+        "20日收益率（return_20d）= 当前收盘价 / 20 个交易日前收盘价 - 1",
+        "20日平均成交额（avg_amount_20d）= 最近 20 个交易日成交额均值",
+        "市盈率倒数分（pe_score）= 1 / 市盈率（pe）",
+        "20日波动率（volatility_20d）",
+        "score = (value - min_value) / (max_value - min_value) * 100",
+        "## 8. 埃尔德复核计算公式",
         "周线趋势改善：+35",
-        "### 8.1 买入区间计算口径",
-        "reward_risk_ratio = reward / risk",
-        "## 15. 源码位置索引",
-        "core/jobs/run_daily_selection.py::_calculate_minimal_real_scores",
-        "core/technical/elder.py::_classify_elder_state",
-        "core/entry_zones/calculator.py::_entry_zone_record",
+        "## 9. 买入区间计算公式",
+        "盈亏比（reward_risk_ratio）= 收益距离（reward） / 风险距离（risk）",
+        "## 10. 普通用户如何使用这些公式",
+        "不使用 排名字段（rank） 或序号作为买入优先级",
     ]:
         if phrase not in guide:
             failures.append(f"core_logic_guide.md is missing phrase: {phrase}.")
@@ -2984,6 +2984,9 @@ def check_task55(root: Path) -> list[str]:
     ]:
         if forbidden in guide:
             failures.append(f"core_logic_guide.md still contains generic wording: {forbidden}.")
+    for forbidden in ["源码位置索引", "core/jobs/", "core/factors/", "::"]:
+        if forbidden in guide:
+            failures.append(f"core_logic_guide.md should not include source index/path detail: {forbidden}.")
 
     streamlit_source = read_source(root / "web/streamlit_app.py")
     for phrase in [
@@ -3010,10 +3013,12 @@ def check_task55(root: Path) -> list[str]:
         "test_streamlit_has_core_logic_doc_download",
         "test_no_algorithm_changes",
         "test_core_logic_guide_has_formula_details",
-        "test_core_logic_guide_has_source_locations",
+        "test_core_logic_guide_omits_source_location_index",
         "test_core_logic_guide_has_elder_rule_table",
         "test_core_logic_guide_has_entry_zone_calculation",
         "test_core_logic_guide_not_generic",
+        "test_core_logic_guide_has_user_formula_usage_section",
+        "test_core_logic_guide_defines_chinese_first_field_naming",
     ]:
         if phrase not in tests_source:
             failures.append(f"tests/test_core_logic_guide.py is missing test: {phrase}.")
