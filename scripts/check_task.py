@@ -65,6 +65,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task52": check_task52,
         "task53": check_task53,
         "task54": check_task54,
+        "task55": check_task55,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2923,6 +2924,116 @@ def check_task54(root: Path) -> list[str]:
     return failures
 
 
+def check_task55(root: Path) -> list[str]:
+    """Check the core logic guide and Streamlit download entry."""
+    failures = check_paths(
+        root,
+        [
+            "docs/user_guides/core_logic_guide.md",
+            "web/streamlit_app.py",
+            "tests/test_core_logic_guide.py",
+            "scripts/verify_task.py",
+        ],
+    )
+
+    guide = read_source(root / "docs/user_guides/core_logic_guide.md")
+    for phrase in [
+        "A 股选股辅助系统：核心计算逻辑与公式说明",
+        "中文名称（英文名）",
+        "综合分（total_score）",
+        "趋势分（trend_score）",
+        "动量分（momentum_score）",
+        "流动性分（liquidity_score）",
+        "基本面分（fundamental_score）",
+        "波动分（volatility_score）",
+        "仅供个人研究使用",
+        "不自动交易",
+        "埃尔德分（elder_score）",
+        "操作提示（action_hint）",
+        "复核原因（elder_reason）",
+        "周线趋势（weekly_trend）",
+        "日线回调（daily_pullback）",
+        "不覆盖综合分（total_score）",
+        "不代表买入优先级",
+        "Excel 默认应避免导出排名字段（rank）",
+        "序号只代表当前 Sheet 显示顺序",
+        "外部模拟持仓",
+        "数据质量",
+        "total_score =",
+        "0.30 * 趋势分（trend_score）",
+        "20日收益率（return_20d）= 当前收盘价 / 20 个交易日前收盘价 - 1",
+        "20日平均成交额（avg_amount_20d）= 最近 20 个交易日成交额均值",
+        "市盈率倒数指标（pe_score）= 1 / 市盈率（pe）",
+        "20日波动率（volatility_20d）",
+        "score = (value - min_value) / (max_value - min_value) * 100",
+        "## 8. 埃尔德复核计算公式",
+        "周线趋势改善：+35",
+        "## 9. 买入区间计算公式",
+        "盈亏比（reward_risk_ratio）= 收益距离（reward） / 风险距离（risk）",
+        "## 10. 普通用户如何使用这些公式",
+        "不使用排名字段（rank）或序号作为买入优先级",
+    ]:
+        if phrase not in guide:
+            failures.append(f"core_logic_guide.md is missing phrase: {phrase}.")
+    for forbidden in [
+        "来自趋势相关指标。",
+        "来自动量信息",
+        "来自成交额、换手率等流动性信息。",
+        "来自 ROE、PE、PB、营收增长等基础面或估值字段。",
+        "来自波动率、回撤等风险相关指标。",
+    ]:
+        if forbidden in guide:
+            failures.append(f"core_logic_guide.md still contains generic wording: {forbidden}.")
+    for forbidden in ["源码位置索引", "core/jobs/", "core/factors/", "::"]:
+        if forbidden in guide:
+            failures.append(f"core_logic_guide.md should not include source index/path detail: {forbidden}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "CORE_LOGIC_GUIDE_PATH",
+        "docs",
+        "user_guides",
+        "core_logic_guide.md",
+        "核心说明文件",
+        "下载核心逻辑说明",
+        "A股选股辅助系统_核心逻辑说明.md",
+        "st.download_button",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing core guide download phrase: {phrase}.")
+    if "export_logic_docs" in streamlit_source or "write_text" in streamlit_source:
+        failures.append("Streamlit download entry should read the committed guide without generating artifacts.")
+
+    tests_source = read_source(root / "tests/test_core_logic_guide.py")
+    for phrase in [
+        "test_core_logic_guide_exists",
+        "test_core_logic_guide_mentions_stock_selection_concepts",
+        "test_core_logic_guide_mentions_elder_review_concepts",
+        "test_core_logic_guide_mentions_excel_and_no_rank_policy",
+        "test_streamlit_has_core_logic_doc_download",
+        "test_no_algorithm_changes",
+        "test_core_logic_guide_has_formula_details",
+        "test_core_logic_guide_omits_source_location_index",
+        "test_core_logic_guide_has_elder_rule_table",
+        "test_core_logic_guide_has_entry_zone_calculation",
+        "test_core_logic_guide_not_generic",
+        "test_core_logic_guide_has_user_formula_usage_section",
+        "test_core_logic_guide_defines_chinese_first_field_naming",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_core_logic_guide.py is missing test: {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task55", "pytest", "check_project.py", "check_task.py"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task55 is missing {phrase}.")
+    task55_block = verify_source.split('"task55":', 1)[-1].split("]", 1)[0] if '"task55":' in verify_source else ""
+    for forbidden in ["run_daily_workflow", "update_real_data", "export_daily_research_workbook", "reports", "data/a_stock_assistant.duckdb"]:
+        if forbidden in task55_block:
+            failures.append(f"verify_task.py task55 should not create runtime artifacts: {forbidden}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -3008,6 +3119,7 @@ def main(argv: list[str] | None = None) -> int:
             "task52",
             "task53",
             "task54",
+            "task55",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

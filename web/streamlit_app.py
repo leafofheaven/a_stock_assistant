@@ -38,6 +38,9 @@ from core.external_positions.importer import position_template_frame, trade_temp
 ALLOWED_COMMANDS.setdefault("run_full_batch_update", [sys.executable, "-m", "core.jobs.run_full_batch_update"])
 ALLOWED_COMMANDS.setdefault("preflight_data_source", [sys.executable, "-m", "core.jobs.preflight_data_source"])
 
+CORE_LOGIC_GUIDE_PATH = PROJECT_ROOT / "docs" / "user_guides" / "core_logic_guide.md"
+CORE_LOGIC_GUIDE_DOWNLOAD_NAME = "A股选股辅助系统_核心逻辑说明.md"
+
 SELECTION_COLUMNS = [
     "rank",
     "ts_code",
@@ -1288,6 +1291,7 @@ def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame, daily_basic: pd
 
 def _render_selection_logic_tab(st: Any, selection_df: pd.DataFrame) -> None:
     st.subheader("选股逻辑")
+    _render_core_logic_guide_download(st)
     summary = get_selection_logic_summary()
     st.write("综合评分公式")
     st.code(summary.formula_summary)
@@ -1332,6 +1336,21 @@ def _render_selection_logic_tab(st: Any, selection_df: pd.DataFrame) -> None:
     for item in summary.limitations:
         st.write(f"- {item}")
     st.caption("个人研究工具，结果需自行复核。")
+
+
+def _render_core_logic_guide_download(st: Any) -> None:
+    """Render a static download entry for the user-facing core logic guide."""
+    st.write("核心说明文件")
+    if not CORE_LOGIC_GUIDE_PATH.exists():
+        st.warning("核心逻辑说明文件不存在，请先运行项目检查或联系开发者。")
+        return
+    st.download_button(
+        "下载核心逻辑说明",
+        data=CORE_LOGIC_GUIDE_PATH.read_bytes(),
+        file_name=CORE_LOGIC_GUIDE_DOWNLOAD_NAME,
+        mime="text/markdown",
+        width="stretch",
+    )
 
 
 def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.DataFrame) -> None:
