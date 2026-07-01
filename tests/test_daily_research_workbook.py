@@ -1,4 +1,4 @@
-"""Tests for Task 53 daily research workbook export."""
+"""Tests for daily research workbook export."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from openpyxl import load_workbook
 import pandas as pd
 
+from core.factors.scoring import DEFAULT_WEIGHTS
 from core.jobs.export_daily_research_workbook import (
     SHEET_NAMES,
     export_daily_research_workbook,
@@ -35,22 +36,141 @@ def test_export_daily_research_workbook_writes_required_sheets(tmp_path: Path) -
     assert result.external_position_rows == 1
 
 
-def test_candidate_sheet_uses_display_order_and_candidate_rank(tmp_path: Path) -> None:
-    """Current display order should be continuous while preserving original candidate rank."""
+FORBIDDEN_RANK_HEADERS = {
+    "rank",
+    "candidate_rank",
+    "original_rank",
+    "today_rank",
+    "previous_rank",
+    "rank_change",
+    "best_rank",
+    "latest_rank",
+    "原始选股排名",
+    "当日入选排名",
+    "上次入选排名",
+    "排名变化",
+    "历史最佳入选排名",
+    "最近入选排名",
+}
+
+
+def test_workbook_has_no_rank_columns_by_default(tmp_path: Path) -> None:
+    """Default workbook sheets should hide all rank-like fields."""
+    store = _seed_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
+
+    workbook = load_workbook(output)
+    for sheet_name in workbook.sheetnames:
+        headers = _headers(workbook[sheet_name])
+        joined = "\n".join(str(header) for header in headers)
+        for forbidden in FORBIDDEN_RANK_HEADERS:
+            assert forbidden not in headers
+            assert forbidden not in joined
+
+
+def test_candidate_sheet_fields(tmp_path: Path) -> None:
+    """Candidate sheet should use continuous display order and Chinese-first labels."""
     store = _seed_store(tmp_path)
     output = tmp_path / "daily_research.xlsx"
 
     export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
 
     sheet = load_workbook(output)["01_今日候选"]
-    headers = [cell.value for cell in sheet[1]]
-    display_idx = headers.index("display_order") + 1
-    rank_idx = headers.index("candidate_rank") + 1
-    code_idx = headers.index("ts_code") + 1
+    headers = _headers(sheet)
+    display_idx = headers.index("序号") + 1
+    code_idx = headers.index("股票代码（ts_code）") + 1
 
     assert [sheet.cell(row=row, column=display_idx).value for row in (2, 3)] == [1, 2]
-    assert [sheet.cell(row=row, column=rank_idx).value for row in (2, 3)] == [1, 2]
     assert [sheet.cell(row=row, column=code_idx).value for row in (2, 3)] == ["000001.SZ", "000002.SZ"]
+    for header in [
+        "交易日期（trade_date）",
+        "综合分（total_score）",
+        "趋势分（trend_score）",
+        "动量分（momentum_score）",
+        "流动性分（liquidity_score）",
+        "基本面分（fundamental_score）",
+        "波动分（volatility_score）",
+    ]:
+        assert header in headers
+
+
+def test_workbook_uses_chinese_name_with_english_field_labels(tmp_path: Path) -> None:
+    """Important workbook fields should follow 中文名称（英文名） labels."""
+    store = _seed_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
+
+    workbook = load_workbook(output)
+    all_headers = {header for sheet in workbook.worksheets for header in _headers(sheet)}
+    for header in [
+        "综合分（total_score）",
+        "趋势分（trend_score）",
+        "动量分（momentum_score）",
+        "流动性分（liquidity_score）",
+        "基本面分（fundamental_score）",
+        "波动分（volatility_score）",
+        "埃尔德分（elder_score）",
+        "操作提示（action_hint）",
+        "买入区间下限（entry_low）",
+        "止损价（stop_loss）",
+        "盈亏比（reward_risk_ratio）",
+    ]:
+        assert header in all_headers
+
+
+def test_elder_review_sheet_fields(tmp_path: Path) -> None:
+    """Elder review sheet should expose review fields without candidate rank."""
+    store = _seed_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
+
+    headers = _headers(load_workbook(output)["02_埃尔德复核"])
+    for header in [
+        "埃尔德分（elder_score）",
+        "操作提示（action_hint）",
+        "复核原因（elder_reason）",
+        "周线趋势（weekly_trend）",
+        "日线回调（daily_pullback）",
+    ]:
+        assert header in headers
+    assert "candidate_rank" not in headers
+    assert "rank" not in headers
+
+
+def test_watchlist_sheet_hides_rank_fields(tmp_path: Path) -> None:
+    """Current watchlist sheet should hide rank fields."""
+    store = _seed_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
+
+    headers = _headers(load_workbook(output)["04_观察池"])
+    assert "观察状态（watch_status）" in headers
+    assert "近5日入选次数（selected_count_5d）" in headers
+    assert not (FORBIDDEN_RANK_HEADERS & set(headers))
+
+
+def test_watchlist_tracking_sheet_hides_rank_fields(tmp_path: Path) -> None:
+    """Watchlist tracking should keep non-rank tracking fields and hide rank changes."""
+    store = _seed_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
+
+    headers = _headers(load_workbook(output)["05_观察池跟踪"])
+    for header in [
+        "综合分（total_score）",
+        "综合分变化（total_score_change）",
+        "近5日入选次数（selected_count_5d）",
+        "近10日入选次数（selected_count_10d）",
+        "连续入选天数（consecutive_selected_days）",
+    ]:
+        assert header in headers
+    assert not (FORBIDDEN_RANK_HEADERS & set(headers))
 
 
 def test_workbook_export_is_read_only_for_duckdb(tmp_path: Path) -> None:
@@ -77,6 +197,7 @@ def test_workbook_filters_sensitive_settings(tmp_path: Path) -> None:
         tushare_token="SECRET_TOKEN",
         api_key="SECRET_KEY",
         password="SECRET_PASSWORD",
+        extra_value="sk-proj-SECRET",
     )
     output = tmp_path / "daily_research.xlsx"
 
@@ -90,8 +211,40 @@ def test_workbook_filters_sensitive_settings(tmp_path: Path) -> None:
     ]
     joined = "\n".join(str(value) for value in values)
     assert "SECRET" not in joined
+    assert "配置项（config_key）" in joined
     assert "duckdb_path" in joined
     assert "real_universe_preset" in joined
+
+
+def test_data_quality_missing_values_wording(tmp_path: Path) -> None:
+    """Missing values should not be described as missing fields."""
+    store = _seed_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
+
+    values = _sheet_values(load_workbook(output)["08_数据质量"])
+    joined = "\n".join(str(value) for value in values)
+    assert "基本面分（fundamental_score）缺失记录数" in joined
+    assert "字段缺失：fundamental_score" not in joined
+    assert "字段缺失：{'fundamental_score'" not in joined
+
+
+def test_explanation_sheet_defines_no_rank_policy(tmp_path: Path) -> None:
+    """Explanation sheet should explain sequence, field naming, and no-rank policy."""
+    store = _seed_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
+
+    values = _sheet_values(load_workbook(output)["10_说明"])
+    joined = "\n".join(str(value) for value in values)
+    assert "默认不导出 rank / 排名字段" in joined
+    assert "序号只代表当前 Sheet 当前显示顺序，不代表买入优先级" in joined
+    assert "中文名称（英文名）" in joined
+    assert "04_观察池是当前观察名单" in joined
+    assert "05_观察池跟踪是观察池每日快照" in joined
+    assert "不是交易指令" in joined
 
 
 def test_empty_database_still_exports_clear_workbook(tmp_path: Path) -> None:
@@ -129,6 +282,32 @@ def test_default_workbook_filename_does_not_repeat_trade_date() -> None:
     assert path.suffix == ".xlsx"
 
 
+def test_no_algorithm_changes() -> None:
+    """Task 56 should not alter scoring, selection, Elder, or entry-zone logic."""
+    assert DEFAULT_WEIGHTS == {
+        "trend_score": 0.30,
+        "momentum_score": 0.20,
+        "liquidity_score": 0.20,
+        "fundamental_score": 0.15,
+        "volatility_score": 0.15,
+    }
+    root = Path(__file__).resolve().parents[1]
+    selection_source = (root / "core" / "strategy" / "selector.py").read_text(encoding="utf-8")
+    elder_source = (root / "core" / "technical" / "elder.py").read_text(encoding="utf-8")
+    entry_zone_source = (root / "core" / "entry_zones" / "calculator.py").read_text(encoding="utf-8")
+    assert 'sort_values(["trade_date", "total_score", "ts_code"], ascending=[True, False, True])' in selection_source
+    assert "does not replace or\n    modify ``total_score``" in elder_source
+    assert "calculate_entry_zones_for_targets" in entry_zone_source
+
+
+def _headers(sheet) -> list[str]:
+    return [cell.value for cell in sheet[1] if cell.value is not None]
+
+
+def _sheet_values(sheet) -> list[object]:
+    return [cell.value for row in sheet.iter_rows() for cell in row if cell.value is not None]
+
+
 def _seed_store(tmp_path: Path) -> DuckDBStore:
     store = DuckDBStore(tmp_path / "research.duckdb")
     store.initialize()
@@ -155,7 +334,7 @@ def _seed_store(tmp_path: Path) -> DuckDBStore:
         pd.DataFrame(
             [
                 {"ts_code": "000001.SZ", "trade_date": "20260630", "trend_score": 90, "momentum_score": 80, "liquidity_score": 70, "volatility_score": 60, "fundamental_score": 50, "total_score": 78},
-                {"ts_code": "000002.SZ", "trade_date": "20260630", "trend_score": 70, "momentum_score": 60, "liquidity_score": 50, "volatility_score": 40, "fundamental_score": 30, "total_score": 58},
+                {"ts_code": "000002.SZ", "trade_date": "20260630", "trend_score": 70, "momentum_score": 60, "liquidity_score": 50, "volatility_score": 40, "fundamental_score": None, "total_score": 58},
             ]
         ),
     )
@@ -188,7 +367,14 @@ def _seed_store(tmp_path: Path) -> DuckDBStore:
                     "trade_date": "20260630",
                     "current_close": 10.5,
                     "today_rank": 1,
+                    "previous_rank": 2,
+                    "rank_change": -1,
+                    "best_rank": 1,
                     "total_score": 78.0,
+                    "total_score_change": 3.5,
+                    "selected_count_5d": 2,
+                    "selected_count_10d": 4,
+                    "consecutive_selected_days": 2,
                     "watch_status": "active_watch",
                     "watch_status_label": "正常观察",
                     "elder_score": 62.0,
