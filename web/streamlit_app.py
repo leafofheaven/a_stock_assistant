@@ -37,6 +37,7 @@ from core.external_positions.importer import position_template_frame, trade_temp
 
 ALLOWED_COMMANDS.setdefault("run_full_batch_update", [sys.executable, "-m", "core.jobs.run_full_batch_update"])
 ALLOWED_COMMANDS.setdefault("preflight_data_source", [sys.executable, "-m", "core.jobs.preflight_data_source"])
+ALLOWED_COMMANDS.setdefault("diagnose_data_source_network", [sys.executable, "-m", "core.jobs.diagnose_data_source_network"])
 
 CORE_LOGIC_GUIDE_PATH = PROJECT_ROOT / "docs" / "user_guides" / "core_logic_guide.md"
 CORE_LOGIC_GUIDE_DOWNLOAD_NAME = "A股选股辅助系统_核心逻辑说明.md"
@@ -1661,6 +1662,16 @@ def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
     """Render page controls for bounded full-universe batch updates."""
     st.subheader("全市场批量补数据")
     st.caption("仅供个人研究使用，不自动交易。页面启动时不会自动更新，只有点击按钮才会联网补数据。")
+    st.write("数据源网络诊断")
+    st.caption("诊断会检查 DuckDB、代理、DNS、东方财富 K 线接口、Python 请求和 curl IPv4 / IPv6 路径；诊断失败不会自动启动数据更新。")
+    if st.button("运行数据源网络诊断", key="data_source_network_diagnosis"):
+        _run_streaming_console_action(
+            st,
+            "运行数据源网络诊断",
+            "diagnose_data_source_network",
+            ["--format", "text"],
+            success_message="数据源网络诊断完成。请根据主要结论决定是否继续补数据。",
+        )
     st.write(
         {
             "数据源": "akshare",

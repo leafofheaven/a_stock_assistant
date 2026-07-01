@@ -20,11 +20,15 @@ def _summary(result: dict[str, Any]) -> str:
     proxy = result.get("proxy", {})
     duckdb = result.get("duckdb", {})
     eastmoney = result.get("eastmoney_kline", {})
+    dns = result.get("dns", {})
     lines = [
         "数据源预检摘要",
         f"- 状态: {result.get('status')}",
         f"- DuckDB: {duckdb.get('message')}",
         f"- 代理状态: {proxy.get('message')}",
+        f"- DNS: {dns.get('status', 'unknown')}",
+        f"- IPv4: {result.get('ipv4_status', 'unknown')}",
+        f"- IPv6: {result.get('ipv6_status', 'unknown')}",
         f"- 东方财富 K 线接口: {eastmoney.get('message')}",
     ]
     if eastmoney.get("used_url"):
@@ -35,6 +39,8 @@ def _summary(result: dict[str, Any]) -> str:
         lines.append(f"- stderr: {eastmoney.get('stderr')}")
     if eastmoney.get("headers_present"):
         lines.append(f"- headers_present: {eastmoney.get('headers_present')}")
+    if result.get("suggested_action"):
+        lines.append(f"- suggested_action: {result.get('suggested_action')}")
     if proxy.get("has_proxy"):
         lines.append(f"- urllib proxies: {proxy.get('proxies')}")
         if proxy.get("env_proxies"):

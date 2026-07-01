@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import urllib.request
 from datetime import date
@@ -37,6 +38,7 @@ def run_data_source_preflight(
     resolved_settings = settings or get_settings()
     duckdb_result = check_duckdb_access(Path(resolved_settings.duckdb_path))
     proxy_result = detect_proxy_settings()
+    dns_result = check_eastmoney_dns()
     eastmoney_result = (
         {"status": "skipped", "ok": True, "message": "已跳过网络连通性测试。"}
         if skip_network
@@ -60,8 +62,13 @@ def run_data_source_preflight(
         "ok": ok,
         "duckdb": duckdb_result,
         "proxy": proxy_result,
+        "dns": dns_result,
+        "dns_status": dns_result.get("status"),
+        "ipv4_status": dns_result.get("ipv4_status"),
+        "ipv6_status": dns_result.get("ipv6_status"),
         "eastmoney_kline": eastmoney_result,
         "message": "数据源预检通过。" if ok else EASTMONEY_UNAVAILABLE_MESSAGE,
+        "suggested_action": "；".join(suggestions),
         "suggestions": suggestions,
     }
 
@@ -178,6 +185,33 @@ def check_eastmoney_kline(*, timeout_seconds: int = 8) -> dict[str, Any]:
         "rc": payload.get("rc"),
         "used_url": used_url,
         "headers_present": {"user_agent": True, "referer": True},
+    }
+
+
+def check_eastmoney_dns() -> dict[str, Any]:
+    """Resolve Eastmoney hosts for preflight summary without requiring external commands."""
+    hosts = ("push2his.eastmoney.com", "push2.eastmoney.com")
+    host_results: dict[str, Any] = {}
+    has_ipv4 = False
+    has_ipv6 = False
+    ok = True
+    for host in hosts:
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except OSError as exc:
+            host_results[host] = {"ok": False, "a_records": [], "aaaa_records": [], "error": str(exc)}
+            ok = False
+            continue
+        a_records = sorted({item[4][0] for item in infos if item[0] == socket.AF_INET})
+        aaaa_records = sorted({item[4][0] for item in infos if item[0] == socket.AF_INET6})
+        has_ipv4 = has_ipv4 or bool(a_records)
+        has_ipv6 = has_ipv6 or bool(aaaa_records)
+        host_results[host] = {"ok": bool(a_records or aaaa_records), "a_records": a_records, "aaaa_records": aaaa_records, "error": ""}
+    return {
+        "status": "ok" if ok else "failed",
+        "ipv4_status": "available" if has_ipv4 else "missing",
+        "ipv6_status": "available" if has_ipv6 else "missing",
+        "hosts": host_results,
     }
 
 
