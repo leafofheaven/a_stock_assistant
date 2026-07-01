@@ -2853,8 +2853,7 @@ def check_task54(root: Path) -> list[str]:
         "candidate_rank",
         "watch_today_rank",
         "DISPLAY_COLUMN_LABELS",
-        "display_order 为当前页面显示序号",
-        "candidate_rank 为系统原始选股排名",
+        "序号为当前页面当前排序后的显示顺序",
         "本页用于补充 / 更新 full 股票池行情数据",
         "_export_workbook_button",
         "_extract_workbook_output_path",
@@ -2864,9 +2863,39 @@ def check_task54(root: Path) -> list[str]:
     ]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing Task 54 phrase: {phrase}.")
-    for forbidden in ["保存并更新数据", '"更新真实数据"', '"一键运行"']:
+    for forbidden in [
+        "保存并更新数据",
+        '"更新真实数据"',
+        '"一键运行"',
+        "原始选股排名",
+        "candidate_rank 为",
+        "系统原始选股排名",
+        "对应股票的原始选股排名",
+    ]:
         if forbidden in streamlit_source:
             failures.append(f"web/streamlit_app.py should remove ambiguous update entrypoint: {forbidden}.")
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    for phrase in ["run_full_batch_update", "preflight_data_source"]:
+        if phrase not in command_source:
+            failures.append(f"command_runner.py is missing allowed command: {phrase}.")
+    preflight_source = read_source(root / "core/runtime/data_source_preflight.py")
+    for phrase in [
+        "push2his.eastmoney.com/api/qt/stock/kline/get",
+        "secid=0.000001",
+        "User-Agent",
+        "Referer",
+        "headers_present",
+        "curl_returncode",
+        "used_url",
+        "klines",
+    ]:
+        if phrase not in preflight_source and phrase != "User-Agent":
+            failures.append(f"data_source_preflight.py is missing Task 54 preflight phrase: {phrase}.")
+        if phrase == "User-Agent" and "EASTMONEY_USER_AGENT" not in preflight_source:
+            failures.append("data_source_preflight.py is missing Eastmoney User-Agent header.")
+    web_sources = "\n".join(read_source(path) for path in (root / "web").rglob("*.py"))
+    if "use_container_width" in web_sources:
+        failures.append("web/ should not use deprecated Streamlit use_container_width.")
 
     tests_source = read_source(root / "tests/test_streamlit_app.py")
     for phrase in [
@@ -2877,8 +2906,10 @@ def check_task54(root: Path) -> list[str]:
         "test_update_entrypoints_are_consolidated",
         "test_export_workbook_page_feedback",
         "test_export_does_not_run_workflow_or_update",
+        "test_eastmoney_precheck_curl_52_reports_diagnostics",
     ]:
-        if phrase not in tests_source:
+        all_tests = tests_source + read_source(root / "tests/test_full_batch_update_ui_precheck.py")
+        if phrase not in all_tests:
             failures.append(f"tests/test_streamlit_app.py is missing Task 54 test: {phrase}.")
 
     verify_source = read_source(root / "scripts/verify_task.py")

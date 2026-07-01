@@ -11,6 +11,8 @@ import pytest
 
 from core.jobs.run_full_batch_update import run_full_batch_update
 from core.runtime.data_source_preflight import (
+    EASTMONEY_REFERER,
+    EASTMONEY_USER_AGENT,
     check_duckdb_access,
     check_eastmoney_kline,
     detect_proxy_settings,
@@ -40,12 +42,39 @@ def test_proxy_detection(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_eastmoney_precheck_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """Eastmoney concrete kline API should pass only when rc=0 and klines are present."""
     payload = {"rc": 0, "data": {"klines": ["2024-01-02,1,2,3,1,100,1000,0,0,0,1"]}}
-    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: _completed(stdout=json.dumps(payload)))
+    calls = {}
+
+    def fake_run(command, *args, **kwargs):
+        calls["command"] = command
+        return _completed(stdout=json.dumps(payload))
+
+    monkeypatch.setattr("subprocess.run", fake_run)
 
     result = check_eastmoney_kline()
 
     assert result["ok"] is True
     assert result["kline_count"] == 1
+    command_text = " ".join(calls["command"])
+    assert "push2his.eastmoney.com/api/qt/stock/kline/get" in command_text
+    assert "secid=0.000001" in command_text
+    assert "quote.eastmoney.com" in command_text
+    assert EASTMONEY_USER_AGENT in command_text
+    assert EASTMONEY_REFERER in command_text
+    assert "head" not in command_text
+    assert result["headers_present"] == {"user_agent": True, "referer": True}
+
+
+def test_eastmoney_precheck_curl_52_reports_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Curl 52 failures should expose URL, stderr, and header diagnostics."""
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: _completed(stderr="RemoteDisconnected", returncode=52))
+
+    result = check_eastmoney_kline()
+
+    assert result["ok"] is False
+    assert result["curl_returncode"] == 52
+    assert "push2his.eastmoney.com/api/qt/stock/kline/get" in result["used_url"]
+    assert "RemoteDisconnected" in result["stderr"]
+    assert result["headers_present"] == {"user_agent": True, "referer": True}
 
 
 @pytest.mark.parametrize(

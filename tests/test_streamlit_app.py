@@ -90,6 +90,7 @@ def test_streamlit_tables_hide_raw_index() -> None:
     assert rendered["序号"].tolist() == [1, 2]
     assert 9 not in rendered.index.tolist()
     assert fake.hide_index_values == [True]
+    assert fake.width_values == ["stretch"]
 
 
 def test_display_order_continuous_after_sort() -> None:
@@ -98,39 +99,47 @@ def test_display_order_continuous_after_sort() -> None:
     display = prepare_display_table(sorted_df)
 
     assert display["序号"].tolist() == list(range(1, len(display) + 1))
-    assert "原始选股排名" in display.columns
+    assert "原始选股排名" not in display.columns
     assert "rank" not in display.columns
 
 
 def test_rank_columns_are_renamed_for_display() -> None:
-    """Ambiguous rank fields should be renamed for user-facing tables."""
+    """Ambiguous candidate rank fields should be hidden from default user-facing tables."""
     display = prepare_display_table(pd.DataFrame({"rank": [1], "today_rank": [2], "previous_rank": [3]}))
 
     assert "rank" not in display.columns
-    assert "原始选股排名" in display.columns
+    assert "原始选股排名" not in display.columns
     assert "观察池当日排名" in display.columns
     assert "上一日排名" in display.columns
 
 
 def test_elder_review_has_source_and_display_order() -> None:
-    """Elder review display should include source, candidate_rank, and continuous order."""
+    """Elder review display should include source and continuous order."""
     review = pd.DataFrame({"rank": [2, 1], "ts_code": ["000002.SZ", "000001.SZ"], "total_score": [80, 90]})
 
     result = format_elder_review_display(review, source="今日候选")
+    display = prepare_display_table(result)
 
     assert result["display_order"].tolist() == [1, 2]
     assert result["candidate_rank"].tolist() == [1, 2]
     assert result["source"].tolist() == ["今日候选", "今日候选"]
+    assert "原始选股排名" not in display.columns
 
 
 def test_update_entrypoints_are_consolidated() -> None:
     """Local console should not keep a second ambiguous data update entrypoint."""
+    from core.runtime.command_runner import ALLOWED_COMMANDS
+
     source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
 
     assert "保存并更新数据" not in source
     assert "更新真实数据" not in source
     assert "全市场批量补数据" in source
     assert "本页用于补充 / 更新 full 股票池行情数据" in source
+    assert "run_full_batch_update" in source
+    assert "preflight_data_source" in source
+    assert "run_full_batch_update" in ALLOWED_COMMANDS
+    assert "preflight_data_source" in ALLOWED_COMMANDS
 
 
 def test_export_workbook_page_feedback_helpers() -> None:
@@ -548,6 +557,7 @@ class FakeStreamlit:
         self.warning_messages: list[str] = []
         self.dataframes: list[pd.DataFrame] = []
         self.hide_index_values: list[object] = []
+        self.width_values: list[object] = []
 
     def set_page_config(self, **kwargs) -> None:
         return None
@@ -580,6 +590,7 @@ class FakeStreamlit:
     def dataframe(self, data, **kwargs) -> None:
         self.dataframes.append(data)
         self.hide_index_values.append(kwargs.get("hide_index"))
+        self.width_values.append(kwargs.get("width"))
 
     def json(self, value) -> None:
         return None

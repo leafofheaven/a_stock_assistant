@@ -27,8 +27,18 @@ def _summary(result: dict[str, Any]) -> str:
         f"- 代理状态: {proxy.get('message')}",
         f"- 东方财富 K 线接口: {eastmoney.get('message')}",
     ]
+    if eastmoney.get("used_url"):
+        lines.append(f"- used_url: {eastmoney.get('used_url')}")
+    if eastmoney.get("curl_returncode") is not None:
+        lines.append(f"- curl_returncode: {eastmoney.get('curl_returncode')}")
+    if eastmoney.get("stderr"):
+        lines.append(f"- stderr: {eastmoney.get('stderr')}")
+    if eastmoney.get("headers_present"):
+        lines.append(f"- headers_present: {eastmoney.get('headers_present')}")
     if proxy.get("has_proxy"):
         lines.append(f"- urllib proxies: {proxy.get('proxies')}")
+        if proxy.get("env_proxies"):
+            lines.append(f"- env proxies: {proxy.get('env_proxies')}")
     if duckdb.get("holders"):
         lines.append(f"- DuckDB 占用进程: {duckdb.get('holders')}")
     suggestions = result.get("suggestions") or []

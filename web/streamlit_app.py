@@ -30,10 +30,13 @@ from core.reporting.watchlist_tracking_report import load_latest_watchlist_track
 from core.reporting.workflow_report import load_latest_workflow_report
 from core.reporting.daily_workflow_report import load_latest_daily_workflow_report
 from core.config.env_file import masked_env_values, parse_stock_symbols, read_env_file, update_env_file
-from core.runtime.command_runner import open_project_path, run_command_streaming
+from core.runtime.command_runner import ALLOWED_COMMANDS, open_project_path, run_command_streaming
 from core.runtime.progress import parse_progress_line
 from core.technical.elder import build_elder_review
 from core.external_positions.importer import position_template_frame, trade_template_frame
+
+ALLOWED_COMMANDS.setdefault("run_full_batch_update", [sys.executable, "-m", "core.jobs.run_full_batch_update"])
+ALLOWED_COMMANDS.setdefault("preflight_data_source", [sys.executable, "-m", "core.jobs.preflight_data_source"])
 
 SELECTION_COLUMNS = [
     "rank",
@@ -55,7 +58,6 @@ SELECTION_COLUMNS = [
 
 DISPLAY_COLUMN_LABELS = {
     "display_order": "序号",
-    "candidate_rank": "原始选股排名",
     "watch_today_rank": "观察池当日排名",
     "previous_rank": "上一日排名",
     "ts_code": "股票代码",
@@ -126,6 +128,7 @@ def prepare_display_table(
     columns: list[str] | None = None,
     add_display_order: bool = True,
     rename_for_display: bool = True,
+    show_rank_fields: bool = False,
 ) -> pd.DataFrame:
     """Return a user-facing table with continuous display_order and clear rank names."""
     if df.empty:
@@ -139,6 +142,8 @@ def prepare_display_table(
     if columns is not None:
         available = [column for column in columns if column in result.columns]
         result = result[available].copy()
+    if not show_rank_fields:
+        result = result.drop(columns=[column for column in ["candidate_rank"] if column in result.columns])
     if add_display_order:
         if "display_order" in result.columns:
             result = result.drop(columns=["display_order"])
@@ -148,13 +153,19 @@ def prepare_display_table(
     return result.reset_index(drop=True)
 
 
-def display_dataframe(st: Any, df: pd.DataFrame, *, columns: list[str] | None = None) -> None:
+def display_dataframe(
+    st: Any,
+    df: pd.DataFrame,
+    *,
+    columns: list[str] | None = None,
+    show_rank_fields: bool = False,
+) -> None:
     """Render a dataframe without exposing pandas' raw index."""
-    display_df = prepare_display_table(df, columns=columns)
+    display_df = prepare_display_table(df, columns=columns, show_rank_fields=show_rank_fields)
     try:
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width="stretch", hide_index=True)
     except TypeError:
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width="stretch")
 
 
 def enrich_selection_with_watchlist_status(selection_df: pd.DataFrame, tables: dict[str, Any]) -> pd.DataFrame:
@@ -925,11 +936,11 @@ def _render_selection_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str,
     industry = st.selectbox("行业", get_industry_options(selection_df))
     sort_descending = st.checkbox("按综合分从高到低排序", value=True)
     filtered = enrich_with_entry_zone_fields(enrich_selection_with_watchlist_status(filter_selection_data(selection_df, industry, sort_descending), tables or {}), tables or {})
-    st.info("display_order 为当前页面显示序号；candidate_rank 为系统原始选股排名；勾选按综合分排序时，显示顺序按 total_score 调整，不改变原始选股排名。")
+    st.info("序号为当前页面当前排序后的显示顺序；勾选按综合分排序时，显示顺序按 total_score 调整，不改变系统内部选股结果。")
     display_dataframe(st, filtered)
     st.write("候选股票详情")
-    for item in filtered.head(10).to_dict("records"):
-        title = f"{item.get('rank')}. {item.get('ts_code')} {item.get('name')}"
+    for order, item in enumerate(filtered.head(10).to_dict("records"), start=1):
+        title = f"{order}. {item.get('ts_code')} {item.get('name')}"
         with st.expander(title):
             st.write(
                 {
@@ -1331,11 +1342,10 @@ def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.D
         st.info("暂无埃尔德复核结果。请先运行每日选股并确保本地 daily_price 有足够行情。")
         return
     display_df = format_elder_review_display(review_df, source="今日候选")
-    st.info("埃尔德复核为二次技术状态判断，不改变 total_score 和原始选股排名。display_order 为当前页面显示序号；candidate_rank 为对应股票的原始选股排名；source 表示来源。")
+    st.info("埃尔德复核为二次技术状态判断，不改变 total_score 和系统内部选股结果。序号为当前页面显示顺序；来源用于区分今日候选、观察池或持仓池。")
     display_columns = [
         "display_order",
         "source",
-        "candidate_rank",
         "ts_code",
         "name",
         "industry",
@@ -2243,7 +2253,11 @@ def _run_streaming_console_action(
         progress_bar.progress(1.0)
         st.success(success_message)
     else:
-        st.error(f"命令执行失败：{result.status}，returncode={result.returncode}")
+        if command_key in {"preflight_data_source", "run_full_batch_update"}:
+            st.error("数据源预检未通过，未启动批量更新。")
+            st.warning("原因：东方财富 K 线接口检测失败，或 DuckDB / 代理预检未通过。请查看日志中的 used_url、curl_returncode 和 stderr。")
+        else:
+            st.error(f"命令执行失败：{result.status}，returncode={result.returncode}")
         st.info("可查看 stderr，并按提示重跑对应命令。")
     with st.expander("实时日志 / stdout"):
         st.code(result.stdout or "无输出")

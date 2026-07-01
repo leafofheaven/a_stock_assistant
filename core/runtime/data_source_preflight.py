@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import urllib.request
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +18,11 @@ from core.storage.duckdb_store import DUCKDB_LOCK_MESSAGE, is_duckdb_lock_error
 EASTMONEY_KLINE_URL = (
     "https://push2his.eastmoney.com/api/qt/stock/kline/get"
     "?secid=0.000001&fields1=f1,f2,f3,f4,f5,f6"
-    "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
-    "&klt=101&fqt=1&beg=20240101&end=20240131"
+    "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f116"
+    "&ut=7eea3edcaed734bea9cbfc24409ed989&klt=101&fqt=1&beg=20240101&end={end_date}"
 )
+EASTMONEY_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
+EASTMONEY_REFERER = "https://quote.eastmoney.com/"
 EASTMONEY_UNAVAILABLE_MESSAGE = "东方财富 K 线接口当前不可用，请检查网络、系统代理或稍后再试。本次未启动批量更新。"
 DUCKDB_LOCK_USER_MESSAGE = "DuckDB is locked by another process. Please stop other running jobs or Streamlit first."
 
@@ -65,10 +69,17 @@ def run_data_source_preflight(
 def detect_proxy_settings() -> dict[str, Any]:
     """Return Python urllib proxy settings without performing network requests."""
     proxies = urllib.request.getproxies()
+    env_proxies = {
+        key: value
+        for key, value in os.environ.items()
+        if key.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+    }
+    has_proxy = bool(proxies or env_proxies)
     return {
-        "has_proxy": bool(proxies),
+        "has_proxy": has_proxy,
         "proxies": proxies,
-        "message": "检测到系统代理配置。" if proxies else "未检测到 Python urllib 代理配置。",
+        "env_proxies": env_proxies,
+        "message": "检测到系统代理配置。" if has_proxy else "未检测到 Python urllib 代理配置。",
     }
 
 
@@ -120,31 +131,43 @@ def check_duckdb_access(db_path: Path) -> dict[str, Any]:
 
 def check_eastmoney_kline(*, timeout_seconds: int = 8) -> dict[str, Any]:
     """Call the concrete Eastmoney kline API through system curl and validate klines."""
+    used_url = EASTMONEY_KLINE_URL.format(end_date=date.today().strftime("%Y%m%d"))
     command = [
         "curl",
-        "-4",
-        "--http1.1",
-        "--noproxy",
-        "*",
         "-sSL",
         "--max-time",
         str(max(1, int(timeout_seconds))),
         "-A",
-        "Mozilla/5.0",
-        "-e",
-        "https://quote.eastmoney.com/",
-        EASTMONEY_KLINE_URL,
+        EASTMONEY_USER_AGENT,
+        "-H",
+        f"Referer: {EASTMONEY_REFERER}",
+        used_url,
     ]
     try:
         completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=timeout_seconds + 2)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"status": "failed", "ok": False, "message": f"{EASTMONEY_UNAVAILABLE_MESSAGE} error={type(exc).__name__}: {exc}"}
+        return _eastmoney_failure(
+            used_url=used_url,
+            curl_returncode=None,
+            stderr=str(exc),
+            message=f"{EASTMONEY_UNAVAILABLE_MESSAGE} error={type(exc).__name__}: {exc}",
+        )
     if completed.returncode != 0:
-        return {"status": "failed", "ok": False, "message": f"{EASTMONEY_UNAVAILABLE_MESSAGE} curl_returncode={completed.returncode}", "stderr": completed.stderr}
+        return _eastmoney_failure(
+            used_url=used_url,
+            curl_returncode=completed.returncode,
+            stderr=completed.stderr,
+            message=f"{EASTMONEY_UNAVAILABLE_MESSAGE} curl_returncode={completed.returncode}",
+        )
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        return {"status": "failed", "ok": False, "message": f"{EASTMONEY_UNAVAILABLE_MESSAGE} JSON 解析失败：{exc}"}
+        return _eastmoney_failure(
+            used_url=used_url,
+            curl_returncode=completed.returncode,
+            stderr=completed.stderr,
+            message=f"{EASTMONEY_UNAVAILABLE_MESSAGE} JSON 解析失败：{exc}",
+        )
     klines = ((payload.get("data") or {}).get("klines") or [])
     ok = payload.get("rc") == 0 and bool(klines)
     return {
@@ -153,6 +176,27 @@ def check_eastmoney_kline(*, timeout_seconds: int = 8) -> dict[str, Any]:
         "message": f"东方财富 K 线接口可用，返回 {len(klines)} 行。" if ok else EASTMONEY_UNAVAILABLE_MESSAGE,
         "kline_count": len(klines),
         "rc": payload.get("rc"),
+        "used_url": used_url,
+        "headers_present": {"user_agent": True, "referer": True},
+    }
+
+
+def _eastmoney_failure(
+    *,
+    used_url: str,
+    curl_returncode: int | None,
+    stderr: str,
+    message: str,
+) -> dict[str, Any]:
+    """Build a detailed but concise Eastmoney preflight failure result."""
+    return {
+        "status": "failed",
+        "ok": False,
+        "message": message,
+        "used_url": used_url,
+        "curl_returncode": curl_returncode,
+        "stderr": (stderr or "").strip()[:500],
+        "headers_present": {"user_agent": True, "referer": True},
     }
 
 
