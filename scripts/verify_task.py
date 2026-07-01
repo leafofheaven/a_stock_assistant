@@ -67,6 +67,12 @@ VERIFY_COMMANDS = {
         [sys.executable, "scripts/check_project.py"],
         [sys.executable, "scripts/check_task.py", "task55"],
     ],
+    "task56": [
+        [sys.executable, "-m", "pytest"],
+        [sys.executable, "scripts/check_project.py"],
+        [sys.executable, "scripts/check_task.py", "task56"],
+        [sys.executable, "-m", "core.jobs.export_daily_research_workbook", "--output", "/tmp/a_stock_assistant_task56/daily_research.xlsx"],
+    ],
 }
 
 

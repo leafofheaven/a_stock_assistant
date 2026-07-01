@@ -30,8 +30,129 @@ SHEET_NAMES = [
     "10_说明",
 ]
 
-SENSITIVE_KEYWORDS = ("token", "key", "password", "secret")
+SENSITIVE_KEYWORDS = ("token", "key", "password", "secret", "api密钥", "smtp")
+SENSITIVE_VALUE_MARKERS = ("sk-",)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FUNDAMENTAL_SCORE_MISSING_NOTE_PREFIX = "基本面分（fundamental_score）缺失记录数"
+
+RANK_COLUMNS = {
+    "rank",
+    "candidate_rank",
+    "original_rank",
+    "today_rank",
+    "previous_rank",
+    "rank_change",
+    "best_rank",
+    "latest_rank",
+}
+
+COLUMN_LABELS = {
+    "display_order": "序号",
+    "message": "说明",
+    "metric": "项目",
+    "value": "内容",
+    "section": "项目",
+    "description": "说明",
+    "source": "来源（source）",
+    "trade_date": "交易日期（trade_date）",
+    "review_date": "复核日期（review_date）",
+    "latest_trade_date": "最新行情日期（latest_trade_date）",
+    "snapshot_date": "快照日期（snapshot_date）",
+    "ts_code": "股票代码（ts_code）",
+    "symbol": "股票简称代码（symbol）",
+    "name": "股票名称（name）",
+    "industry": "行业（industry）",
+    "market": "市场（market）",
+    "list_date": "上市日期（list_date）",
+    "close": "收盘价（close）",
+    "current_close": "当前价格（current_close）",
+    "current_price": "当前价格（current_price）",
+    "pe": "市盈率（pe）",
+    "pb": "市净率（pb）",
+    "total_score": "综合分（total_score）",
+    "latest_score": "最近综合分（latest_score）",
+    "trend_score": "趋势分（trend_score）",
+    "momentum_score": "动量分（momentum_score）",
+    "liquidity_score": "流动性分（liquidity_score）",
+    "fundamental_score": "基本面分（fundamental_score）",
+    "volatility_score": "波动分（volatility_score）",
+    "quality_score": "质量分（quality_score）",
+    "valuation_score": "估值分（valuation_score）",
+    "risk_score": "风险分（risk_score）",
+    "select_reason": "候选原因（select_reason）",
+    "risk_note": "风险提示（risk_note）",
+    "elder_score": "埃尔德分（elder_score）",
+    "action_hint": "操作提示（action_hint）",
+    "review_action": "复核动作（review_action）",
+    "elder_reason": "复核原因（elder_reason）",
+    "weekly_trend": "周线趋势（weekly_trend）",
+    "daily_pullback": "日线回调（daily_pullback）",
+    "force_signal": "强力指数信号（force_signal）",
+    "elder_ray_signal": "埃尔德射线信号（elder_ray_signal）",
+    "ema13": "13日指数移动平均线（ema13）",
+    "ema22": "22日指数移动平均线（ema22）",
+    "ema60": "60日指数移动平均线（ema60）",
+    "support_20d": "20日支撑位（support_20d）",
+    "support_60d": "60日支撑位（support_60d）",
+    "resistance_20d": "20日阻力位（resistance_20d）",
+    "resistance_60d": "60日阻力位（resistance_60d）",
+    "nearest_support": "最近支撑位（nearest_support）",
+    "nearest_resistance": "最近阻力位（nearest_resistance）",
+    "atr_14": "14日平均真实波幅（atr_14）",
+    "entry_low": "买入区间下限（entry_low）",
+    "entry_high": "买入区间上限（entry_high）",
+    "entry_mid": "买入区间中值（entry_mid）",
+    "stop_loss": "止损价（stop_loss）",
+    "target_price": "目标价（target_price）",
+    "risk_pct": "风险比例（risk_pct）",
+    "reward_pct": "收益比例（reward_pct）",
+    "reward_risk_ratio": "盈亏比（reward_risk_ratio）",
+    "entry_zone_status": "买入区间状态（entry_zone_status）",
+    "entry_zone_status_cn": "买入区间状态说明（entry_zone_status_cn）",
+    "chase_risk": "追高风险（chase_risk）",
+    "chase_risk_cn": "追高风险说明（chase_risk_cn）",
+    "price_action_note": "价格行为说明（price_action_note）",
+    "entry_reason": "入池原因（entry_reason）",
+    "watch_reason": "观察原因（watch_reason）",
+    "watch_status": "观察状态（watch_status）",
+    "watch_status_label": "观察状态说明（watch_status_label）",
+    "watch_days": "观察天数（watch_days）",
+    "first_selected_date": "首次入选日期（first_selected_date）",
+    "last_selected_date": "最近入选日期（last_selected_date）",
+    "selected_count_5d": "近5日入选次数（selected_count_5d）",
+    "selected_count_10d": "近10日入选次数（selected_count_10d）",
+    "consecutive_selected_days": "连续入选天数（consecutive_selected_days）",
+    "total_score_change": "综合分变化（total_score_change）",
+    "score_change": "综合分变化（score_change）",
+    "is_top_n": "是否进入前N名（is_top_n）",
+    "top_n_flag": "是否进入前N名（top_n_flag）",
+    "is_new_candidate": "是否新候选（is_new_candidate）",
+    "new_candidate_flag": "是否新候选（new_candidate_flag）",
+    "daily_note": "每日备注（daily_note）",
+    "platform": "平台（platform）",
+    "account_name": "账户名称（account_name）",
+    "quantity": "持仓数量（quantity）",
+    "cost_price": "持仓成本（cost_price）",
+    "market_value": "市值（market_value）",
+    "pnl": "浮动盈亏（pnl）",
+    "pnl_pct": "浮动盈亏比例（pnl_pct）",
+    "position_status": "持仓状态（position_status）",
+    "risk_status": "风险状态（risk_status）",
+    "risk_status_cn": "风险状态说明（risk_status_cn）",
+    "match_note": "匹配说明（match_note）",
+    "note": "备注（note）",
+    "risk_type": "风险类型（risk_type）",
+    "risk_level": "风险等级（risk_level）",
+    "detail": "说明（detail）",
+    "suggested_action": "建议动作（suggested_action）",
+    "table_name": "数据表（table_name）",
+    "row_count": "行数（row_count）",
+    "distinct_symbols": "股票数量（distinct_symbols）",
+    "latest_date": "最新日期（latest_date）",
+    "note": "说明（note）",
+    "config_key": "配置项（config_key）",
+    "config_value": "配置值（config_value）",
+}
 
 
 @dataclass(frozen=True)
@@ -193,11 +314,11 @@ def _build_strategy_sheet(strategy: pd.DataFrame, trade_date: str) -> pd.DataFra
         frame = frame.sort_values("total_score", ascending=False, na_position="last")
     columns = [
         "display_order",
-        "candidate_rank",
         "trade_date",
         "ts_code",
         "name",
         "industry",
+        "list_date",
         "close",
         "pe",
         "pb",
@@ -221,15 +342,16 @@ def _build_elder_sheet(strategy: pd.DataFrame, watchlist: pd.DataFrame, trade_da
     strategy_elder_columns = [
         "display_order",
         "source",
-        "candidate_rank",
         "trade_date",
         "review_date",
         "latest_trade_date",
         "ts_code",
         "name",
+        "industry",
         "total_score",
         "elder_score",
         "action_hint",
+        "review_action",
         "elder_reason",
         "weekly_trend",
         "daily_pullback",
@@ -245,8 +367,6 @@ def _build_elder_sheet(strategy: pd.DataFrame, watchlist: pd.DataFrame, trade_da
     if not watch_frame.empty:
         watch_frame = watch_frame.copy()
         watch_frame["source"] = "观察池"
-        if "today_rank" in watch_frame.columns:
-            watch_frame["candidate_rank"] = watch_frame["today_rank"]
         rows.append(_preferred_columns(watch_frame, strategy_elder_columns))
 
     if not rows:
@@ -265,16 +385,9 @@ def _build_entry_zone_sheet(
         return _message_frame("暂无买入区间结果。请先运行 python -m core.jobs.calculate_entry_zones。")
     if "source" not in frame.columns:
         frame["source"] = ""
-    rank_map = {}
-    if not strategy.empty and {"ts_code", "candidate_rank"}.issubset(strategy.columns):
-        rank_map.update(strategy.set_index("ts_code")["candidate_rank"].to_dict())
-    if not watchlist.empty and {"ts_code", "today_rank"}.issubset(watchlist.columns):
-        rank_map.update(watchlist.set_index("ts_code")["today_rank"].to_dict())
-    frame["candidate_rank"] = frame["ts_code"].map(rank_map)
     columns = [
         "display_order",
         "source",
-        "candidate_rank",
         "trade_date",
         "ts_code",
         "name",
@@ -317,18 +430,20 @@ def _watchlist_columns() -> list[str]:
         "current_close",
         "pe",
         "pb",
-        "today_rank",
-        "previous_rank",
-        "rank_change",
         "total_score",
         "total_score_change",
+        "is_top_n",
+        "is_new_candidate",
+        "first_selected_date",
+        "last_selected_date",
         "selected_count_5d",
         "selected_count_10d",
         "consecutive_selected_days",
-        "best_rank",
         "watch_status",
         "watch_status_label",
         "watch_days",
+        "entry_reason",
+        "watch_reason",
         "elder_score",
         "action_hint",
         "elder_reason",
@@ -446,6 +561,9 @@ def _build_data_quality_sheet(store: DuckDBStore, trade_date: str) -> pd.DataFra
             "latest_date": trade_date,
             "note": "工作簿默认使用该日期的本地持久化结果。",
         }
+    missing_metrics = _missing_value_metrics(store, trade_date)
+    if missing_metrics:
+        quality = pd.concat([quality, pd.DataFrame(missing_metrics)], ignore_index=True, sort=False)
     return quality
 
 
@@ -479,6 +597,57 @@ def _table_metric(
     }
 
 
+def _missing_value_metrics(store: DuckDBStore, trade_date: str) -> list[dict[str, Any]]:
+    """Return missing-value metrics with wording that distinguishes columns from values."""
+    metrics: list[dict[str, Any]] = []
+    targets = [
+        ("factor_scores", "fundamental_score", "基本面分（fundamental_score）"),
+        ("strategy_result", "fundamental_score", "基本面分（fundamental_score）"),
+        ("strategy_result", "pe", "市盈率（pe）"),
+        ("strategy_result", "pb", "市净率（pb）"),
+    ]
+    for table_name, column_name, label in targets:
+        if not _table_has_column(store, table_name, column_name):
+            metrics.append(
+                {
+                    "table_name": table_name,
+                    "row_count": "",
+                    "distinct_symbols": "",
+                    "latest_date": trade_date,
+                    "note": f"字段不存在：{label}",
+                }
+            )
+            continue
+        where = f"WHERE trade_date = '{trade_date}'" if trade_date and _table_has_column(store, table_name, "trade_date") else ""
+        frame = _read_query(
+            store,
+            f"SELECT COUNT(*) AS row_count, SUM(CASE WHEN {column_name} IS NULL THEN 1 ELSE 0 END) AS missing_count FROM {table_name} {where}",
+        )
+        if frame.empty:
+            continue
+        row = frame.iloc[0]
+        missing_count = int(row.get("missing_count") or 0)
+        if missing_count > 0:
+            note_prefix = FUNDAMENTAL_SCORE_MISSING_NOTE_PREFIX if column_name == "fundamental_score" else f"{label}缺失记录数"
+            metrics.append(
+                {
+                    "table_name": table_name,
+                    "row_count": _blank_if_na(row.get("row_count")),
+                    "distinct_symbols": "",
+                    "latest_date": trade_date,
+                    "note": f"{note_prefix}：{missing_count}",
+                }
+            )
+    return metrics
+
+
+def _table_has_column(store: DuckDBStore, table_name: str, column_name: str) -> bool:
+    frame = _read_query(store, f"DESCRIBE {table_name}")
+    if frame.empty or "column_name" not in frame.columns:
+        return False
+    return column_name in set(frame["column_name"].astype(str))
+
+
 def _settings_sheet(settings: Any) -> pd.DataFrame:
     if hasattr(settings, "model_dump"):
         values = settings.model_dump()
@@ -487,9 +656,12 @@ def _settings_sheet(settings: Any) -> pd.DataFrame:
     rows = []
     for key, value in sorted(values.items()):
         lower = key.lower()
+        value_text = str(value)
         if any(marker in lower for marker in SENSITIVE_KEYWORDS):
             continue
-        rows.append({"config_key": key, "config_value": str(value)})
+        if any(marker in value_text.lower() for marker in SENSITIVE_VALUE_MARKERS):
+            continue
+        rows.append({"config_key": key, "config_value": value_text})
     return pd.DataFrame(rows)
 
 
@@ -522,7 +694,12 @@ def _help_sheet() -> pd.DataFrame:
     return pd.DataFrame(
         [
             {"section": "工作簿用途", "description": "汇总今日候选、技术复核、买入区间、观察池、外部模拟持仓和数据质量。"},
-            {"section": "排序口径", "description": "display_order 为当前工作表显示序号；candidate_rank 保留今日选股原始排名。"},
+            {"section": "排序口径", "description": "序号只代表当前 Sheet 当前显示顺序，不代表买入优先级。"},
+            {"section": "rank 字段", "description": "默认不导出 rank / 排名字段。系统已提供综合分、各因子分、埃尔德分、买入区间、风险状态等字段，用户可自行筛选和排序。"},
+            {"section": "字段命名", "description": "字段命名采用“中文名称（英文名）”格式。中文名称用于理解含义，英文名用于和代码、数据库字段或导出字段对应。"},
+            {"section": "观察池", "description": "04_观察池是当前观察名单，展示当前仍需跟踪的股票，不代表买入清单。"},
+            {"section": "观察池跟踪", "description": "05_观察池跟踪是观察池每日快照，用于查看观察股票在不同交易日的分数、状态和技术复核变化，不代表买入优先级。"},
+            {"section": "买入区间", "description": "买入区间、止损价、目标价、盈亏比是研究计划参考，不是交易指令。"},
             {"section": "只读原则", "description": "导出命令只读取 DuckDB，不更新行情、不重算因子、不改变 total_score。"},
             {"section": "缺失数据", "description": "某些工作表显示暂无数据时，请先运行对应本地命令生成持久化结果。"},
             {"section": "提示", "description": "个人研究工具，结果需自行复核。"},
@@ -567,9 +744,9 @@ def _resolve_output_path(output_path: str | Path | None, trade_date: str) -> Pat
 
 def _write_sheet(workbook: Workbook, sheet_name: str, frame: pd.DataFrame) -> None:
     worksheet = workbook.create_sheet(sheet_name)
-    frame = frame.copy()
+    frame = _prepare_for_excel(frame)
     if frame.empty:
-        frame = _message_frame("暂无数据。")
+        frame = _prepare_for_excel(_message_frame("暂无数据。"))
     worksheet.append(list(frame.columns))
     for row in frame.itertuples(index=False):
         worksheet.append([_excel_value(value) for value in row])
@@ -596,6 +773,39 @@ def _excel_value(value: Any) -> Any:
     if isinstance(value, float):
         return round(value, 6)
     return value
+
+
+def _prepare_for_excel(frame: pd.DataFrame) -> pd.DataFrame:
+    """Apply user-facing workbook rules without changing persisted data."""
+    frame = frame.copy()
+    frame = _drop_rank_columns(frame)
+    frame = frame.rename(columns={column: COLUMN_LABELS.get(column, column) for column in frame.columns})
+    frame = frame.where(pd.notna(frame), None)
+    return frame
+
+
+def _drop_rank_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    rank_like = {column for column in frame.columns if _is_rank_column(column)}
+    if not rank_like:
+        return frame
+    return frame.drop(columns=sorted(rank_like))
+
+
+def _is_rank_column(column: str) -> bool:
+    normalized = str(column).strip().lower()
+    if normalized in RANK_COLUMNS:
+        return True
+    forbidden_labels = (
+        "原始选股排名",
+        "当日入选排名",
+        "上次入选排名",
+        "排名变化",
+        "历史最佳入选排名",
+        "最近入选排名",
+    )
+    return any(label in str(column) for label in forbidden_labels)
 
 
 def _blank_if_na(value: Any) -> Any:

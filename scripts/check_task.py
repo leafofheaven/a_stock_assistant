@@ -66,6 +66,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task53": check_task53,
         "task54": check_task54,
         "task55": check_task55,
+        "task56": check_task56,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -3034,6 +3035,79 @@ def check_task55(root: Path) -> list[str]:
     return failures
 
 
+def check_task56(root: Path) -> list[str]:
+    """Check daily research workbook field clarity and no-rank export policy."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/export_daily_research_workbook.py",
+            "tests/test_daily_research_workbook.py",
+            "scripts/verify_task.py",
+        ],
+    )
+    export_source = read_source(root / "core/jobs/export_daily_research_workbook.py")
+    for phrase in [
+        "COLUMN_LABELS",
+        "RANK_COLUMNS",
+        "综合分（total_score）",
+        "趋势分（trend_score）",
+        "动量分（momentum_score）",
+        "流动性分（liquidity_score）",
+        "基本面分（fundamental_score）",
+        "波动分（volatility_score）",
+        "埃尔德分（elder_score）",
+        "操作提示（action_hint）",
+        "买入区间下限（entry_low）",
+        "止损价（stop_loss）",
+        "盈亏比（reward_risk_ratio）",
+        "_drop_rank_columns",
+        "_prepare_for_excel",
+        "基本面分（fundamental_score）缺失记录数",
+        "默认不导出 rank / 排名字段",
+        "序号只代表当前 Sheet 当前显示顺序，不代表买入优先级",
+        "中文名称（英文名）",
+        "SENSITIVE_VALUE_MARKERS",
+    ]:
+        if phrase not in export_source:
+            failures.append(f"export_daily_research_workbook.py is missing Task 56 phrase: {phrase}.")
+    for forbidden in [
+        "candidate_rank 保留今日选股原始排名",
+        "字段缺失：{'fundamental_score'",
+        "字段缺失：fundamental_score",
+    ]:
+        if forbidden in export_source:
+            failures.append(f"export_daily_research_workbook.py still contains misleading Task 56 wording: {forbidden}.")
+
+    tests_source = read_source(root / "tests/test_daily_research_workbook.py")
+    for phrase in [
+        "test_workbook_has_no_rank_columns_by_default",
+        "test_workbook_uses_chinese_name_with_english_field_labels",
+        "test_candidate_sheet_fields",
+        "test_elder_review_sheet_fields",
+        "test_watchlist_sheet_hides_rank_fields",
+        "test_watchlist_tracking_sheet_hides_rank_fields",
+        "test_data_quality_missing_values_wording",
+        "test_explanation_sheet_defines_no_rank_policy",
+        "test_workbook_filters_sensitive_settings",
+        "test_no_algorithm_changes",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_daily_research_workbook.py is missing Task 56 coverage: {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task56", "export_daily_research_workbook", "/tmp/a_stock_assistant_task56/daily_research.xlsx"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task56 is missing {phrase}.")
+    if "reports/daily_research" in verify_source:
+        failures.append("verify_task.py task56 should not write workbook output into reports/.")
+
+    docs_source = read_source(root / "docs/commands_reference.md")
+    for phrase in ["默认不导出 rank", "中文名称（英文名）", "序号只代表当前 Sheet 当前显示顺序"]:
+        if phrase not in docs_source:
+            failures.append(f"docs/commands_reference.md is missing Task 56 wording: {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -3120,6 +3194,7 @@ def main(argv: list[str] | None = None) -> int:
             "task53",
             "task54",
             "task55",
+            "task56",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
