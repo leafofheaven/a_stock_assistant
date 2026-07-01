@@ -36,7 +36,7 @@ def test_core_logic_guide_mentions_elder_review_concepts() -> None:
         "日线回调（daily_pullback）",
         "强力指数（Force Index）",
         "埃尔德射线（Elder-ray）",
-        "不覆盖 综合分（total_score）",
+        "不覆盖综合分（total_score）",
         "不代表买入优先级",
     ]:
         assert phrase in content
@@ -44,7 +44,7 @@ def test_core_logic_guide_mentions_elder_review_concepts() -> None:
 
 def test_core_logic_guide_mentions_excel_and_no_rank_policy() -> None:
     content = GUIDE_PATH.read_text(encoding="utf-8")
-    assert "Excel 默认应避免导出 rank 字段" in content
+    assert "Excel 默认应避免导出排名字段（rank）" in content
     assert "序号只代表当前 Sheet 显示顺序" in content
 
 
@@ -59,7 +59,7 @@ def test_core_logic_guide_has_formula_details() -> None:
         "0.15 * 波动分（volatility_score）",
         "20日收益率（return_20d）= 当前收盘价 / 20 个交易日前收盘价 - 1",
         "20日平均成交额（avg_amount_20d）= 最近 20 个交易日成交额均值",
-        "市盈率倒数分（pe_score）= 1 / 市盈率（pe）",
+        "市盈率倒数指标（pe_score）= 1 / 市盈率（pe）",
         "20日波动率（volatility_20d）",
         "score = (value - min_value) / (max_value - min_value) * 100",
     ]:
@@ -131,14 +131,14 @@ def test_core_logic_guide_has_user_formula_usage_section() -> None:
     content = GUIDE_PATH.read_text(encoding="utf-8")
     assert "## 10. 普通用户如何使用这些公式" in content
     for phrase in [
-        "先用 综合分（total_score） 缩小候选范围",
-        "看 趋势分（trend_score） / 动量分（momentum_score）",
-        "看 流动性分（liquidity_score）",
-        "看 基本面分（fundamental_score）",
-        "看 波动分（volatility_score）",
+        "先用综合分（total_score）缩小候选范围",
+        "看趋势分（trend_score） / 动量分（momentum_score）",
+        "看流动性分（liquidity_score）",
+        "看基本面分（fundamental_score）",
+        "看波动分（volatility_score）",
         "看埃尔德复核",
         "看买入区间",
-        "不使用 排名字段（rank） 或序号作为买入优先级",
+        "不使用排名字段（rank）或序号作为买入优先级",
     ]:
         assert phrase in content
 

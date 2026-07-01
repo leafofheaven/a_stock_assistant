@@ -2953,9 +2953,9 @@ def check_task55(root: Path) -> list[str]:
         "复核原因（elder_reason）",
         "周线趋势（weekly_trend）",
         "日线回调（daily_pullback）",
-        "不覆盖 综合分（total_score）",
+        "不覆盖综合分（total_score）",
         "不代表买入优先级",
-        "Excel 默认应避免导出 rank 字段",
+        "Excel 默认应避免导出排名字段（rank）",
         "序号只代表当前 Sheet 显示顺序",
         "外部模拟持仓",
         "数据质量",
@@ -2963,7 +2963,7 @@ def check_task55(root: Path) -> list[str]:
         "0.30 * 趋势分（trend_score）",
         "20日收益率（return_20d）= 当前收盘价 / 20 个交易日前收盘价 - 1",
         "20日平均成交额（avg_amount_20d）= 最近 20 个交易日成交额均值",
-        "市盈率倒数分（pe_score）= 1 / 市盈率（pe）",
+        "市盈率倒数指标（pe_score）= 1 / 市盈率（pe）",
         "20日波动率（volatility_20d）",
         "score = (value - min_value) / (max_value - min_value) * 100",
         "## 8. 埃尔德复核计算公式",
@@ -2971,7 +2971,7 @@ def check_task55(root: Path) -> list[str]:
         "## 9. 买入区间计算公式",
         "盈亏比（reward_risk_ratio）= 收益距离（reward） / 风险距离（risk）",
         "## 10. 普通用户如何使用这些公式",
-        "不使用 排名字段（rank） 或序号作为买入优先级",
+        "不使用排名字段（rank）或序号作为买入优先级",
     ]:
         if phrase not in guide:
             failures.append(f"core_logic_guide.md is missing phrase: {phrase}.")
