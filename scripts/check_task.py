@@ -65,6 +65,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task52": check_task52,
         "task53": check_task53,
         "task54": check_task54,
+        "task55": check_task55,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -2923,6 +2924,83 @@ def check_task54(root: Path) -> list[str]:
     return failures
 
 
+def check_task55(root: Path) -> list[str]:
+    """Check the core logic guide and Streamlit download entry."""
+    failures = check_paths(
+        root,
+        [
+            "docs/user_guides/core_logic_guide.md",
+            "web/streamlit_app.py",
+            "tests/test_core_logic_guide.py",
+            "scripts/verify_task.py",
+        ],
+    )
+
+    guide = read_source(root / "docs/user_guides/core_logic_guide.md")
+    for phrase in [
+        "A 股选股辅助系统：核心逻辑说明",
+        "total_score",
+        "trend_score",
+        "momentum_score",
+        "liquidity_score",
+        "fundamental_score",
+        "volatility_score",
+        "仅供个人研究使用",
+        "不自动交易",
+        "elder_score",
+        "action_hint",
+        "elder_reason",
+        "weekly_trend",
+        "daily_pullback",
+        "不改变 `total_score`",
+        "不代表买入优先级",
+        "Excel 默认应避免导出 rank 字段",
+        "序号只代表当前 Sheet 显示顺序",
+        "外部模拟持仓",
+        "数据质量",
+    ]:
+        if phrase not in guide:
+            failures.append(f"core_logic_guide.md is missing phrase: {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "CORE_LOGIC_GUIDE_PATH",
+        "docs",
+        "user_guides",
+        "core_logic_guide.md",
+        "核心说明文件",
+        "下载核心逻辑说明",
+        "A股选股辅助系统_核心逻辑说明.md",
+        "st.download_button",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing core guide download phrase: {phrase}.")
+    if "export_logic_docs" in streamlit_source or "write_text" in streamlit_source:
+        failures.append("Streamlit download entry should read the committed guide without generating artifacts.")
+
+    tests_source = read_source(root / "tests/test_core_logic_guide.py")
+    for phrase in [
+        "test_core_logic_guide_exists",
+        "test_core_logic_guide_mentions_stock_selection_concepts",
+        "test_core_logic_guide_mentions_elder_review_concepts",
+        "test_core_logic_guide_mentions_excel_and_no_rank_policy",
+        "test_streamlit_has_core_logic_doc_download",
+        "test_no_algorithm_changes",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_core_logic_guide.py is missing test: {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task55", "pytest", "check_project.py", "check_task.py"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task55 is missing {phrase}.")
+    task55_block = verify_source.split('"task55":', 1)[-1].split("]", 1)[0] if '"task55":' in verify_source else ""
+    for forbidden in ["run_daily_workflow", "update_real_data", "export_daily_research_workbook", "reports", "data/a_stock_assistant.duckdb"]:
+        if forbidden in task55_block:
+            failures.append(f"verify_task.py task55 should not create runtime artifacts: {forbidden}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -3008,6 +3086,7 @@ def main(argv: list[str] | None = None) -> int:
             "task52",
             "task53",
             "task54",
+            "task55",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
