@@ -22,6 +22,7 @@ def run_full_batch_update(
     preflight: bool = True,
     skip_network_preflight: bool = False,
     dry_run: bool = False,
+    verbose: bool = False,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Run a bounded full-universe update with page-selected runtime parameters."""
@@ -71,6 +72,7 @@ def run_full_batch_update(
     result["preflight"] = preflight_result
     result["full_update_mode"] = mode
     result["skip_empty_unavailable"] = skip_empty_unavailable
+    result["verbose"] = verbose
     return result
 
 
@@ -85,6 +87,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--preflight", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--skip-network-preflight", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verbose", action="store_true", help="Print detailed symbol-level failure rows.")
     args = parser.parse_args(argv)
     result = run_full_batch_update(
         mode=args.mode,
@@ -96,12 +99,13 @@ def main(argv: list[str] | None = None) -> None:
         preflight=args.preflight,
         skip_network_preflight=args.skip_network_preflight,
         dry_run=args.dry_run,
+        verbose=args.verbose,
     )
-    print(_summary(result))
+    print(_summary(result, verbose=args.verbose))
     raise SystemExit(0 if result.get("status") in {"success", "partial_success", "skipped"} else 1)
 
 
-def _summary(result: dict[str, Any]) -> str:
+def _summary(result: dict[str, Any], *, verbose: bool = False) -> str:
     lines = [
         "全市场批量补数据摘要",
         f"- 状态: {result.get('status')}",
@@ -112,6 +116,20 @@ def _summary(result: dict[str, Any]) -> str:
         f"- 失败数量: {result.get('failed_symbols', 0)}",
         f"- 本次未处理数量: {result.get('deferred_symbols', 0)}",
     ]
+    empty_symbols = list(result.get("empty_data_symbols") or [])
+    failure_records = list(result.get("failure_records") or [])
+    if empty_symbols:
+        lines.append(f"- 空数据股票: {len(empty_symbols)} 只，样例: {', '.join(map(str, empty_symbols[:10]))}")
+    if failure_records:
+        examples = [str(item.get("symbol", "")) for item in failure_records if item.get("symbol")]
+        lines.append(f"- 失败/不可用股票: {len(failure_records)} 条，样例: {', '.join(examples[:10])}")
+        if verbose:
+            lines.append("- 失败明细:")
+            for item in failure_records[:200]:
+                lines.append(
+                    f"  {item.get('symbol')} provider={item.get('provider')} "
+                    f"stage={item.get('failed_stage')} error={item.get('error_message')}"
+                )
     if result.get("preflight"):
         lines.append(f"- 预检状态: {result['preflight'].get('status')}")
     return "\n".join(lines)

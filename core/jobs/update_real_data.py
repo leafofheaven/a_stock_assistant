@@ -513,14 +513,11 @@ def main() -> None:
     if result.get("empty_tables"):
         print(f"- 空数据表: {', '.join(result['empty_tables'])}")
     if result.get("empty_data_symbols"):
-        print(f"- 空数据股票: {', '.join(result['empty_data_symbols'])}")
+        examples = list(result["empty_data_symbols"])[:10]
+        print(f"- 空数据股票: {len(result['empty_data_symbols'])} 只，样例: {', '.join(examples)}")
     if result.get("failure_records"):
-        print("- 失败股票列表:")
-        for item in result["failure_records"]:
-            print(
-                f"  {item['symbol']} provider={item['provider']} "
-                f"stage={item['failed_stage']} error={item['error_message']}"
-            )
+        examples = [str(item.get("symbol", "")) for item in result["failure_records"] if item.get("symbol")][:10]
+        print(f"- 失败/不可用股票: {len(result['failure_records'])} 条，样例: {', '.join(examples)}")
     print("- 下一步建议:")
     for step in result.get("next_steps", []):
         print(f"  {step}")

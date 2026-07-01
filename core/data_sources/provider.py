@@ -53,7 +53,8 @@ def select_data_provider(
             primary=primary_client
             or AKShareClient(
                 adjust=resolved_settings.akshare_adjust,
-                request_timeout_seconds=getattr(resolved_settings, "real_request_timeout_seconds", 30),
+                request_timeout_seconds=_request_timeout_seconds(resolved_settings),
+                symbol_timeout_seconds=getattr(resolved_settings, "symbol_update_timeout_seconds", 45),
                 enable_basic_enrichment=getattr(resolved_settings, "enable_stock_basic_enrichment", False),
                 enable_valuation_enrichment=_akshare_valuation_enrichment_enabled(resolved_settings),
             ),
@@ -65,7 +66,8 @@ def select_data_provider(
     if getattr(resolved_settings, "enable_akshare_fallback", False):
         fallback = fallback_client or AKShareClient(
             adjust=resolved_settings.akshare_adjust,
-            request_timeout_seconds=getattr(resolved_settings, "real_request_timeout_seconds", 30),
+            request_timeout_seconds=_request_timeout_seconds(resolved_settings),
+            symbol_timeout_seconds=getattr(resolved_settings, "symbol_update_timeout_seconds", 45),
             enable_basic_enrichment=getattr(resolved_settings, "enable_stock_basic_enrichment", False),
             enable_valuation_enrichment=_akshare_valuation_enrichment_enabled(resolved_settings),
         )
@@ -93,3 +95,11 @@ def _akshare_valuation_enrichment_enabled(settings: Settings) -> bool:
     if full_mode:
         return bool(getattr(settings, "full_enable_valuation_enrichment", False))
     return bool(getattr(settings, "enable_valuation_enrichment", False))
+
+
+def _request_timeout_seconds(settings: Settings) -> int:
+    """Return the preferred per-request timeout, keeping older config compatible."""
+    explicit = int(getattr(settings, "data_source_request_timeout_seconds", 0) or 0)
+    if explicit > 0:
+        return explicit
+    return int(getattr(settings, "real_request_timeout_seconds", 30) or 30)

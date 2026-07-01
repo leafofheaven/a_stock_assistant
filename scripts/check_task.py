@@ -3223,6 +3223,16 @@ def check_task57b(root: Path) -> list[str]:
         "send_macos_notification",
         "send_email_notification",
         "DuckDB is locked by another process",
+        "update_limit",
+        "stage_timeout_seconds",
+        "last_heartbeat_at",
+        "processed_symbol_count",
+        "total_symbol_count",
+        "StageCommand",
+        "subprocess.Popen",
+        "select.select",
+        "--max-symbols",
+        "FULL_BATCH_UPDATE_TIMEOUT_SECONDS",
     ]:
         if phrase not in scheduled_source:
             failures.append(f"run_scheduled_daily_update.py is missing Task 57B phrase: {phrase}.")
@@ -3260,6 +3270,13 @@ def check_task57b(root: Path) -> list[str]:
         "test_email_notification_disabled_by_default",
         "test_install_scheduled_daily_update_generates_launchd_plist",
         "test_streamlit_shows_scheduled_update_status_and_download",
+        "test_force_update_limit_is_passed_to_update_stage",
+        "test_text_mode_prints_start_immediately",
+        "test_text_mode_prints_each_stage_with_flush",
+        "test_stage_status_written_before_heavy_work",
+        "test_stage_timeout_exits_and_releases_lock",
+        "test_heartbeat_updates_during_long_stage",
+        "test_force_update_limit_50_finishes_in_test",
         "test_no_algorithm_changes",
     ]:
         if phrase not in tests_source:
@@ -3270,9 +3287,13 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in verify_source:
             failures.append(f"verify_task.py task57b is missing {phrase}.")
     docs_source = read_source(root / "docs/commands_reference.md")
-    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "18:00", "自动更新状态"]:
+    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "18:00", "自动更新状态", "--update-limit 50", "last_heartbeat_at", "DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS"]:
         if phrase not in docs_source:
             failures.append(f"docs/commands_reference.md is missing Task 57B wording: {phrase}.")
+    env_source = read_source(root / ".env.example")
+    for phrase in ["DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS", "FULL_BATCH_UPDATE_TIMEOUT_SECONDS"]:
+        if phrase not in env_source:
+            failures.append(f".env.example is missing Task 57B timeout config: {phrase}.")
     gitignore_source = read_source(root / ".gitignore")
     for phrase in ["data/", "reports/*.xlsx", "*.log"]:
         if phrase not in gitignore_source:

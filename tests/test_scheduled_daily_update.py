@@ -11,8 +11,10 @@ from types import SimpleNamespace
 from core.factors.scoring import DEFAULT_WEIGHTS
 from core.jobs.install_scheduled_daily_update import build_launchd_plist, install_scheduled_daily_update
 from core.jobs.run_scheduled_daily_update import (
+    _scheduled_steps,
     read_scheduled_status,
     run_scheduled_daily_update,
+    scheduled_update_lock,
     should_run_scheduled_update,
 )
 from core.jobs.uninstall_scheduled_daily_update import uninstall_scheduled_daily_update
@@ -187,6 +189,320 @@ def test_scheduled_update_lock_prevents_concurrent_runs(tmp_path: Path) -> None:
     )
     assert result["status"] == "skipped"
     assert "正在运行" in result["summary"]
+
+
+def test_scheduled_update_cleans_stale_lock(tmp_path: Path) -> None:
+    """A pid lock with a non-existing process should be removed automatically."""
+    lock_path = tmp_path / "runtime" / "scheduled_daily_update.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text(json.dumps({"pid": 99999999, "started_at": "2026-07-01T18:00:00"}), encoding="utf-8")
+    with scheduled_update_lock(lock_path) as lock_info:
+        assert lock_info["stale_lock_cleaned"] is True
+        assert lock_path.exists()
+    assert not lock_path.exists()
+
+
+def test_scheduled_update_marks_stale_running_as_interrupted(tmp_path: Path) -> None:
+    """A previous running status without a live pid should be marked recoverable."""
+    status_path, lock_path = _status_paths(tmp_path)
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(json.dumps({"status": "running", "pid": 99999999, "trade_date": "20260701"}), encoding="utf-8")
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 17, 30),
+        status_path=status_path,
+        lock_path=lock_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+    )
+    assert result["status"] == "skipped"
+    assert result["previous_run_interrupted"] is True
+
+
+def test_scheduled_update_handles_keyboard_interrupt(tmp_path: Path) -> None:
+    """KeyboardInterrupt should write interrupted status and release the lock."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _ok_preflight,
+            "backup": lambda: (_ for _ in ()).throw(KeyboardInterrupt()),
+        },
+    )
+    assert result["status"] == "interrupted"
+    assert not lock_path.exists()
+
+
+def test_single_symbol_timeout_is_recorded_and_skipped(tmp_path: Path) -> None:
+    """Update-stage timeout counters should be carried into scheduled status."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _ok_preflight,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {
+                "status": "warning",
+                "network_timeout_count": 1,
+                "network_timeout_examples": ["601299.SH"],
+                "failed_symbol_count": 1,
+                "failed_symbol_examples": ["601299.SH"],
+            },
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    assert result["status"] == "warning"
+    assert result["network_timeout_count"] == 1
+    assert result["failed_symbol_examples"] == ["601299.SH"]
+
+
+def test_empty_data_symbols_are_summarized(tmp_path: Path) -> None:
+    """Empty-data symbols should be summarized on status, not printed as required per-symbol logs."""
+    status_path, lock_path = _status_paths(tmp_path)
+    empty_symbols = ["000602.SZ", "000618.SZ", "600005.SH"]
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _ok_preflight,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {
+                "status": "warning",
+                "empty_data_symbol_count": len(empty_symbols),
+                "empty_data_symbol_examples": empty_symbols[:2],
+                "update_warning_count": len(empty_symbols),
+            },
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    assert result["status"] == "warning"
+    assert result["empty_data_symbol_count"] == 3
+    assert result["empty_data_symbol_examples"] == empty_symbols[:2]
+
+
+def test_update_stage_timeout_fails_fast(tmp_path: Path) -> None:
+    """A timed-out update stage should fail and stop before recompute/export stages."""
+    status_path, lock_path = _status_paths(tmp_path)
+    called = {"workflow": False}
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _ok_preflight,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {"status": "failed", "message": "update_data 阶段超时：1 秒。", "timed_out": True},
+            "workflow": lambda: called.update(workflow=True) or {"status": "success"},
+        },
+    )
+    assert result["status"] == "failed"
+    assert result["stage"] == "update_data"
+    assert "超时" in result["failure_reason"]
+    assert called["workflow"] is False
+
+
+def test_dry_run_does_not_run_heavy_update(tmp_path: Path) -> None:
+    """dry-run should not execute backup/update/workbook steps."""
+    status_path, lock_path = _status_paths(tmp_path)
+    called = {"heavy": False}
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        dry_run=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _ok_preflight,
+            "backup": lambda: called.update(heavy=True) or {"status": "success"},
+            "update_data": lambda: called.update(heavy=True) or {"status": "success"},
+        },
+    )
+    assert result["stage"] == "dry_run"
+    assert called["heavy"] is False
+
+
+def test_force_update_limit_is_passed_to_update_stage(tmp_path: Path) -> None:
+    """update_limit should become run_full_batch_update --max-symbols."""
+    steps = _scheduled_steps(
+        settings=_settings(tmp_path),
+        workbook_path=tmp_path / "daily.xlsx",
+        update_limit=50,
+        update_batch_size=20,
+        update_lookback_days=250,
+        update_max_retries=1,
+        stage_timeout_seconds=180,
+        update_stage_timeout_seconds=180,
+        verbose=False,
+    )
+    update = next(step for step in steps if step.name == "update_data")
+    assert "core.jobs.run_full_batch_update" in update.command
+    assert update.command[update.command.index("--max-symbols") + 1] == "50"
+    assert update.command[update.command.index("--batch-size") + 1] == "20"
+
+
+def test_text_mode_prints_start_immediately(tmp_path: Path, capsys) -> None:
+    """Text mode should print startup lines before heavy work."""
+    status_path, lock_path = _status_paths(tmp_path)
+    run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 17, 30),
+        status_path=status_path,
+        lock_path=lock_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        output_format="text",
+        update_limit=50,
+    )
+    output = capsys.readouterr().out
+    assert "收盘后自动更新" in output
+    assert "阶段: 启动" in output
+    assert "update_limit=50" in output
+
+
+def test_text_mode_prints_each_stage_with_flush(tmp_path: Path, capsys) -> None:
+    """Force text run should show all scheduled stage labels."""
+    status_path, lock_path = _status_paths(tmp_path)
+    run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        output_format="text",
+        step_overrides={
+            "preflight": _ok_preflight,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {"status": "success", "planned_symbols": 50},
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    output = capsys.readouterr().out
+    for phrase in ["阶段: 检查运行锁", "阶段: DuckDB read_only 检查", "阶段: 数据源网络诊断", "阶段: 备份 DuckDB", "阶段: 更新数据", "阶段: 运行日常工作流", "阶段: 埃尔德复核", "阶段: 买入区间", "阶段: 观察池跟踪", "阶段: 导出每日研究 Excel", "阶段: 通知", "阶段: 完成"]:
+        assert phrase in output
+
+
+def test_stage_status_written_before_heavy_work(tmp_path: Path) -> None:
+    """Each stage should write running status before executing its body."""
+    status_path, lock_path = _status_paths(tmp_path)
+    observed: dict[str, str] = {}
+
+    def backup_step() -> dict:
+        observed.update(read_scheduled_status(status_path))
+        return {"status": "success"}
+
+    run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _ok_preflight,
+            "backup": backup_step,
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    assert observed["status"] == "running"
+    assert observed["stage"] == "backup"
+    assert observed["last_heartbeat_at"]
+
+
+def test_stage_timeout_exits_and_releases_lock(tmp_path: Path) -> None:
+    """Subprocess stage timeout should fail fast and release the lock."""
+    from core.jobs.run_scheduled_daily_update import _run_module_stage
+
+    status_path, lock_path = _status_paths(tmp_path)
+    status = {"stage": "update_data", "current_stage": "update_data", "last_heartbeat_at": "", "processed_symbol_count": 0, "total_symbol_count": 0}
+    result = _run_module_stage(
+        "update_data",
+        [os.sys.executable, "-c", "import time; time.sleep(5)"],
+        1,
+        status=status,
+        status_path=status_path,
+        output_format="text",
+    )
+    assert result["status"] == "failed"
+    assert result["timed_out"] is True
+    assert "超时" in result["message"]
+
+
+def test_heartbeat_updates_during_long_stage(tmp_path: Path) -> None:
+    """Heartbeat parser should update progress counters while a stage is running."""
+    from core.jobs.run_scheduled_daily_update import _update_heartbeat_from_line
+
+    status = {"processed_symbol_count": 0, "failed_symbol_count": 0, "skipped_symbol_count": 0}
+    _update_heartbeat_from_line(status, "[progress] step=daily_price current=000001 success=3 failed=1 skipped=46 message='x'")
+    assert status["processed_symbol_count"] == 3
+    assert status["failed_symbol_count"] == 1
+    assert status["skipped_symbol_count"] == 46
+    assert status["last_heartbeat_at"]
+
+
+def test_force_update_limit_50_finishes_in_test(tmp_path: Path) -> None:
+    """Mocked force run with update_limit=50 should finish without real network calls."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        update_limit=50,
+        stage_timeout_seconds=180,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _ok_preflight,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {"status": "success", "planned_symbols": 50},
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    assert result["status"] == "success"
+    assert not lock_path.exists()
 
 
 def test_macos_notification_builds_safe_message() -> None:

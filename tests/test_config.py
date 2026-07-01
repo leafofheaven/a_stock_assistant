@@ -29,6 +29,9 @@ def test_settings_defaults() -> None:
     assert settings.real_batch_sleep_seconds == 0.0
     assert settings.real_max_retries == 1
     assert settings.real_request_timeout_seconds == 30
+    assert settings.data_source_request_timeout_seconds == 15
+    assert settings.symbol_update_timeout_seconds == 45
+    assert settings.full_batch_update_timeout_seconds == 1800
     assert settings.full_update_batch_size == 50
     assert settings.full_update_lookback_days == 250
     assert settings.full_update_max_retries == 2
@@ -68,6 +71,9 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
                 "REAL_BATCH_SLEEP_SECONDS=0.1",
                 "REAL_MAX_RETRIES=2",
                 "REAL_REQUEST_TIMEOUT_SECONDS=12",
+                "DATA_SOURCE_REQUEST_TIMEOUT_SECONDS=9",
+                "SYMBOL_UPDATE_TIMEOUT_SECONDS=21",
+                "FULL_BATCH_UPDATE_TIMEOUT_SECONDS=180",
                 "FULL_UPDATE_BATCH_SIZE=20",
                 "FULL_UPDATE_LOOKBACK_DAYS=120",
                 "FULL_UPDATE_MAX_RETRIES=1",
@@ -106,6 +112,9 @@ def test_settings_loads_from_env_file(tmp_path: Path) -> None:
     assert settings.real_batch_sleep_seconds == 0.1
     assert settings.real_max_retries == 2
     assert settings.real_request_timeout_seconds == 12
+    assert settings.data_source_request_timeout_seconds == 9
+    assert settings.symbol_update_timeout_seconds == 21
+    assert settings.full_batch_update_timeout_seconds == 180
     assert settings.full_update_batch_size == 20
     assert settings.full_update_lookback_days == 120
     assert settings.full_update_max_retries == 1
