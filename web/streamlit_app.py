@@ -31,6 +31,7 @@ from core.reporting.workflow_report import load_latest_workflow_report
 from core.reporting.daily_workflow_report import load_latest_daily_workflow_report
 from core.config.env_file import masked_env_values, parse_stock_symbols, read_env_file, update_env_file
 from core.runtime.command_runner import ALLOWED_COMMANDS, open_project_path, run_command_streaming
+from core.jobs.run_scheduled_daily_update import DEFAULT_STATUS_PATH, read_scheduled_status
 from core.runtime.progress import parse_progress_line
 from core.technical.elder import build_elder_review
 from core.external_positions.importer import position_template_frame, trade_template_frame
@@ -38,6 +39,9 @@ from core.external_positions.importer import position_template_frame, trade_temp
 ALLOWED_COMMANDS.setdefault("run_full_batch_update", [sys.executable, "-m", "core.jobs.run_full_batch_update"])
 ALLOWED_COMMANDS.setdefault("preflight_data_source", [sys.executable, "-m", "core.jobs.preflight_data_source"])
 ALLOWED_COMMANDS.setdefault("diagnose_data_source_network", [sys.executable, "-m", "core.jobs.diagnose_data_source_network"])
+ALLOWED_COMMANDS.setdefault("run_scheduled_daily_update", [sys.executable, "-m", "core.jobs.run_scheduled_daily_update"])
+ALLOWED_COMMANDS.setdefault("install_scheduled_daily_update", [sys.executable, "-m", "core.jobs.install_scheduled_daily_update"])
+ALLOWED_COMMANDS.setdefault("uninstall_scheduled_daily_update", [sys.executable, "-m", "core.jobs.uninstall_scheduled_daily_update"])
 
 CORE_LOGIC_GUIDE_PATH = PROJECT_ROOT / "docs" / "user_guides" / "core_logic_guide.md"
 CORE_LOGIC_GUIDE_DOWNLOAD_NAME = "A股选股辅助系统_核心逻辑说明.md"
@@ -1655,7 +1659,58 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         ]
         display_dataframe(st, snapshot_df, columns=display_columns)
     st.info(status["last_job_status"])
+    _render_scheduled_update_section(st)
     _render_full_batch_update_section(st, status)
+
+
+def _render_scheduled_update_section(st: Any) -> None:
+    """Render scheduled daily update status and download controls."""
+    st.subheader("自动更新状态")
+    scheduled = read_scheduled_status(DEFAULT_STATUS_PATH)
+    if not scheduled:
+        st.info("尚无自动更新记录。")
+    else:
+        st.write(
+            {
+                "最近一次状态": scheduled.get("status"),
+                "计划时间": scheduled.get("scheduled_time"),
+                "实际开始时间": scheduled.get("started_at"),
+                "完成时间": scheduled.get("finished_at") or "暂无",
+                "是否补跑": scheduled.get("catch_up"),
+                "交易日期": scheduled.get("trade_date"),
+                "数据源诊断状态": scheduled.get("diagnosis_status") or "暂无",
+                "今日候选数量": scheduled.get("candidate_count", 0),
+                "埃尔德复核数量": scheduled.get("elder_review_count", 0),
+                "买入区间数量": scheduled.get("entry_zone_count", 0),
+                "观察池数量": scheduled.get("watchlist_count", 0),
+                "Excel 文件路径": scheduled.get("workbook_path") or "暂无",
+                "邮件通知状态": (scheduled.get("notification") or {}).get("email_status", "disabled"),
+                "失败原因": scheduled.get("failure_reason") or "暂无",
+                "建议操作": scheduled.get("suggested_action") or "暂无",
+            }
+        )
+        workbook_path = Path(str(scheduled.get("workbook_path") or ""))
+        if scheduled.get("workbook_path") and workbook_path.exists():
+            with workbook_path.open("rb") as handle:
+                st.download_button(
+                    "下载最新自动更新 Excel",
+                    data=handle.read(),
+                    file_name=workbook_path.name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_scheduled_daily_workbook",
+                    width="stretch",
+                )
+        elif scheduled.get("workbook_path"):
+            st.warning("最新自动更新 Excel 文件不存在，可能已被清理，请重新运行自动更新。")
+    st.caption("页面启动不会自动执行自动更新；手动补跑会先做数据源预检，失败时不会启动重型更新。")
+    if st.button("手动补跑一次自动更新", key="scheduled_daily_update_manual_catchup"):
+        _run_streaming_console_action(
+            st,
+            "手动补跑一次自动更新",
+            "run_scheduled_daily_update",
+            ["--force", "--format", "text"],
+            success_message="自动更新补跑命令执行完成。请刷新页面查看最新状态。",
+        )
 
 
 def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:

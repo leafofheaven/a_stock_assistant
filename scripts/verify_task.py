@@ -80,6 +80,14 @@ VERIFY_COMMANDS = {
         [sys.executable, "-m", "core.jobs.diagnose_data_source_network", "--format", "text", "--timeout", "5"],
         [sys.executable, "-m", "core.jobs.diagnose_data_source_network", "--format", "json", "--timeout", "5"],
     ],
+    "task57b": [
+        [sys.executable, "-m", "pytest"],
+        [sys.executable, "scripts/check_project.py"],
+        [sys.executable, "scripts/check_task.py", "task57b"],
+        [sys.executable, "-m", "core.jobs.run_scheduled_daily_update", "--dry-run", "--format", "text", "--status-path", "/tmp/a_stock_assistant_task57b/status.json", "--lock-path", "/tmp/a_stock_assistant_task57b/update.lock"],
+        [sys.executable, "-m", "core.jobs.run_scheduled_daily_update", "--dry-run", "--format", "json", "--status-path", "/tmp/a_stock_assistant_task57b/status.json", "--lock-path", "/tmp/a_stock_assistant_task57b/update.lock"],
+        [sys.executable, "-m", "core.jobs.install_scheduled_daily_update", "--time", "18:00", "--dry-run", "--plist-dir", "/tmp/a_stock_assistant_task57b"],
+    ],
 }
 
 
