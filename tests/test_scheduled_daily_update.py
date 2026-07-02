@@ -505,6 +505,104 @@ def test_force_update_limit_50_finishes_in_test(tmp_path: Path) -> None:
     assert not lock_path.exists()
 
 
+def test_final_status_counts_from_workbook_step(tmp_path: Path) -> None:
+    """Top-level counts should come from the workbook step when available."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        workbook=lambda: _mock_workbook(
+            tmp_path,
+            trade_date="20260701",
+            strategy_rows=10,
+            elder_rows=50,
+            entry_zone_rows=20,
+            watchlist_rows=50,
+            external_position_rows=0,
+        ),
+    )
+    assert result["candidate_count"] == 10
+    assert result["elder_review_count"] == 50
+    assert result["entry_zone_count"] == 20
+    assert result["watchlist_count"] == 50
+    assert result["external_position_count"] == 0
+
+
+def test_final_status_dates_distinguish_run_and_research_trade_date(tmp_path: Path) -> None:
+    """Run date and research trade date should not be conflated."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 1, 5),
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260701"),
+    )
+    assert result["run_date"] == "20260702"
+    assert result["research_trade_date"] == "20260701"
+    assert result["latest_completed_trade_date"] == "20260701"
+    assert result["trade_date"] == "20260701"
+
+
+def test_update_limit_sets_acceptance_mode(tmp_path: Path, capsys) -> None:
+    """Small update_limit force runs should be marked as acceptance mode."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(tmp_path, status_path, lock_path, update_limit=50, output_format="text")
+    output = capsys.readouterr().out
+    assert result["acceptance_mode"] is True
+    assert result["update_limit"] == 50
+    assert "本次为小批量验收运行" in output
+
+
+def test_workflow_skipped_steps_not_mixed_with_skipped_symbols(tmp_path: Path) -> None:
+    """Workflow skipped step count and update skipped symbols must stay separate."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        update_data=lambda: {"status": "warning", "update_skipped_symbol_count": 5001, "empty_data_symbol_count": 17},
+        workflow=lambda: {"status": "success", "candidate_count": 10, "workflow_skipped_step_count": 3},
+    )
+    assert result["update_skipped_symbol_count"] == 5001
+    assert result["skipped_symbol_count"] == 5001
+    assert result["workflow_skipped_step_count"] == 3
+
+
+def test_empty_data_examples_are_clean_symbol_codes() -> None:
+    """Example arrays should contain clean stock codes only."""
+    from core.jobs.run_scheduled_daily_update import _parse_update_output
+
+    parsed = _parse_update_output("- 空数据股票: 17 只，样例: 000788.SZ, 000789.SZ\n- 失败数量: 17")
+    assert parsed["empty_data_symbol_examples"] == ["000788.SZ", "000789.SZ"]
+    assert all("样例" not in item and "只" not in item for item in parsed["empty_data_symbol_examples"])
+
+
+def test_warning_does_not_reset_success_counts(tmp_path: Path) -> None:
+    """Update warning should keep successful workbook counts on the final status."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        update_data=lambda: {"status": "warning", "empty_data_symbol_count": 17, "update_skipped_symbol_count": 5001},
+        workbook=lambda: _mock_workbook(
+            tmp_path,
+            strategy_rows=10,
+            elder_rows=50,
+            entry_zone_rows=20,
+            watchlist_rows=50,
+            external_position_rows=0,
+        ),
+    )
+    assert result["status"] == "warning"
+    assert result["candidate_count"] == 10
+    assert result["elder_review_count"] == 50
+    assert result["entry_zone_count"] == 20
+    assert result["watchlist_count"] == 50
+
+
 def test_macos_notification_builds_safe_message() -> None:
     """macOS notification command should escape quotes and newlines."""
     command = build_macos_notification('标题 "A"', "第一行\n第二行")
@@ -584,7 +682,60 @@ def test_no_algorithm_changes() -> None:
     assert "calculate_entry_zones_for_targets" in entry_zone_source
 
 
-def _mock_workbook(tmp_path: Path) -> dict:
+def _successful_scheduled_run(
+    tmp_path: Path,
+    status_path: Path,
+    lock_path: Path,
+    *,
+    now: datetime | None = None,
+    update_limit: int = 50,
+    output_format: str = "json",
+    update_data=None,
+    workflow=None,
+    workbook=None,
+) -> dict:
+    return run_scheduled_daily_update(
+        now=now or datetime(2026, 7, 2, 1, 5),
+        force=True,
+        update_limit=update_limit,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        output_format=output_format,
+        step_overrides={
+            "preflight": _ok_preflight,
+            "backup": lambda: {"status": "success"},
+            "update_data": update_data or (lambda: {"status": "success", "update_skipped_symbol_count": 0}),
+            "workflow": workflow or (lambda: {"status": "success", "candidate_count": 2}),
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": workbook or (lambda: _mock_workbook(tmp_path)),
+        },
+    )
+
+
+def _mock_workbook(
+    tmp_path: Path,
+    *,
+    trade_date: str = "20260701",
+    strategy_rows: int = 2,
+    elder_rows: int = 2,
+    entry_zone_rows: int = 2,
+    watchlist_rows: int = 1,
+    external_position_rows: int = 0,
+) -> dict:
     path = tmp_path / "daily_research_mock.xlsx"
     path.write_bytes(b"mock")
-    return {"status": "success", "output_path": path, "external_position_rows": 0}
+    return {
+        "status": "success",
+        "trade_date": trade_date,
+        "output_path": path,
+        "strategy_rows": strategy_rows,
+        "elder_rows": elder_rows,
+        "entry_zone_rows": entry_zone_rows,
+        "watchlist_rows": watchlist_rows,
+        "external_position_rows": external_position_rows,
+    }

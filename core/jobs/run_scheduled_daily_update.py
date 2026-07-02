@@ -119,6 +119,8 @@ def run_scheduled_daily_update(
         decision=decision,
         previous_run_interrupted=previous_run_interrupted,
     )
+    base_status["update_limit"] = int(update_limit)
+    base_status["acceptance_mode"] = int(update_limit) > 0
     if not decision.should_run and not force:
         status = {
             **base_status,
@@ -396,17 +398,27 @@ def _run_heavy_steps(
             return status
     workbook = steps.get("workbook", {})
     workbook_path = Path(str(workbook.get("output_path", ""))) if workbook.get("output_path") else Path()
+    research_trade_date = _research_trade_date(steps, status)
+    workflow_step_count = _workflow_skipped_step_count(steps)
     final_status = "warning" if _has_update_warnings(status, steps) else "success"
     status.update(
         {
             "status": final_status,
             "summary": "每日自动更新完成。" if final_status == "success" else "每日自动更新完成，部分股票空数据或超时已跳过。",
             "stage": "done",
-            "candidate_count": _candidate_count(steps),
-            "elder_review_count": int(steps.get("elder_review", {}).get("review_count", 0)),
-            "entry_zone_count": int(steps.get("entry_zone", {}).get("calculated_count", 0)),
-            "watchlist_count": int(steps.get("watchlist", {}).get("snapshot_count", steps.get("watchlist", {}).get("daily_snapshot_count", 0))),
-            "external_position_count": int(workbook.get("external_position_rows", 0)),
+            "trade_date": research_trade_date,
+            "research_trade_date": research_trade_date,
+            "latest_completed_trade_date": research_trade_date,
+            "candidate_count": _workbook_or_step_count(workbook, "strategy_rows", _candidate_count(steps)),
+            "elder_review_count": _workbook_or_step_count(workbook, "elder_rows", int(steps.get("elder_review", {}).get("review_count", 0))),
+            "entry_zone_count": _workbook_or_step_count(workbook, "entry_zone_rows", int(steps.get("entry_zone", {}).get("calculated_count", 0))),
+            "watchlist_count": _workbook_or_step_count(
+                workbook,
+                "watchlist_rows",
+                int(steps.get("watchlist", {}).get("snapshot_count", steps.get("watchlist", {}).get("daily_snapshot_count", 0))),
+            ),
+            "external_position_count": _workbook_or_step_count(workbook, "external_position_rows", 0),
+            "workflow_skipped_step_count": workflow_step_count,
             "workbook_path": str(workbook_path) if workbook_path else "",
             "workbook_exists": bool(workbook_path and workbook_path.exists()),
             "workbook_size_bytes": workbook_path.stat().st_size if workbook_path and workbook_path.exists() else 0,
@@ -494,7 +506,7 @@ def _run_module_stage(
                 clean = line.rstrip("\n")
                 output_lines.append(clean)
                 _emit_child_line(output_format, clean)
-                _update_heartbeat_from_line(status, clean)
+                _update_heartbeat_from_line(status, clean, stage=stage)
         if now - last_heartbeat >= DEFAULT_HEARTBEAT_SECONDS:
             _write_heartbeat(status, status_path)
             _emit_stage(output_format, f"{_stage_label(stage)} heartbeat", _heartbeat_detail(status))
@@ -506,7 +518,7 @@ def _run_module_stage(
                 for clean in remaining.splitlines():
                     output_lines.append(clean)
                     _emit_child_line(output_format, clean)
-                    _update_heartbeat_from_line(status, clean)
+                    _update_heartbeat_from_line(status, clean, stage=stage)
             break
     stdout = "\n".join(output_lines)
     stderr = ""
@@ -534,9 +546,7 @@ def _run_module_stage(
         if result["status"] == "success" and int(result.get("failed_symbol_count", 0) or 0) > 0:
             result["status"] = "warning"
     if stage == "workbook":
-        output_path = _parse_workbook_output(stdout)
-        if output_path:
-            result["output_path"] = output_path
+        result.update(_parse_workbook_output(stdout))
     if returncode != 0:
         result["message"] = f"{stage} 阶段命令失败，returncode={returncode}。"
     return result
@@ -548,18 +558,25 @@ def _parse_update_output(stdout: str) -> dict[str, Any]:
         "full_universe_count": "full 股票池数量",
         "planned_symbols": "本次计划处理",
         "success_symbols": "成功数量",
-        "failed_symbol_count": "失败数量",
-        "skipped_symbol_count": "本次未处理数量",
+        "raw_failed_symbol_count": "失败数量",
+        "update_skipped_symbol_count": "本次未处理数量",
     }
     parsed: dict[str, Any] = {}
     for key, label in mapping.items():
         value = _extract_int_after_label(stdout, label)
         if value is not None:
             parsed[key] = value
-    parsed.setdefault("empty_data_symbol_count", int(parsed.get("failed_symbol_count", 0) or 0))
-    parsed.setdefault("empty_data_symbol_examples", _extract_examples(stdout, "空数据股票"))
-    parsed.setdefault("failed_symbol_examples", _extract_examples(stdout, "失败股票"))
-    parsed["update_warning_count"] = int(parsed.get("failed_symbol_count", 0) or 0)
+    empty_count = _extract_int_after_label(stdout, "空数据股票")
+    if empty_count is None:
+        empty_count = 0
+    raw_failed = int(parsed.get("raw_failed_symbol_count", 0) or 0)
+    parsed["empty_data_symbol_count"] = int(empty_count or 0)
+    parsed["empty_data_symbol_examples"] = _extract_examples(stdout, "空数据股票")
+    parsed["unavailable_symbol_count"] = max(raw_failed, int(empty_count or 0))
+    parsed["network_failed_symbol_count"] = max(raw_failed - int(empty_count or 0), 0)
+    parsed["failed_symbol_count"] = parsed["network_failed_symbol_count"]
+    parsed["failed_symbol_examples"] = _extract_examples(stdout, "失败股票")
+    parsed["update_warning_count"] = parsed["unavailable_symbol_count"]
     parsed["update_warning_examples"] = parsed.get("failed_symbol_examples") or parsed.get("empty_data_symbol_examples") or []
     return parsed
 
@@ -577,16 +594,32 @@ def _extract_int_after_label(text: str, label: str) -> int | None:
 def _extract_examples(text: str, label: str) -> list[str]:
     for line in text.splitlines():
         if label in line:
-            tail = line.split(":", 1)[-1]
-            return [item.strip() for item in tail.split(",") if item.strip()][:10]
+            codes = re.findall(r"\b\d{6}\.(?:SZ|SH|BJ)\b", line)
+            if codes:
+                return codes[:10]
+            tail = line.split("样例:", 1)[-1] if "样例:" in line else line.split(":", 1)[-1]
+            return [item.strip() for item in tail.split(",") if item.strip() and "只" not in item][:10]
     return []
 
 
-def _parse_workbook_output(stdout: str) -> str:
+def _parse_workbook_output(stdout: str) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     for line in stdout.splitlines():
         if line.startswith("输出文件:"):
-            return line.split(":", 1)[1].strip()
-    return ""
+            result["output_path"] = line.split(":", 1)[1].strip()
+        elif line.startswith("研究日期:"):
+            result["trade_date"] = line.split(":", 1)[1].strip()
+        elif line.startswith("今日候选:"):
+            result["strategy_rows"] = _extract_int_after_label(line, "今日候选") or 0
+        elif line.startswith("埃尔德复核:"):
+            result["elder_rows"] = _extract_int_after_label(line, "埃尔德复核") or 0
+        elif line.startswith("买入区间:"):
+            result["entry_zone_rows"] = _extract_int_after_label(line, "买入区间") or 0
+        elif line.startswith("观察池:"):
+            result["watchlist_rows"] = _extract_int_after_label(line, "观察池") or 0
+        elif line.startswith("外部模拟持仓:"):
+            result["external_position_rows"] = _extract_int_after_label(line, "外部模拟持仓") or 0
+    return result
 
 
 def _emit_stage(output_format: str, stage: str, detail: str = "") -> None:
@@ -613,8 +646,9 @@ def _write_heartbeat(status: dict[str, Any], status_path: str | Path) -> None:
     write_scheduled_status(status_path, status)
 
 
-def _update_heartbeat_from_line(status: dict[str, Any], line: str) -> None:
+def _update_heartbeat_from_line(status: dict[str, Any], line: str, *, stage: str = "") -> None:
     """Parse known progress/summary lines into heartbeat counters."""
+    stage = stage or "update_data"
     status["last_heartbeat_at"] = datetime.now().isoformat(timespec="seconds")
     if "本次计划处理" in line:
         value = _extract_int_after_label(line, "本次计划处理")
@@ -627,20 +661,31 @@ def _update_heartbeat_from_line(status: dict[str, Any], line: str) -> None:
     if "失败数量" in line:
         value = _extract_int_after_label(line, "失败数量")
         if value is not None:
-            status["failed_symbol_count"] = value
+            if stage == "update_data":
+                status["unavailable_symbol_count"] = value
+            else:
+                status["failed_symbol_count"] = value
     if "本次未处理数量" in line:
         value = _extract_int_after_label(line, "本次未处理数量")
         if value is not None:
+            status["update_skipped_symbol_count"] = value
             status["skipped_symbol_count"] = value
     if "[progress]" in line:
-        for key, status_key in [
-            ("success=", "processed_symbol_count"),
-            ("failed=", "failed_symbol_count"),
-            ("skipped=", "skipped_symbol_count"),
-        ]:
+        progress_targets = [("success=", "processed_symbol_count")]
+        if stage == "update_data":
+            progress_targets.extend([("failed=", "unavailable_symbol_count"), ("skipped=", "update_skipped_symbol_count")])
+        elif stage == "workflow":
+            progress_targets.extend([("skipped=", "workflow_skipped_step_count")])
+        else:
+            progress_targets.extend([("failed=", "failed_symbol_count")])
+        for key, status_key in progress_targets:
             value = _extract_progress_int(line, key)
             if value is not None:
                 status[status_key] = value
+                if status_key == "unavailable_symbol_count":
+                    status["failed_symbol_count"] = value
+                if status_key == "update_skipped_symbol_count":
+                    status["skipped_symbol_count"] = value
 
 
 def _extract_progress_int(line: str, token: str) -> int | None:
@@ -696,7 +741,9 @@ def _merge_update_stage_summary(status: dict[str, Any], stage: str, result: dict
         "empty_data_symbol_examples",
         "network_timeout_count",
         "network_timeout_examples",
-        "skipped_symbol_count",
+        "update_skipped_symbol_count",
+        "unavailable_symbol_count",
+        "network_failed_symbol_count",
         "failed_symbol_count",
         "failed_symbol_examples",
         "update_warning_count",
@@ -704,6 +751,8 @@ def _merge_update_stage_summary(status: dict[str, Any], stage: str, result: dict
     ]:
         if key in result:
             status[key] = result[key]
+    if "update_skipped_symbol_count" in result:
+        status["skipped_symbol_count"] = result["update_skipped_symbol_count"]
 
 
 def _has_update_warnings(status: dict[str, Any], steps: dict[str, dict[str, Any]]) -> bool:
@@ -712,6 +761,7 @@ def _has_update_warnings(status: dict[str, Any], steps: dict[str, dict[str, Any]
         str(update.get("status", "")).lower() in WARNING_STATUSES
         or int(status.get("empty_data_symbol_count", 0) or 0) > 0
         or int(status.get("network_timeout_count", 0) or 0) > 0
+        or int(status.get("unavailable_symbol_count", 0) or 0) > 0
         or int(status.get("failed_symbol_count", 0) or 0) > 0
     )
 
@@ -768,7 +818,12 @@ def _base_status(
         "scheduled_time": scheduled_time,
         "started_at": started_at.isoformat(timespec="seconds"),
         "finished_at": "",
+        "run_date": started_at.strftime("%Y%m%d"),
         "trade_date": started_at.strftime("%Y%m%d"),
+        "research_trade_date": "",
+        "latest_completed_trade_date": "",
+        "acceptance_mode": False,
+        "update_limit": 0,
         "is_trade_day": decision.is_trade_day,
         "catch_up": catch_up,
         "force": force,
@@ -797,6 +852,10 @@ def _base_status(
         "network_timeout_count": 0,
         "network_timeout_examples": [],
         "skipped_symbol_count": 0,
+        "update_skipped_symbol_count": 0,
+        "workflow_skipped_step_count": 0,
+        "unavailable_symbol_count": 0,
+        "network_failed_symbol_count": 0,
         "failed_symbol_count": 0,
         "failed_symbol_examples": [],
         "update_warning_count": 0,
@@ -888,6 +947,45 @@ def _candidate_count(steps: dict[str, dict[str, Any]]) -> int:
     return int(workflow.get("candidate_count", 0) or 0)
 
 
+def _workbook_or_step_count(workbook: dict[str, Any], key: str, fallback: int) -> int:
+    """Return a count from the workbook step first, falling back to stage results."""
+    value = workbook.get(key)
+    if value is None:
+        return int(fallback or 0)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return int(fallback or 0)
+
+
+def _research_trade_date(steps: dict[str, dict[str, Any]], status: dict[str, Any]) -> str:
+    """Resolve the research trade date from workbook/workflow output."""
+    workbook_date = str(steps.get("workbook", {}).get("trade_date") or "").strip()
+    if workbook_date:
+        return workbook_date
+    workflow = steps.get("workflow", {})
+    for key in ["research_trade_date", "latest_completed_trade_date", "trade_date"]:
+        value = str(workflow.get(key) or "").strip()
+        if value:
+            return value
+    return str(status.get("trade_date") or status.get("run_date") or "")
+
+
+def _workflow_skipped_step_count(steps: dict[str, dict[str, Any]]) -> int:
+    """Return workflow-level skipped step count without mixing it with symbols."""
+    workflow = steps.get("workflow", {})
+    for key in ["workflow_skipped_step_count", "skipped_step_count", "skipped_steps"]:
+        value = workflow.get(key)
+        if isinstance(value, list):
+            return len(value)
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
 def _mask_sensitive(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: ("***" if _sensitive_key(key) else _mask_sensitive(item)) for key, item in value.items()}
@@ -906,14 +1004,17 @@ def _sensitive_key(key: str) -> bool:
 
 def _print_status(status: dict[str, Any], output_format: str) -> None:
     if output_format == "json":
-        print(json.dumps(status, ensure_ascii=False, indent=2))
+        print(json.dumps(_mask_sensitive(status), ensure_ascii=False, indent=2, default=str))
         return
     print("收盘后自动更新")
     print(f"- 整体状态: {status.get('status')}")
     print(f"- 计划时间: {status.get('scheduled_time')}")
     print(f"- 实际开始: {status.get('started_at')}")
     print(f"- 完成时间: {status.get('finished_at') or '暂无'}")
-    print(f"- 交易日期: {status.get('trade_date')}")
+    print(f"- 运行日期: {status.get('run_date') or status.get('trade_date')}")
+    print(f"- 研究交易日: {status.get('research_trade_date') or status.get('trade_date')}")
+    if status.get("acceptance_mode"):
+        print(f"- 验收模式: 本次为小批量验收运行，update_limit={status.get('update_limit')}，不代表正式全市场自动更新结果。")
     print(f"- 数据源诊断: {status.get('diagnosis_status') or '暂无'}")
     print(f"- DuckDB: {status.get('duckdb_status') or '暂无'}")
     print(f"- 今日候选: {status.get('candidate_count', 0)}")
@@ -926,7 +1027,7 @@ def _print_status(status: dict[str, Any], output_format: str) -> None:
         print(
             f"- 数据更新提示: 空数据 {status.get('empty_data_symbol_count', 0)}，"
             f"超时 {status.get('network_timeout_count', 0)}，失败 {status.get('failed_symbol_count', 0)}，"
-            f"本次未处理 {status.get('skipped_symbol_count', 0)}"
+            f"本次未处理 {status.get('update_skipped_symbol_count', status.get('skipped_symbol_count', 0))}"
         )
         examples = status.get("update_warning_examples") or status.get("failed_symbol_examples") or status.get("empty_data_symbol_examples") or []
         if examples:
