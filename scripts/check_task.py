@@ -3227,6 +3227,9 @@ def check_task57b(root: Path) -> list[str]:
         "update_limit",
         "allow_intraday",
         "intraday_warning",
+        "formal_run",
+        "formal_success_date",
+        "_is_formal_success_for_date",
         "latest_completed_trade_date",
         "research_trade_date",
         "stage_timeout_seconds",
@@ -3285,6 +3288,11 @@ def check_task57b(root: Path) -> list[str]:
         "test_force_before_scheduled_time_uses_previous_completed_trade_date_by_default",
         "test_allow_intraday_uses_current_trade_date_with_warning",
         "test_scheduled_after_1800_uses_current_trade_date",
+        "test_acceptance_run_does_not_block_formal_scheduled_run",
+        "test_intraday_run_does_not_block_formal_scheduled_run",
+        "test_update_limit_run_does_not_set_formal_success",
+        "test_formal_success_blocks_duplicate_formal_run",
+        "test_skipped_status_from_acceptance_state_does_not_clear_previous_formal_fields",
         "test_no_algorithm_changes",
     ]:
         if phrase not in tests_source:
