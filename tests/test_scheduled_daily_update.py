@@ -361,11 +361,13 @@ def test_force_update_limit_is_passed_to_update_stage(tmp_path: Path) -> None:
         stage_timeout_seconds=180,
         update_stage_timeout_seconds=180,
         verbose=False,
+        research_trade_date="20260701",
     )
     update = next(step for step in steps if step.name == "update_data")
     assert "core.jobs.run_full_batch_update" in update.command
     assert update.command[update.command.index("--max-symbols") + 1] == "50"
     assert update.command[update.command.index("--batch-size") + 1] == "20"
+    assert update.env == {"REAL_DATA_END_DATE": "20260701"}
 
 
 def test_text_mode_prints_start_immediately(tmp_path: Path, capsys) -> None:
@@ -603,6 +605,55 @@ def test_warning_does_not_reset_success_counts(tmp_path: Path) -> None:
     assert result["watchlist_count"] == 50
 
 
+def test_force_before_scheduled_time_uses_previous_completed_trade_date_by_default(tmp_path: Path) -> None:
+    """force before 18:00 should default to the previous completed trade day."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 9, 52),
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
+    )
+    assert result["run_date"] == "20260702"
+    assert result["research_trade_date"] == "20260701"
+    assert result["latest_completed_trade_date"] == "20260701"
+    assert result["trade_date"] == "20260701"
+    assert result["intraday_warning"] == ""
+
+
+def test_allow_intraday_uses_current_trade_date_with_warning(tmp_path: Path, capsys) -> None:
+    """--allow-intraday may use current trade date but must warn clearly."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 9, 52),
+        allow_intraday=True,
+        output_format="text",
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
+    )
+    output = capsys.readouterr().out
+    assert result["research_trade_date"] == "20260702"
+    assert "盘中强制运行" in result["intraday_warning"]
+    assert "盘中强制运行" in output
+
+
+def test_scheduled_after_1800_uses_current_trade_date(tmp_path: Path) -> None:
+    """After scheduled time, current trade day is considered completed."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 18, 30),
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
+    )
+    assert result["research_trade_date"] == "20260702"
+    assert result["latest_completed_trade_date"] == "20260702"
+
+
 def test_macos_notification_builds_safe_message() -> None:
     """macOS notification command should escape quotes and newlines."""
     command = build_macos_notification('标题 "A"', "第一行\n第二行")
@@ -690,6 +741,7 @@ def _successful_scheduled_run(
     now: datetime | None = None,
     update_limit: int = 50,
     output_format: str = "json",
+    allow_intraday: bool = False,
     update_data=None,
     workflow=None,
     workbook=None,
@@ -698,6 +750,7 @@ def _successful_scheduled_run(
         now=now or datetime(2026, 7, 2, 1, 5),
         force=True,
         update_limit=update_limit,
+        allow_intraday=allow_intraday,
         status_path=status_path,
         lock_path=lock_path,
         report_dir=tmp_path,

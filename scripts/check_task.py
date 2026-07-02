@@ -3224,6 +3224,10 @@ def check_task57b(root: Path) -> list[str]:
         "send_email_notification",
         "DuckDB is locked by another process",
         "update_limit",
+        "allow_intraday",
+        "intraday_warning",
+        "latest_completed_trade_date",
+        "research_trade_date",
         "stage_timeout_seconds",
         "last_heartbeat_at",
         "processed_symbol_count",
@@ -3277,6 +3281,9 @@ def check_task57b(root: Path) -> list[str]:
         "test_stage_timeout_exits_and_releases_lock",
         "test_heartbeat_updates_during_long_stage",
         "test_force_update_limit_50_finishes_in_test",
+        "test_force_before_scheduled_time_uses_previous_completed_trade_date_by_default",
+        "test_allow_intraday_uses_current_trade_date_with_warning",
+        "test_scheduled_after_1800_uses_current_trade_date",
         "test_no_algorithm_changes",
     ]:
         if phrase not in tests_source:
@@ -3287,7 +3294,7 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in verify_source:
             failures.append(f"verify_task.py task57b is missing {phrase}.")
     docs_source = read_source(root / "docs/commands_reference.md")
-    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "18:00", "自动更新状态", "--update-limit 50", "last_heartbeat_at", "DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS"]:
+    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "18:00", "自动更新状态", "--update-limit 50", "--allow-intraday", "research_trade_date", "last_heartbeat_at", "DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS"]:
         if phrase not in docs_source:
             failures.append(f"docs/commands_reference.md is missing Task 57B wording: {phrase}.")
     env_source = read_source(root / ".env.example")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 import json
 import os
 from pathlib import Path
@@ -50,6 +50,7 @@ class StageCommand:
     name: str
     command: list[str]
     timeout_seconds: int
+    env: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ def run_scheduled_daily_update(
     stage_timeout_seconds: int = DEFAULT_STAGE_TIMEOUT_SECONDS,
     update_stage_timeout_seconds: int | None = None,
     verbose: bool = False,
+    allow_intraday: bool = False,
     now: datetime | None = None,
     settings: Settings | None = None,
     step_overrides: dict[str, Callable[[], dict[str, Any]]] | None = None,
@@ -96,7 +98,7 @@ def run_scheduled_daily_update(
     _emit_stage(
         output_format,
         "启动",
-        f"force={str(force).lower()}, dry_run={str(dry_run).lower()}, update_limit={update_limit}, stage_timeout_seconds={stage_timeout_seconds}",
+        f"force={str(force).lower()}, dry_run={str(dry_run).lower()}, update_limit={update_limit}, stage_timeout_seconds={stage_timeout_seconds}, allow_intraday={str(allow_intraday).lower()}",
     )
     _emit_stage(output_format, "检查上次运行状态", str(status_file))
     previous = read_scheduled_status(status_file)
@@ -110,6 +112,8 @@ def run_scheduled_daily_update(
         catch_up=catch_up,
         settings=resolved_settings,
     )
+    completed_trade_date = _latest_completed_trade_date(started_at, scheduled_time=scheduled_time, allow_intraday=allow_intraday, settings=resolved_settings)
+    intraday_warning = _intraday_warning(started_at, scheduled_time=scheduled_time, allow_intraday=allow_intraday, settings=resolved_settings)
     _emit_stage(output_format, "检查是否已到计划时间", decision.summary)
     base_status = _base_status(
         scheduled_time=scheduled_time,
@@ -118,6 +122,8 @@ def run_scheduled_daily_update(
         catch_up=catch_up,
         decision=decision,
         previous_run_interrupted=previous_run_interrupted,
+        research_trade_date=completed_trade_date,
+        intraday_warning=intraday_warning,
     )
     base_status["update_limit"] = int(update_limit)
     base_status["acceptance_mode"] = int(update_limit) > 0
@@ -202,6 +208,7 @@ def run_scheduled_daily_update(
                 or int(getattr(resolved_settings, "full_batch_update_timeout_seconds", DEFAULT_UPDATE_STAGE_TIMEOUT_SECONDS) or DEFAULT_UPDATE_STAGE_TIMEOUT_SECONDS),
                 verbose=verbose,
                 output_format=output_format,
+                research_trade_date=completed_trade_date,
                 step_overrides=step_overrides or {},
             )
             status["finished_at"] = datetime.now().isoformat(timespec="seconds")
@@ -342,6 +349,7 @@ def _run_heavy_steps(
     update_stage_timeout_seconds: int,
     verbose: bool,
     output_format: str,
+    research_trade_date: str,
     step_overrides: dict[str, Callable[[], dict[str, Any]]],
 ) -> dict[str, Any]:
     steps: dict[str, dict[str, Any]] = {}
@@ -356,6 +364,7 @@ def _run_heavy_steps(
         stage_timeout_seconds=stage_timeout_seconds,
         update_stage_timeout_seconds=update_stage_timeout_seconds,
         verbose=verbose,
+        research_trade_date=research_trade_date,
     ):
         stage = stage_spec.name
         status["stage"] = stage
@@ -373,6 +382,7 @@ def _run_heavy_steps(
                 stage,
                 stage_spec.command,
                 stage_spec.timeout_seconds,
+                env=stage_spec.env,
                 status=status,
                 status_path=status_path,
                 output_format=output_format,
@@ -440,6 +450,7 @@ def _scheduled_steps(
     stage_timeout_seconds: int,
     update_stage_timeout_seconds: int,
     verbose: bool,
+    research_trade_date: str,
 ) -> list[StageCommand]:
     """Return bounded subprocess-backed scheduled stages."""
     update_args = [
@@ -459,12 +470,17 @@ def _scheduled_steps(
         update_args.append("--verbose")
     return [
         StageCommand("backup", [sys.executable, "-m", "core.jobs.backup_local_data", "--label", "scheduled_daily_update"], stage_timeout_seconds),
-        StageCommand("update_data", [sys.executable, "-m", "core.jobs.run_full_batch_update", *update_args], update_stage_timeout_seconds),
+        StageCommand(
+            "update_data",
+            [sys.executable, "-m", "core.jobs.run_full_batch_update", *update_args],
+            update_stage_timeout_seconds,
+            env={"REAL_DATA_END_DATE": research_trade_date},
+        ),
         StageCommand("workflow", [sys.executable, "-m", "core.jobs.run_daily_workflow", "--doctor-before-run", "--skip-update", "--format", "all"], stage_timeout_seconds),
         StageCommand("elder_review", [sys.executable, "-m", "core.jobs.run_elder_review"], stage_timeout_seconds),
         StageCommand("entry_zone", [sys.executable, "-m", "core.jobs.calculate_entry_zones"], stage_timeout_seconds),
         StageCommand("watchlist", [sys.executable, "-m", "core.jobs.track_watchlist"], stage_timeout_seconds),
-        StageCommand("workbook", [sys.executable, "-m", "core.jobs.export_daily_research_workbook", "--output", str(workbook_path)], stage_timeout_seconds),
+        StageCommand("workbook", [sys.executable, "-m", "core.jobs.export_daily_research_workbook", "--trade-date", research_trade_date, "--output", str(workbook_path)], stage_timeout_seconds),
     ]
 
 
@@ -473,6 +489,7 @@ def _run_module_stage(
     command: list[str],
     timeout_seconds: int,
     *,
+    env: dict[str, str] | None = None,
     status: dict[str, Any],
     status_path: str | Path,
     output_format: str,
@@ -483,6 +500,7 @@ def _run_module_stage(
     process = subprocess.Popen(
         command,
         cwd=PROJECT_ROOT,
+        env={**os.environ, **(env or {})},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -810,6 +828,8 @@ def _base_status(
     catch_up: bool,
     decision: ScheduleDecision,
     previous_run_interrupted: bool,
+    research_trade_date: str,
+    intraday_warning: str,
 ) -> dict[str, Any]:
     return {
         "status": "running",
@@ -819,9 +839,10 @@ def _base_status(
         "started_at": started_at.isoformat(timespec="seconds"),
         "finished_at": "",
         "run_date": started_at.strftime("%Y%m%d"),
-        "trade_date": started_at.strftime("%Y%m%d"),
-        "research_trade_date": "",
-        "latest_completed_trade_date": "",
+        "trade_date": research_trade_date,
+        "research_trade_date": research_trade_date,
+        "latest_completed_trade_date": research_trade_date,
+        "intraday_warning": intraday_warning,
         "acceptance_mode": False,
         "update_limit": 0,
         "is_trade_day": decision.is_trade_day,
@@ -875,6 +896,26 @@ def _already_success_today(previous: dict[str, Any], current: datetime) -> bool:
 def _parse_time(value: str) -> time:
     hour, minute = value.split(":", 1)
     return time(hour=int(hour), minute=int(minute))
+
+
+def _latest_completed_trade_date(current: datetime, *, scheduled_time: str, allow_intraday: bool, settings: Settings) -> str:
+    """Return the latest completed trade date for scheduled research outputs."""
+    scheduled = _parse_time(scheduled_time)
+    if allow_intraday and is_trade_day_local(current, settings=settings):
+        return current.strftime("%Y%m%d")
+    if is_trade_day_local(current, settings=settings) and current.time() >= scheduled:
+        return current.strftime("%Y%m%d")
+    day = current.date() - timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day.strftime("%Y%m%d")
+
+
+def _intraday_warning(current: datetime, *, scheduled_time: str, allow_intraday: bool, settings: Settings) -> str:
+    """Return a warning when the caller explicitly allows intraday data."""
+    if allow_intraday and is_trade_day_local(current, settings=settings) and current.time() < _parse_time(scheduled_time):
+        return "盘中强制运行，结果可能基于未完成交易日数据，不代表正式收盘后结果。"
+    return ""
 
 
 def _pid_exists(pid: int) -> bool:
@@ -960,6 +1001,9 @@ def _workbook_or_step_count(workbook: dict[str, Any], key: str, fallback: int) -
 
 def _research_trade_date(steps: dict[str, dict[str, Any]], status: dict[str, Any]) -> str:
     """Resolve the research trade date from workbook/workflow output."""
+    status_date = str(status.get("research_trade_date") or "").strip()
+    if status_date:
+        return status_date
     workbook_date = str(steps.get("workbook", {}).get("trade_date") or "").strip()
     if workbook_date:
         return workbook_date
@@ -1013,6 +1057,8 @@ def _print_status(status: dict[str, Any], output_format: str) -> None:
     print(f"- 完成时间: {status.get('finished_at') or '暂无'}")
     print(f"- 运行日期: {status.get('run_date') or status.get('trade_date')}")
     print(f"- 研究交易日: {status.get('research_trade_date') or status.get('trade_date')}")
+    if status.get("intraday_warning"):
+        print(f"- 盘中提示: {status.get('intraday_warning')}")
     if status.get("acceptance_mode"):
         print(f"- 验收模式: 本次为小批量验收运行，update_limit={status.get('update_limit')}，不代表正式全市场自动更新结果。")
     print(f"- 数据源诊断: {status.get('diagnosis_status') or '暂无'}")
@@ -1064,6 +1110,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage-timeout-seconds", type=int, default=DEFAULT_STAGE_TIMEOUT_SECONDS)
     parser.add_argument("--update-stage-timeout-seconds", type=int, default=None)
     parser.add_argument("--verbose", action="store_true", help="Print verbose per-symbol update details when supported.")
+    parser.add_argument("--allow-intraday", action="store_true", help="Allow using the current trading day before the scheduled close-time run.")
     args = parser.parse_args(argv)
     run_scheduled_daily_update(
         scheduled_time=args.scheduled_time,
@@ -1083,6 +1130,7 @@ def main(argv: list[str] | None = None) -> int:
         stage_timeout_seconds=args.stage_timeout_seconds,
         update_stage_timeout_seconds=args.update_stage_timeout_seconds,
         verbose=args.verbose,
+        allow_intraday=args.allow_intraday,
     )
     return 0
 
