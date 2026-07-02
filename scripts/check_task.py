@@ -69,6 +69,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task56": check_task56,
         "task57a": check_task57a,
         "task57b": check_task57b,
+        "task58": check_task58,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -3308,6 +3309,88 @@ def check_task57b(root: Path) -> list[str]:
     return failures
 
 
+def check_task58(root: Path) -> list[str]:
+    """Check Task 58 automatic lookback analysis module."""
+    failures: list[str] = []
+    failures.extend(
+        check_paths(
+            root,
+            [
+                "core/jobs/run_lookback_analysis.py",
+                "tests/test_lookback_analysis.py",
+            ],
+        )
+    )
+    lookback_source = read_source(root / "core/jobs/run_lookback_analysis.py")
+    for phrase in [
+        "run_lookback_analysis",
+        "build_forward_return_details",
+        "group_summary",
+        "save_lookback_workbook",
+        "forward_return",
+        "max_drawdown",
+        "max_runup",
+        "hit_stop_loss",
+        "hit_target",
+        "lookback_analysis_status.json",
+        "read_only=True",
+        "仅供个人研究使用，不自动交易",
+    ]:
+        if phrase not in lookback_source:
+            failures.append(f"run_lookback_analysis.py is missing Task 58 phrase: {phrase}.")
+    workbook_source = read_source(root / "core/jobs/export_daily_research_workbook.py")
+    for phrase in ["11_自动回看摘要", "lookback_analysis_status.json", "尚无自动回看记录", "lookback_report_path"]:
+        if phrase not in workbook_source:
+            failures.append(f"export_daily_research_workbook.py is missing Task 58 lookback summary phrase: {phrase}.")
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    if "run_lookback_analysis" not in command_source:
+        failures.append("command_runner.py is missing run_lookback_analysis allowlist entry.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["自动回看分析", "运行自动回看分析", "下载最新回看报告", "run_lookback_analysis"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 58 phrase: {phrase}.")
+    scheduled_source = read_source(root / "core/jobs/run_scheduled_daily_update.py")
+    for phrase in ["run_lookback_after_daily_update", "lookback_analysis"]:
+        if phrase not in scheduled_source:
+            failures.append(f"run_scheduled_daily_update.py is missing Task 58 optional integration phrase: {phrase}.")
+    config_source = read_source(root / "app/config.py") + read_source(root / ".env.example")
+    if "RUN_LOOKBACK_AFTER_DAILY_UPDATE" not in config_source:
+        failures.append("Config is missing RUN_LOOKBACK_AFTER_DAILY_UPDATE.")
+    tests_source = read_source(root / "tests/test_lookback_analysis.py") + read_source(root / "tests/test_daily_research_workbook.py")
+    for phrase in [
+        "test_forward_return_uses_future_trading_days",
+        "test_forward_return_does_not_use_future_data_for_selection",
+        "test_insufficient_forward_data_is_excluded_from_horizon_stats",
+        "test_max_drawdown_and_max_runup_calculation",
+        "test_hit_stop_loss_and_target",
+        "test_total_score_grouping",
+        "test_factor_score_grouping",
+        "test_elder_action_hint_grouping",
+        "test_entry_zone_status_grouping",
+        "test_watch_status_grouping",
+        "test_lookback_workbook_has_expected_sheets",
+        "test_lookback_status_json_written",
+        "test_lookback_dry_run_does_not_write_report",
+        "test_lookback_streamlit_entry_exists",
+        "test_lookback_command_allowlist",
+        "test_daily_research_workbook_includes_lookback_summary_when_status_exists",
+        "test_daily_research_workbook_handles_missing_lookback_status",
+        "test_daily_research_workbook_does_not_embed_full_lookback_detail",
+        "test_lookback_report_path_is_recorded_in_daily_workbook_summary",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"Task 58 tests are missing {phrase}.")
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task58", "run_lookback_analysis", "--dry-run", "--format", "json"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task58 is missing {phrase}.")
+    docs_source = read_source(root / "docs/commands_reference.md")
+    for phrase in ["run_lookback_analysis", "自动回看分析", "RUN_LOOKBACK_AFTER_DAILY_UPDATE"]:
+        if phrase not in docs_source:
+            failures.append(f"docs/commands_reference.md is missing Task 58 wording: {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -3397,6 +3480,7 @@ def main(argv: list[str] | None = None) -> int:
             "task56",
             "task57a",
             "task57b",
+            "task58",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

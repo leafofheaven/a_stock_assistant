@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     min_latest_amount: float = Field(default=30_000_000, validation_alias="MIN_LATEST_AMOUNT")
     min_traded_days_20d: int = Field(default=18, validation_alias="MIN_TRADED_DAYS_20D")
     include_bse: bool = Field(default=False, validation_alias="INCLUDE_BSE")
+    run_lookback_after_daily_update: bool = Field(
+        default=False,
+        validation_alias="RUN_LOOKBACK_AFTER_DAILY_UPDATE",
+    )
 
     @field_validator("log_level")
     @classmethod

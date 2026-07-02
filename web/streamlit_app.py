@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import json
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -42,9 +43,11 @@ ALLOWED_COMMANDS.setdefault("diagnose_data_source_network", [sys.executable, "-m
 ALLOWED_COMMANDS.setdefault("run_scheduled_daily_update", [sys.executable, "-m", "core.jobs.run_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("install_scheduled_daily_update", [sys.executable, "-m", "core.jobs.install_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("uninstall_scheduled_daily_update", [sys.executable, "-m", "core.jobs.uninstall_scheduled_daily_update"])
+ALLOWED_COMMANDS.setdefault("run_lookback_analysis", [sys.executable, "-m", "core.jobs.run_lookback_analysis"])
 
 CORE_LOGIC_GUIDE_PATH = PROJECT_ROOT / "docs" / "user_guides" / "core_logic_guide.md"
 CORE_LOGIC_GUIDE_DOWNLOAD_NAME = "A股选股辅助系统_核心逻辑说明.md"
+LOOKBACK_STATUS_PATH = PROJECT_ROOT / "data" / "runtime" / "lookback_analysis_status.json"
 
 SELECTION_COLUMNS = [
     "rank",
@@ -1660,6 +1663,7 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         display_dataframe(st, snapshot_df, columns=display_columns)
     st.info(status["last_job_status"])
     _render_scheduled_update_section(st)
+    _render_lookback_analysis_section(st)
     _render_full_batch_update_section(st, status)
 
 
@@ -1711,6 +1715,65 @@ def _render_scheduled_update_section(st: Any) -> None:
             ["--force", "--format", "text"],
             success_message="自动更新补跑命令执行完成。请刷新页面查看最新状态。",
         )
+
+
+def _render_lookback_analysis_section(st: Any) -> None:
+    """Render automatic lookback analysis status and controls."""
+    st.subheader("自动回看分析")
+    status = _read_lookback_status()
+    if not status:
+        st.info("尚无自动回看记录。")
+    else:
+        st.write(
+            {
+                "最近一次状态": status.get("status"),
+                "回看截止交易日": status.get("as_of_trade_date") or "暂无",
+                "样本区间": f"{status.get('start_date') or '暂无'} - {status.get('end_date') or '暂无'}",
+                "回看周期": ",".join(str(item) for item in status.get("horizons", [])) if isinstance(status.get("horizons"), list) else status.get("horizons"),
+                "候选样本数量": status.get("candidate_sample_count", 0),
+                "有效样本数量": status.get("valid_sample_count", 0),
+                "数据不足数量": status.get("insufficient_forward_data_count", 0),
+                "主要发现": status.get("key_findings") or "暂无",
+                "数据质量提示": status.get("data_quality_summary") or "暂无",
+                "报告路径": status.get("generated_report_path") or "暂无",
+            }
+        )
+        report_path = Path(str(status.get("generated_report_path") or ""))
+        if status.get("generated_report_path") and report_path.exists():
+            with report_path.open("rb") as handle:
+                st.download_button(
+                    "下载最新回看报告",
+                    data=handle.read(),
+                    file_name=report_path.name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_latest_lookback_report",
+                    width="stretch",
+                )
+        elif status.get("generated_report_path"):
+            st.warning("最新回看报告文件不存在，可能已被清理。")
+    st.caption("回看分析只验证历史样本表现，不改变 total_score、因子权重或今日候选排序。")
+    col1, col2 = st.columns(2)
+    if col1.button("运行自动回看分析", key="run_lookback_analysis_button"):
+        _run_streaming_console_action(
+            st,
+            "运行自动回看分析",
+            "run_lookback_analysis",
+            ["--as-of", "latest", "--horizons", "1,3,5,10,20", "--format", "text"],
+            success_message="自动回看分析完成。请刷新页面查看最新状态。",
+        )
+    if col2.button("刷新回看状态", key="refresh_lookback_status_button"):
+        st.info("已读取本地状态文件；如未变化，请点击页面右上角刷新。")
+
+
+def _read_lookback_status() -> dict[str, Any] | None:
+    """Read latest lookback analysis status JSON for display."""
+    if not LOOKBACK_STATUS_PATH.exists():
+        return None
+    try:
+        payload = json.loads(LOOKBACK_STATUS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"status": "failed", "summary": "自动回看状态文件不可读。"}
+    return payload if isinstance(payload, dict) else None
 
 
 def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:

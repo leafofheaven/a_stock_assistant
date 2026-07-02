@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ SHEET_NAMES = [
     "08_数据质量",
     "09_参数配置",
     "10_说明",
+    "11_自动回看摘要",
 ]
 
 SENSITIVE_KEYWORDS = ("token", "key", "password", "secret", "api密钥", "smtp")
@@ -152,6 +154,19 @@ COLUMN_LABELS = {
     "note": "说明（note）",
     "config_key": "配置项（config_key）",
     "config_value": "配置值（config_value）",
+    "as_of_trade_date": "回看截止交易日（as_of_trade_date）",
+    "sample_period": "样本区间（sample_period）",
+    "horizons": "回看周期（horizons）",
+    "candidate_sample_count": "候选样本数量（candidate_sample_count）",
+    "valid_sample_count": "有效样本数量（valid_sample_count）",
+    "insufficient_forward_data_count": "数据不足数量（insufficient_forward_data_count）",
+    "total_score_group_summary": "综合分分组摘要（total_score_group_summary）",
+    "elder_review_summary": "埃尔德复核摘要（elder_review_summary）",
+    "entry_zone_summary": "买入区间摘要（entry_zone_summary）",
+    "watchlist_summary": "观察池状态摘要（watchlist_summary）",
+    "key_findings": "主要发现（key_findings）",
+    "data_quality_summary": "数据质量提示（data_quality_summary）",
+    "lookback_report_path": "完整回看报告路径（lookback_report_path）",
 }
 
 
@@ -166,6 +181,7 @@ class WorkbookExportResult:
     entry_zone_rows: int
     watchlist_rows: int
     external_position_rows: int
+    lookback_summary_rows: int = 0
 
 
 def export_daily_research_workbook(
@@ -174,6 +190,7 @@ def export_daily_research_workbook(
     output_path: str | Path | None = None,
     include_external_positions: bool = True,
     include_data_quality: bool = True,
+    lookback_status_path: str | Path | None = None,
     settings: Settings | Any | None = None,
     store: DuckDBStore | None = None,
 ) -> WorkbookExportResult:
@@ -211,6 +228,8 @@ def export_daily_research_workbook(
         else _message_frame("数据质量导出已关闭。")
     )
     settings_sheet = _settings_sheet(resolved_settings)
+    lookback_status = _read_lookback_status(lookback_status_path)
+    lookback_sheet = _build_lookback_summary_sheet(lookback_status)
     summary_sheet = _build_summary_sheet(
         selected_trade_date=selected_trade_date,
         output_path=output_path,
@@ -219,6 +238,7 @@ def export_daily_research_workbook(
         entry_zone_rows=len(entry_sheet),
         watchlist_rows=len(watchlist_sheet),
         external_position_rows=len(external_sheet),
+        lookback_status=lookback_status,
     )
     help_sheet = _help_sheet()
 
@@ -239,6 +259,7 @@ def export_daily_research_workbook(
         "08_数据质量": quality_sheet,
         "09_参数配置": settings_sheet,
         "10_说明": help_sheet,
+        "11_自动回看摘要": lookback_sheet,
     }
     for sheet_name in SHEET_NAMES:
         _write_sheet(workbook, sheet_name, sheets[sheet_name])
@@ -252,6 +273,7 @@ def export_daily_research_workbook(
         entry_zone_rows=len(entry_sheet),
         watchlist_rows=len(watchlist_sheet),
         external_position_rows=len(external_sheet),
+        lookback_summary_rows=len(lookback_sheet),
     )
 
 
@@ -674,18 +696,76 @@ def _build_summary_sheet(
     entry_zone_rows: int,
     watchlist_rows: int,
     external_position_rows: int,
+    lookback_status: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    return pd.DataFrame(
+    rows = [
+        {"metric": "导出时间", "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+        {"metric": "研究日期", "value": selected_trade_date or "暂无"},
+        {"metric": "今日候选数量", "value": strategy_rows},
+        {"metric": "埃尔德复核记录数量", "value": elder_rows},
+        {"metric": "买入区间记录数量", "value": entry_zone_rows},
+        {"metric": "观察池记录数量", "value": watchlist_rows},
+        {"metric": "外部模拟持仓记录数量", "value": external_position_rows},
+    ]
+    if lookback_status:
+        rows.extend(
+            [
+                {"metric": "最近一次自动回看状态", "value": lookback_status.get("status") or "暂无"},
+                {"metric": "回看截止交易日", "value": lookback_status.get("as_of_trade_date") or "暂无"},
+                {"metric": "回看有效样本数量", "value": lookback_status.get("valid_sample_count", 0)},
+                {"metric": "完整回看报告路径", "value": lookback_status.get("generated_report_path") or "暂无"},
+            ]
+        )
+    else:
+        rows.append({"metric": "最近一次自动回看状态", "value": "尚无自动回看记录。"})
+    rows.extend(
         [
-            {"metric": "导出时间", "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
-            {"metric": "研究日期", "value": selected_trade_date or "暂无"},
-            {"metric": "今日候选数量", "value": strategy_rows},
-            {"metric": "埃尔德复核记录数量", "value": elder_rows},
-            {"metric": "买入区间记录数量", "value": entry_zone_rows},
-            {"metric": "观察池记录数量", "value": watchlist_rows},
-            {"metric": "外部模拟持仓记录数量", "value": external_position_rows},
             {"metric": "输出文件", "value": str(output_path or "默认 reports/daily_research_*.xlsx")},
             {"metric": "说明", "value": "仅供个人研究使用，不自动交易。"},
+        ]
+    )
+    return pd.DataFrame(rows)
+
+
+def _read_lookback_status(status_path: str | Path | None = None) -> dict[str, Any] | None:
+    """Read the latest lookback status JSON without requiring it to exist."""
+    path = Path(status_path) if status_path else PROJECT_ROOT / "data" / "runtime" / "lookback_analysis_status.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"status": "failed", "summary": "自动回看状态文件不可读。"}
+    return payload if isinstance(payload, dict) else None
+
+
+def _build_lookback_summary_sheet(status: dict[str, Any] | None) -> pd.DataFrame:
+    """Build a lightweight lookback summary sheet; never embed full detail rows."""
+    if not status:
+        return _message_frame("尚无自动回看记录。")
+    sample_period = f"{status.get('start_date') or '暂无'} - {status.get('end_date') or '暂无'}"
+    horizons = status.get("horizons", [])
+    if isinstance(horizons, list):
+        horizon_text = ",".join(str(item) for item in horizons)
+    else:
+        horizon_text = str(horizons or "")
+    return pd.DataFrame(
+        [
+            {
+                "as_of_trade_date": status.get("as_of_trade_date") or "",
+                "sample_period": sample_period,
+                "horizons": horizon_text,
+                "candidate_sample_count": status.get("candidate_sample_count", 0),
+                "valid_sample_count": status.get("valid_sample_count", 0),
+                "insufficient_forward_data_count": status.get("insufficient_forward_data_count", 0),
+                "total_score_group_summary": status.get("total_score_group_summary") or "",
+                "elder_review_summary": status.get("elder_review_summary") or "",
+                "entry_zone_summary": status.get("entry_zone_summary") or "",
+                "watchlist_summary": status.get("watchlist_summary") or "",
+                "key_findings": status.get("key_findings") or "",
+                "data_quality_summary": status.get("data_quality_summary") or "",
+                "lookback_report_path": status.get("generated_report_path") or "",
+            }
         ]
     )
 
@@ -820,6 +900,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trade-date", default=None, help="Trade date in YYYYMMDD; default latest local selection date.")
     parser.add_argument("--output", default=None, help="Output .xlsx path; default reports/daily_research_*.xlsx.")
     parser.add_argument("--format", default="xlsx", choices=["xlsx"], help="Output format. Only xlsx is supported.")
+    parser.add_argument("--lookback-status-path", default=None, help="Optional lookback status JSON path.")
     parser.add_argument(
         "--include-external-positions",
         dest="include_external_positions",
@@ -853,6 +934,7 @@ def main(argv: list[str] | None = None) -> int:
         output_path=args.output,
         include_external_positions=args.include_external_positions,
         include_data_quality=args.include_data_quality,
+        lookback_status_path=args.lookback_status_path,
     )
     print("每日研究工作簿导出完成")
     print(f"研究日期: {result.trade_date or '暂无'}")
@@ -861,6 +943,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"买入区间: {result.entry_zone_rows}")
     print(f"观察池: {result.watchlist_rows}")
     print(f"外部模拟持仓: {result.external_position_rows}")
+    print(f"自动回看摘要: {result.lookback_summary_rows}")
     print(f"输出文件: {result.output_path}")
     return 0
 
