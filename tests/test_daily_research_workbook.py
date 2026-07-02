@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import json
 
 from openpyxl import load_workbook
 import pandas as pd
@@ -119,6 +120,62 @@ def test_workbook_uses_chinese_name_with_english_field_labels(tmp_path: Path) ->
         "盈亏比（reward_risk_ratio）",
     ]:
         assert header in all_headers
+
+
+def test_daily_research_workbook_includes_lookback_summary_when_status_exists(tmp_path: Path) -> None:
+    """Daily workbook should include a lightweight lookback summary sheet when status exists."""
+    store = _seed_store(tmp_path)
+    status_path = _write_lookback_status(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store, lookback_status_path=status_path)
+
+    workbook = load_workbook(output)
+    assert "11_自动回看摘要" in workbook.sheetnames
+    sheet = workbook["11_自动回看摘要"]
+    headers = _headers(sheet)
+    assert "回看截止交易日（as_of_trade_date）" in headers
+    assert "完整回看报告路径（lookback_report_path）" in headers
+    values = [cell.value for cell in sheet[2]]
+    assert "20260630" in values
+    assert "/tmp/lookback.xlsx" in values
+
+
+def test_daily_research_workbook_handles_missing_lookback_status(tmp_path: Path) -> None:
+    """Missing lookback status should not break workbook export."""
+    store = _seed_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store, lookback_status_path=tmp_path / "missing.json")
+
+    sheet = load_workbook(output)["11_自动回看摘要"]
+    assert sheet["A2"].value == "尚无自动回看记录。"
+
+
+def test_daily_research_workbook_does_not_embed_full_lookback_detail(tmp_path: Path) -> None:
+    """Daily workbook should not embed the full future-return detail table."""
+    store = _seed_store(tmp_path)
+    status_path = _write_lookback_status(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store, lookback_status_path=status_path)
+
+    workbook = load_workbook(output)
+    assert "07_未来收益明细" not in workbook.sheetnames
+    assert "11_自动回看摘要" in workbook.sheetnames
+
+
+def test_lookback_report_path_is_recorded_in_daily_workbook_summary(tmp_path: Path) -> None:
+    """00 summary should record the latest full lookback report path."""
+    store = _seed_store(tmp_path)
+    status_path = _write_lookback_status(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store, lookback_status_path=status_path)
+
+    sheet = load_workbook(output)["00_摘要"]
+    rows = {(sheet.cell(row=i, column=1).value, sheet.cell(row=i, column=2).value) for i in range(2, sheet.max_row + 1)}
+    assert ("完整回看报告路径", "/tmp/lookback.xlsx") in rows
 
 
 def test_elder_review_sheet_fields(tmp_path: Path) -> None:
@@ -417,6 +474,34 @@ def _settings(store: DuckDBStore) -> SimpleNamespace:
         real_universe_preset="full",
         akshare_sample_symbols="",
     )
+
+
+def _write_lookback_status(tmp_path: Path) -> Path:
+    status_path = tmp_path / "lookback_status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "status": "success",
+                "as_of_trade_date": "20260630",
+                "start_date": "20260601",
+                "end_date": "20260630",
+                "horizons": [1, 3, 5, 10, 20],
+                "candidate_sample_count": 30,
+                "valid_sample_count": 24,
+                "insufficient_forward_data_count": 6,
+                "total_score_group_summary": "综合分分组摘要",
+                "elder_review_summary": "埃尔德复核摘要",
+                "entry_zone_summary": "买入区间摘要",
+                "watchlist_summary": "观察池状态摘要",
+                "key_findings": "主要发现",
+                "data_quality_summary": "数据质量提示",
+                "generated_report_path": "/tmp/lookback.xlsx",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return status_path
 
 
 def _table_counts(store: DuckDBStore) -> dict[str, int]:

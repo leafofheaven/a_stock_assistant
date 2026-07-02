@@ -307,6 +307,42 @@ python -m core.jobs.doctor_daily_run --post-run
 
 命令行会逐步输出 `[progress]` 行。Streamlit 本地控制台会把这些行解析成当前步骤、当前子任务、成功/失败/跳过数量、实时日志和最终报告路径。
 
+## 自动回看分析
+
+命令：
+
+```bash
+python -m core.jobs.run_lookback_analysis --dry-run --format text
+python -m core.jobs.run_lookback_analysis --dry-run --format json
+python -m core.jobs.run_lookback_analysis --as-of latest --horizons 1,3,5,10,20 --limit 300 --format text
+```
+
+作用：只读本地 DuckDB，基于 `strategy_result`、`daily_price`、埃尔德复核字段、买入区间快照和观察池快照，验证当前系统已有信号在后续 1 / 3 / 5 / 10 / 20 个交易日的历史表现。回看使用每只股票后续有效交易日，不使用自然日；未来收益只在回看阶段计算，不参与当日选股。
+
+独立完整报告默认写入：
+
+```text
+reports/lookback/lookback_analysis_YYYYMMDD.xlsx
+```
+
+状态文件默认写入：
+
+```text
+data/runtime/lookback_analysis_status.json
+```
+
+每日研究工作簿会读取最近一次 `lookback_analysis_status.json`，新增 `11_自动回看摘要`，并在 `00_摘要` 中显示最近一次自动回看状态、截止交易日、有效样本数量和完整报告路径。每日研究工作簿只展示摘要，不嵌入 `07_未来收益明细` 等完整明细。
+
+默认不在 18:00 自动更新后运行回看。可选配置：
+
+```bash
+RUN_LOOKBACK_AFTER_DAILY_UPDATE=false
+```
+
+设为 `true` 后，`run_scheduled_daily_update` 可在导出每日研究工作簿前先运行自动回看分析；默认保持 `false`，避免日常自动更新额外增加重任务。
+
+回看结论只能理解为“历史样本期内表现”，不自动调整综合分（total_score）、因子权重、今日候选排序、埃尔德复核或买入区间逻辑；不构成投资建议，不自动交易。
+
 ## 日常体检与安全修复
 
 命令：

@@ -468,7 +468,7 @@ def _scheduled_steps(
     ]
     if verbose:
         update_args.append("--verbose")
-    return [
+    steps = [
         StageCommand("backup", [sys.executable, "-m", "core.jobs.backup_local_data", "--label", "scheduled_daily_update"], stage_timeout_seconds),
         StageCommand(
             "update_data",
@@ -480,8 +480,17 @@ def _scheduled_steps(
         StageCommand("elder_review", [sys.executable, "-m", "core.jobs.run_elder_review"], stage_timeout_seconds),
         StageCommand("entry_zone", [sys.executable, "-m", "core.jobs.calculate_entry_zones"], stage_timeout_seconds),
         StageCommand("watchlist", [sys.executable, "-m", "core.jobs.track_watchlist"], stage_timeout_seconds),
-        StageCommand("workbook", [sys.executable, "-m", "core.jobs.export_daily_research_workbook", "--trade-date", research_trade_date, "--output", str(workbook_path)], stage_timeout_seconds),
     ]
+    if bool(getattr(settings, "run_lookback_after_daily_update", False)):
+        steps.append(
+            StageCommand(
+                "lookback_analysis",
+                [sys.executable, "-m", "core.jobs.run_lookback_analysis", "--as-of", research_trade_date, "--format", "text"],
+                stage_timeout_seconds,
+            )
+        )
+    steps.append(StageCommand("workbook", [sys.executable, "-m", "core.jobs.export_daily_research_workbook", "--trade-date", research_trade_date, "--output", str(workbook_path)], stage_timeout_seconds))
+    return steps
 
 
 def _run_module_stage(
@@ -733,6 +742,7 @@ def _stage_label(stage: str) -> str:
         "elder_review": "埃尔德复核",
         "entry_zone": "买入区间",
         "watchlist": "观察池跟踪",
+        "lookback_analysis": "自动回看分析",
         "workbook": "导出每日研究 Excel",
         "done": "完成",
     }.get(stage, stage)
