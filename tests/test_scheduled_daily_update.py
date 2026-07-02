@@ -31,6 +31,24 @@ def _status_paths(tmp_path: Path) -> tuple[Path, Path]:
     return tmp_path / "runtime" / "scheduled_daily_update_status.json", tmp_path / "runtime" / "scheduled_daily_update.lock"
 
 
+def _formal_success_status(trade_date: str) -> dict:
+    return {
+        "status": "success",
+        "stage": "done",
+        "trade_date": trade_date,
+        "research_trade_date": trade_date,
+        "formal_run": True,
+        "formal_success_date": trade_date,
+        "acceptance_mode": False,
+        "update_limit": None,
+        "allow_intraday": False,
+        "intraday_warning": "",
+        "workbook_exists": True,
+        "workbook_path": "/tmp/daily_research.xlsx",
+        "workbook_size_bytes": 1234,
+    }
+
+
 def _ok_preflight() -> dict:
     return {
         "ok": True,
@@ -57,8 +75,8 @@ def test_scheduled_update_skips_before_scheduled_time(tmp_path: Path) -> None:
 
 
 def test_scheduled_update_skips_if_already_success_today(tmp_path: Path) -> None:
-    """A successful status for today should prevent duplicate runs."""
-    previous = {"status": "success", "trade_date": "20260701"}
+    """A formal successful status for today should prevent duplicate runs."""
+    previous = _formal_success_status("20260701")
     decision = should_run_scheduled_update(
         now=datetime(2026, 7, 1, 18, 30),
         scheduled_time="18:00",
@@ -68,7 +86,7 @@ def test_scheduled_update_skips_if_already_success_today(tmp_path: Path) -> None
         settings=_settings(tmp_path),
     )
     assert not decision.should_run
-    assert "今日已成功更新" in decision.summary
+    assert "今日已完成正式自动更新" in decision.summary
 
 
 def test_scheduled_update_runs_after_scheduled_time_when_not_success(tmp_path: Path) -> None:
@@ -554,7 +572,92 @@ def test_update_limit_sets_acceptance_mode(tmp_path: Path, capsys) -> None:
     output = capsys.readouterr().out
     assert result["acceptance_mode"] is True
     assert result["update_limit"] == 50
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
     assert "本次为小批量验收运行" in output
+
+
+def test_acceptance_run_does_not_block_formal_scheduled_run(tmp_path: Path) -> None:
+    """A prior update-limit acceptance run must not block the 18:00 formal run."""
+    previous = {
+        **_formal_success_status("20260701"),
+        "formal_run": False,
+        "formal_success_date": "",
+        "acceptance_mode": True,
+        "update_limit": 500,
+    }
+    decision = should_run_scheduled_update(
+        now=datetime(2026, 7, 2, 18, 0, 4),
+        scheduled_time="18:00",
+        previous_status=previous,
+        force=False,
+        catch_up=True,
+        settings=_settings(tmp_path),
+    )
+    assert decision.should_run
+    assert decision.already_ran_today is False
+
+
+def test_intraday_run_does_not_block_formal_scheduled_run(tmp_path: Path) -> None:
+    """A prior --allow-intraday run must not block the formal close-time run."""
+    previous = {
+        **_formal_success_status("20260702"),
+        "formal_run": False,
+        "formal_success_date": "",
+        "allow_intraday": True,
+        "intraday_warning": "盘中强制运行，结果可能基于未完成交易日数据，不代表正式收盘后结果。",
+    }
+    decision = should_run_scheduled_update(
+        now=datetime(2026, 7, 2, 18, 30),
+        scheduled_time="18:00",
+        previous_status=previous,
+        force=False,
+        catch_up=True,
+        settings=_settings(tmp_path),
+    )
+    assert decision.should_run
+
+
+def test_update_limit_run_does_not_set_formal_success(tmp_path: Path) -> None:
+    """update_limit runs should not write formal_success_date."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(tmp_path, status_path, lock_path, update_limit=300)
+    assert result["acceptance_mode"] is True
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
+
+
+def test_formal_success_blocks_duplicate_formal_run(tmp_path: Path) -> None:
+    """Only a completed formal run with workbook metadata should block duplicates."""
+    previous = _formal_success_status("20260702")
+    decision = should_run_scheduled_update(
+        now=datetime(2026, 7, 2, 18, 30),
+        scheduled_time="18:00",
+        previous_status=previous,
+        force=False,
+        catch_up=True,
+        settings=_settings(tmp_path),
+    )
+    assert not decision.should_run
+    assert decision.already_ran_today is True
+
+
+def test_skipped_status_from_acceptance_state_does_not_clear_previous_formal_fields(tmp_path: Path) -> None:
+    """A skipped before-time status should preserve previous formal_success_date."""
+    status_path, lock_path = _status_paths(tmp_path)
+    status_path.parent.mkdir(parents=True)
+    previous = _formal_success_status("20260701")
+    previous.update({"acceptance_mode": True, "update_limit": 500, "status": "success", "trade_date": "20260702"})
+    status_path.write_text(json.dumps(previous), encoding="utf-8")
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 2, 17, 30),
+        status_path=status_path,
+        lock_path=lock_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+    )
+    assert result["status"] == "skipped"
+    assert result["formal_success_date"] == "20260701"
 
 
 def test_workflow_skipped_steps_not_mixed_with_skipped_symbols(tmp_path: Path) -> None:

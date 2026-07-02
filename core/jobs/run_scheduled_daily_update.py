@@ -34,7 +34,7 @@ DEFAULT_LOCK_PATH = PROJECT_ROOT / "data" / "runtime" / "scheduled_daily_update.
 DUCKDB_LOCK_USER_MESSAGE = "DuckDB is locked by another process. Please stop other running jobs or Streamlit first."
 SUCCESS_STATUSES = {"success", "warning", "success_with_notification_warning"}
 WARNING_STATUSES = {"warning", "partial_success", "success_with_warnings"}
-DEFAULT_UPDATE_LIMIT = 500
+DEFAULT_UPDATE_LIMIT = 0
 DEFAULT_UPDATE_BATCH_SIZE = 50
 DEFAULT_UPDATE_LOOKBACK_DAYS = 250
 DEFAULT_UPDATE_MAX_RETRIES = 1
@@ -103,6 +103,7 @@ def run_scheduled_daily_update(
     _emit_stage(output_format, "检查上次运行状态", str(status_file))
     previous = read_scheduled_status(status_file)
     previous_run_interrupted = _previous_run_interrupted(previous, lock_file)
+    previous_formal_success_date = str(previous.get("formal_success_date") or "")
     _emit_stage(output_format, "判断交易日", started_at.strftime("%Y-%m-%d"))
     decision = should_run_scheduled_update(
         now=started_at,
@@ -124,9 +125,12 @@ def run_scheduled_daily_update(
         previous_run_interrupted=previous_run_interrupted,
         research_trade_date=completed_trade_date,
         intraday_warning=intraday_warning,
+        allow_intraday=allow_intraday,
+        previous_formal_success_date=previous_formal_success_date,
     )
-    base_status["update_limit"] = int(update_limit)
+    base_status["update_limit"] = int(update_limit) if int(update_limit) > 0 else None
     base_status["acceptance_mode"] = int(update_limit) > 0
+    base_status["formal_run"] = _is_formal_run(update_limit=update_limit, allow_intraday=allow_intraday, intraday_warning=intraday_warning, dry_run=dry_run)
     if not decision.should_run and not force:
         status = {
             **base_status,
@@ -270,7 +274,7 @@ def should_run_scheduled_update(
     if now.time() < scheduled:
         return ScheduleDecision(False, "skipped", "未到计划更新时间。", is_trade_day, already_ran, catch_up)
     if already_ran:
-        return ScheduleDecision(False, "skipped", "今日已成功更新，不重复运行。", is_trade_day, already_ran, catch_up)
+        return ScheduleDecision(False, "skipped", "今日已完成正式自动更新，不重复运行。", is_trade_day, already_ran, catch_up)
     return ScheduleDecision(True, "running", "已到计划时间且今日未成功更新，开始执行。", is_trade_day, already_ran, catch_up)
 
 
@@ -436,6 +440,8 @@ def _run_heavy_steps(
             "logs": logs,
         }
     )
+    if _status_counts_as_formal_success(status):
+        status["formal_success_date"] = research_trade_date
     return status
 
 
@@ -456,8 +462,6 @@ def _scheduled_steps(
     update_args = [
         "--mode",
         "missing_first",
-        "--max-symbols",
-        str(max(1, int(update_limit))),
         "--batch-size",
         str(max(1, int(update_batch_size))),
         "--lookback-days",
@@ -466,6 +470,8 @@ def _scheduled_steps(
         str(max(1, int(update_max_retries))),
         "--skip-network-preflight",
     ]
+    if int(update_limit) > 0:
+        update_args.extend(["--max-symbols", str(max(1, int(update_limit)))])
     if verbose:
         update_args.append("--verbose")
     steps = [
@@ -750,7 +756,8 @@ def _stage_label(stage: str) -> str:
 
 def _stage_detail(stage: str, update_limit: int, timeout_seconds: int) -> str:
     if stage == "update_data":
-        return f"update_limit={update_limit}, timeout={timeout_seconds}s"
+        limit_text = str(update_limit) if int(update_limit) > 0 else "formal_unlimited"
+        return f"update_limit={limit_text}, timeout={timeout_seconds}s"
     return f"timeout={timeout_seconds}s"
 
 
@@ -840,6 +847,8 @@ def _base_status(
     previous_run_interrupted: bool,
     research_trade_date: str,
     intraday_warning: str,
+    allow_intraday: bool,
+    previous_formal_success_date: str,
 ) -> dict[str, Any]:
     return {
         "status": "running",
@@ -853,8 +862,11 @@ def _base_status(
         "research_trade_date": research_trade_date,
         "latest_completed_trade_date": research_trade_date,
         "intraday_warning": intraday_warning,
+        "allow_intraday": allow_intraday,
+        "formal_run": False,
+        "formal_success_date": previous_formal_success_date,
         "acceptance_mode": False,
-        "update_limit": 0,
+        "update_limit": None,
         "is_trade_day": decision.is_trade_day,
         "catch_up": catch_up,
         "force": force,
@@ -900,7 +912,52 @@ def _base_status(
 
 
 def _already_success_today(previous: dict[str, Any], current: datetime) -> bool:
-    return previous.get("status") in SUCCESS_STATUSES and str(previous.get("trade_date")) == current.strftime("%Y%m%d")
+    return _is_formal_success_for_date(previous, current.strftime("%Y%m%d"))
+
+
+def _is_formal_success_for_date(previous: dict[str, Any], trade_date: str) -> bool:
+    """Return whether a previous status represents a completed formal daily run."""
+    if previous.get("status") not in SUCCESS_STATUSES:
+        return False
+    if str(previous.get("stage") or "") != "done":
+        return False
+    if bool(previous.get("acceptance_mode")):
+        return False
+    if _positive_int(previous.get("update_limit")):
+        return False
+    if bool(previous.get("allow_intraday")):
+        return False
+    if str(previous.get("intraday_warning") or "").strip():
+        return False
+    if not bool(previous.get("workbook_exists")):
+        return False
+    if not str(previous.get("workbook_path") or "").strip():
+        return False
+    if _positive_int(previous.get("workbook_size_bytes")) <= 0:
+        return False
+    formal_date = str(previous.get("formal_success_date") or "")
+    if formal_date:
+        return formal_date == trade_date
+    if bool(previous.get("formal_run")):
+        return str(previous.get("trade_date") or previous.get("research_trade_date") or "") == trade_date
+    return False
+
+
+def _is_formal_run(*, update_limit: int, allow_intraday: bool, intraday_warning: str, dry_run: bool) -> bool:
+    return not dry_run and int(update_limit) <= 0 and not allow_intraday and not str(intraday_warning or "").strip()
+
+
+def _status_counts_as_formal_success(status: dict[str, Any]) -> bool:
+    return _is_formal_success_for_date(status, str(status.get("research_trade_date") or status.get("trade_date") or ""))
+
+
+def _positive_int(value: Any) -> int:
+    try:
+        if value is None or value == "":
+            return 0
+        return max(0, int(value))
+    except Exception:
+        return 0
 
 
 def _parse_time(value: str) -> time:

@@ -14,7 +14,7 @@ from core.runtime.progress import print_progress
 def run_full_batch_update(
     *,
     mode: str = "missing_first",
-    max_symbols: int = 500,
+    max_symbols: int = 0,
     batch_size: int = 50,
     lookback_days: int = 250,
     max_retries: int = 1,
@@ -79,7 +79,7 @@ def run_full_batch_update(
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run a bounded full-universe batch update.")
     parser.add_argument("--mode", choices=["missing_first", "stale_first", "auto"], default="missing_first")
-    parser.add_argument("--max-symbols", type=int, default=500)
+    parser.add_argument("--max-symbols", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--lookback-days", type=int, default=250)
     parser.add_argument("--max-retries", type=int, default=1)
