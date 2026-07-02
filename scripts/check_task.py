@@ -68,6 +68,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task55": check_task55,
         "task56": check_task56,
         "task57a": check_task57a,
+        "task57b": check_task57b,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -3188,6 +3189,125 @@ def check_task57a(root: Path) -> list[str]:
     return failures
 
 
+def check_task57b(root: Path) -> list[str]:
+    """Check scheduled 18:00 update workflow, status, launchd, and notification framework."""
+    failures = check_paths(
+        root,
+        [
+            "core/jobs/run_scheduled_daily_update.py",
+            "core/jobs/install_scheduled_daily_update.py",
+            "core/jobs/uninstall_scheduled_daily_update.py",
+            "core/notifications/macos.py",
+            "core/notifications/email.py",
+            "tests/test_scheduled_daily_update.py",
+            "scripts/verify_task.py",
+            "web/streamlit_app.py",
+        ],
+    )
+    scheduled_source = read_source(root / "core/jobs/run_scheduled_daily_update.py")
+    for phrase in [
+        "scheduled_time",
+        "18:00",
+        "catch_up",
+        "force",
+        "dry_run",
+        "scheduled_daily_update_status.json",
+        "scheduled_daily_update.lock",
+        "run_data_source_preflight",
+        "backup_local_data",
+        "run_daily_workflow",
+        "run_elder_review",
+        "calculate_entry_zones",
+        "track_watchlist",
+        "export_daily_research_workbook",
+        "send_macos_notification",
+        "send_email_notification",
+        "DuckDB is locked by another process",
+        "update_limit",
+        "allow_intraday",
+        "intraday_warning",
+        "latest_completed_trade_date",
+        "research_trade_date",
+        "stage_timeout_seconds",
+        "last_heartbeat_at",
+        "processed_symbol_count",
+        "total_symbol_count",
+        "StageCommand",
+        "subprocess.Popen",
+        "select.select",
+        "--max-symbols",
+        "FULL_BATCH_UPDATE_TIMEOUT_SECONDS",
+    ]:
+        if phrase not in scheduled_source:
+            failures.append(f"run_scheduled_daily_update.py is missing Task 57B phrase: {phrase}.")
+
+    launchd_source = read_source(root / "core/jobs/install_scheduled_daily_update.py")
+    for phrase in ["LaunchAgent", "StartCalendarInterval", "Hour", "Minute", "run_scheduled_daily_update", "--catch-up", "launchctl", "dry_run"]:
+        if phrase not in launchd_source:
+            failures.append(f"install_scheduled_daily_update.py is missing {phrase}.")
+    uninstall_source = read_source(root / "core/jobs/uninstall_scheduled_daily_update.py")
+    for phrase in ["bootout", "dry_run", "LaunchAgent"]:
+        if phrase not in uninstall_source:
+            failures.append(f"uninstall_scheduled_daily_update.py is missing {phrase}.")
+
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "uninstall_scheduled_daily_update"]:
+        if phrase not in command_source:
+            failures.append(f"command_runner.py is missing {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["自动更新状态", "下载最新自动更新 Excel", "手动补跑一次自动更新", "read_scheduled_status"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 57B phrase: {phrase}.")
+
+    tests_source = read_source(root / "tests/test_scheduled_daily_update.py")
+    for phrase in [
+        "test_scheduled_update_skips_before_scheduled_time",
+        "test_scheduled_update_skips_if_already_success_today",
+        "test_scheduled_update_runs_after_scheduled_time_when_not_success",
+        "test_scheduled_update_force_runs_even_if_already_success",
+        "test_scheduled_update_preflight_failure_stops_before_heavy_update",
+        "test_scheduled_update_writes_status_json",
+        "test_scheduled_update_exports_workbook_on_success",
+        "test_scheduled_update_lock_prevents_concurrent_runs",
+        "test_macos_notification_builds_safe_message",
+        "test_email_notification_disabled_by_default",
+        "test_install_scheduled_daily_update_generates_launchd_plist",
+        "test_streamlit_shows_scheduled_update_status_and_download",
+        "test_force_update_limit_is_passed_to_update_stage",
+        "test_text_mode_prints_start_immediately",
+        "test_text_mode_prints_each_stage_with_flush",
+        "test_stage_status_written_before_heavy_work",
+        "test_stage_timeout_exits_and_releases_lock",
+        "test_heartbeat_updates_during_long_stage",
+        "test_force_update_limit_50_finishes_in_test",
+        "test_force_before_scheduled_time_uses_previous_completed_trade_date_by_default",
+        "test_allow_intraday_uses_current_trade_date_with_warning",
+        "test_scheduled_after_1800_uses_current_trade_date",
+        "test_no_algorithm_changes",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"Task 57B tests are missing {phrase}.")
+
+    verify_source = read_source(root / "scripts/verify_task.py")
+    for phrase in ["task57b", "run_scheduled_daily_update", "--dry-run", "/tmp/a_stock_assistant_task57b", "install_scheduled_daily_update"]:
+        if phrase not in verify_source:
+            failures.append(f"verify_task.py task57b is missing {phrase}.")
+    docs_source = read_source(root / "docs/commands_reference.md")
+    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "18:00", "自动更新状态", "--update-limit 50", "--allow-intraday", "research_trade_date", "last_heartbeat_at", "DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS"]:
+        if phrase not in docs_source:
+            failures.append(f"docs/commands_reference.md is missing Task 57B wording: {phrase}.")
+    env_source = read_source(root / ".env.example")
+    for phrase in ["DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS", "FULL_BATCH_UPDATE_TIMEOUT_SECONDS"]:
+        if phrase not in env_source:
+            failures.append(f".env.example is missing Task 57B timeout config: {phrase}.")
+    gitignore_source = read_source(root / ".gitignore")
+    for phrase in ["data/", "reports/*.xlsx", "*.log"]:
+        if phrase not in gitignore_source:
+            failures.append(f".gitignore should ignore Task 57B runtime artifact: {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -3276,6 +3396,7 @@ def main(argv: list[str] | None = None) -> int:
             "task55",
             "task56",
             "task57a",
+            "task57b",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

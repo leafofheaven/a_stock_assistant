@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import json
+from contextlib import contextmanager
+import signal
 import subprocess
+import threading
 from typing import Any
 from urllib.parse import urlencode
 
@@ -26,6 +29,7 @@ class AKShareClient(StockDataSource):
         adjust: str = "qfq",
         curl_runner: Any | None = None,
         request_timeout_seconds: int = 30,
+        symbol_timeout_seconds: int = 45,
         enable_basic_enrichment: bool = True,
         enable_valuation_enrichment: bool = True,
     ) -> None:
@@ -36,6 +40,8 @@ class AKShareClient(StockDataSource):
             adjust: Adjustment mode for daily price calls that support it.
             curl_runner: Optional ``subprocess.run`` compatible callable for tests.
             request_timeout_seconds: Timeout for the system curl fallback.
+            symbol_timeout_seconds: Maximum time allowed for one symbol's
+                AKShare call before the symbol is skipped.
             enable_basic_enrichment: Whether to try optional basic-info enrichment.
             enable_valuation_enrichment: Whether to try optional valuation enrichment.
         """
@@ -43,6 +49,7 @@ class AKShareClient(StockDataSource):
         self.adjust = adjust
         self._curl_runner = curl_runner or subprocess.run
         self.request_timeout_seconds = request_timeout_seconds
+        self.symbol_timeout_seconds = symbol_timeout_seconds
         self.enable_basic_enrichment = enable_basic_enrichment
         self.enable_valuation_enrichment = enable_valuation_enrichment
         self.failure_records: list[dict[str, str]] = []
@@ -444,30 +451,29 @@ class AKShareClient(StockDataSource):
             frame = pd.DataFrame()
             error_message = ""
             try:
-                frame = self._call(
-                    function_name,
-                    symbol=_normalize_symbol(symbol),
-                    period="daily",
-                    start_date=start_date,
-                    end_date=end_date,
-                    adjust=self.adjust,
-                )
+                with _symbol_timeout(self.symbol_timeout_seconds):
+                    frame = self._call(
+                        function_name,
+                        symbol=_normalize_symbol(symbol),
+                        period="daily",
+                        start_date=start_date,
+                        end_date=end_date,
+                        adjust=self.adjust,
+                    )
+            except TimeoutError as exc:
+                error_message = f"symbol timeout after {self.symbol_timeout_seconds} seconds"
+                self._record_failure(symbol, function_name, error_message)
+                logger.warning("AKShare %s timed out for %s: %s", function_name, symbol, exc)
+                continue
             except DataSourceError as exc:
                 error_message = str(exc)
                 logger.warning("AKShare %s failed for %s: %s", function_name, symbol, exc)
             if frame.empty and function_name == "stock_zh_a_hist":
-                logger.warning("AKShare %s returned no usable data for %s; trying Eastmoney curl fallback.", function_name, symbol)
+                logger.info("AKShare %s returned no usable data for %s; trying Eastmoney curl fallback.", function_name, symbol)
                 frame = self._call_eastmoney_kline(symbol, start_date, end_date)
             if frame.empty:
-                self.failure_records.append(
-                    {
-                        "symbol": _to_ts_code(symbol),
-                        "provider": "akshare",
-                        "failed_stage": function_name,
-                        "error_message": error_message or "empty data after AKShare and Eastmoney curl fallback",
-                    }
-                )
-                logger.warning("AKShare and Eastmoney curl returned empty data for %s.", symbol)
+                self._record_failure(symbol, function_name, error_message or "empty data after AKShare and Eastmoney curl fallback")
+                logger.info("AKShare and Eastmoney curl returned empty data for %s.", symbol)
                 continue
             if "ts_code" not in frame.columns or frame["ts_code"].isna().all():
                 frame["ts_code"] = _to_ts_code(symbol)
@@ -495,6 +501,8 @@ class AKShareClient(StockDataSource):
             "--noproxy",
             "*",
             "-sSL",
+            "--max-time",
+            str(max(1, int(self.request_timeout_seconds))),
             "-A",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
             "-e",
@@ -509,6 +517,10 @@ class AKShareClient(StockDataSource):
                 timeout=self.request_timeout_seconds,
                 check=False,
             )
+        except subprocess.TimeoutExpired as exc:
+            self._record_failure(symbol, "daily_price", f"eastmoney curl timeout after {self.request_timeout_seconds} seconds")
+            logger.warning("Eastmoney curl fallback timed out for %s: %s", symbol, exc)
+            return pd.DataFrame()
         except Exception as exc:
             logger.warning("Eastmoney curl fallback failed for %s: %s", symbol, exc)
             return pd.DataFrame()
@@ -526,7 +538,7 @@ class AKShareClient(StockDataSource):
 
         klines = (payload.get("data") or {}).get("klines") or []
         if not klines:
-            logger.warning("Eastmoney curl fallback returned no klines for %s.", symbol)
+            logger.info("Eastmoney curl fallback returned no klines for %s.", symbol)
             return pd.DataFrame()
 
         rows: list[dict[str, Any]] = []
@@ -731,6 +743,35 @@ def _optional_network_errors() -> tuple[type[BaseException], ...]:
         return (Timeout, RequestException)
     except Exception:
         return ()
+
+
+@contextmanager
+def _symbol_timeout(timeout_seconds: int):
+    """Raise TimeoutError when one symbol-level AKShare request hangs.
+
+    AKShare does not expose a timeout argument for every request path. In the
+    normal CLI path we run on the main thread, so a short SIGALRM guard prevents
+    one symbol from blocking the full-market batch forever. Non-main-thread
+    callers skip the alarm to avoid process-wide signal surprises.
+    """
+    seconds = int(timeout_seconds or 0)
+    if seconds <= 0 or threading.current_thread() is not threading.main_thread() or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def _handle_timeout(signum: int, frame: Any) -> None:
+        raise TimeoutError(f"symbol update exceeded {seconds} seconds")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, seconds)
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
 
 
 def _parse_individual_info(df: pd.DataFrame) -> dict[str, Any]:

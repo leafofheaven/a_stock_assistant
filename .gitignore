@@ -15,9 +15,11 @@ data/*.duckdb
 data/*.duckdb.wal
 *.duckdb
 *.duckdb.wal
+*.log
 reports/*.md
 reports/*.json
 reports/*.csv
+reports/*.xlsx
 reports/templates/
 !reports/.gitkeep
 backups/

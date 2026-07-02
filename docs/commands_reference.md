@@ -196,6 +196,38 @@ python -m core.jobs.export_daily_research_workbook --trade-date 20260630 --outpu
 
 Streamlit 本地控制台中的“导出今日研究工作簿 Excel”按钮调用同一命令。默认输出到 `reports/daily_research_*.xlsx`；自动验收使用 `/tmp/a_stock_assistant_task53/daily_research.xlsx`，不会在工作区留下生成文件。
 
+## 18:00 自动更新
+
+命令：
+
+```bash
+python -m core.jobs.run_scheduled_daily_update --dry-run --format text
+python -m core.jobs.run_scheduled_daily_update --dry-run --format json
+python -m core.jobs.run_scheduled_daily_update --force --format text
+python -m core.jobs.run_scheduled_daily_update --force --update-limit 50 --stage-timeout-seconds 180 --format text
+python -m core.jobs.run_scheduled_daily_update --force --allow-intraday --update-limit 50 --format text
+python -m core.jobs.install_scheduled_daily_update --time 18:00 --dry-run
+python -m core.jobs.uninstall_scheduled_daily_update --dry-run
+```
+
+作用：在每天 18:00 之后按本地状态决定是否执行收盘后自动更新。流程会先判断交易日、是否已成功更新、DuckDB 锁和数据源预检；预检失败不会启动重型更新。预检通过后串行执行备份、数据更新、日常重算、埃尔德复核、买入区间、观察池跟踪和每日研究工作簿 Excel 导出。
+
+`run_scheduled_daily_update` 在 text 模式下会立即输出阶段进度，并在每个阶段开始前写入状态文件。全市场数据更新阶段默认使用有界的 `run_full_batch_update`，可通过 `--update-limit` 控制本次最多处理股票数，避免收盘后自动任务一次性无限跑全市场。人工小批量验收建议先运行：
+
+```bash
+python -m core.jobs.run_scheduled_daily_update --force --update-limit 50 --stage-timeout-seconds 180 --format text
+```
+
+状态文件会记录 `last_heartbeat_at`、`processed_symbol_count`、`total_symbol_count`、空数据股票数量、网络超时数量和失败股票样例。单只股票空数据或超时会汇总记录，不会默认逐只刷屏；部分股票失败但后续阶段完成时，自动更新可返回 warning。`DATA_SOURCE_REQUEST_TIMEOUT_SECONDS` 控制单请求超时，`SYMBOL_UPDATE_TIMEOUT_SECONDS` 控制单标的处理超时，`FULL_BATCH_UPDATE_TIMEOUT_SECONDS` 控制全市场更新阶段超时。
+
+日期口径：`run_date` 是实际运行自然日，`research_trade_date` 和 `latest_completed_trade_date` 是本次研究对应的最近已完成交易日。若在 18:00 前盘中手动 `--force`，默认仍使用上一个已完成交易日，避免把未完成交易日当作正式收盘后结果。只有显式传入 `--allow-intraday` 时才允许使用当天，并会在 text / JSON 状态中提示“盘中强制运行，结果可能基于未完成交易日数据，不代表正式收盘后结果”。
+
+状态文件默认写入 `data/runtime/scheduled_daily_update_status.json`，运行锁默认使用 `data/runtime/scheduled_daily_update.lock`。这些都是本地运行产物，不应提交。Streamlit “数据更新状态”页面会显示自动更新状态，并在 Excel 文件存在时提供“下载最新自动更新 Excel”按钮。
+
+`install_scheduled_daily_update` 生成用户级 LaunchAgent，默认 label 为 `com.a_stock_assistant.scheduled_daily_update`，使用 `StartCalendarInterval` 在 18:00 触发 `python -m core.jobs.run_scheduled_daily_update --catch-up --scheduled-time 18:00`。如果 18:00 Mac 睡眠，唤醒后可能补跑；如果当天已经 success，不会重复运行。
+
+通知框架默认支持 macOS 本地通知。邮件通知默认关闭；如需启用，可配置 `NOTIFY_EMAIL_ENABLED=true`、`NOTIFY_EMAIL_TO`、`SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASSWORD`、`SMTP_FROM` 和 `SMTP_USE_SSL`。未配置邮件时不会报错，只显示 email disabled。
+
 ## 候选复核
 
 命令：
