@@ -3236,6 +3236,9 @@ def check_task57b(root: Path) -> list[str]:
         "max_update_symbols",
         "update_failed_symbol_count",
         "update_continued_after_partial_failure",
+        "preflight_allows_run",
+        "curl_fallback_available",
+        "preflight_warning_reason",
         "_is_formal_success_for_date",
         "latest_completed_trade_date",
         "research_trade_date",
@@ -3302,6 +3305,10 @@ def check_task57b(root: Path) -> list[str]:
         "test_skipped_status_from_acceptance_state_does_not_clear_previous_formal_fields",
         "test_scheduled_update_defaults_to_daily_incremental",
         "test_daily_incremental_partial_symbol_failures_continue_workflow",
+        "test_preflight_warning_allows_daily_incremental_when_curl_succeeds",
+        "test_preflight_fails_when_python_and_curl_all_fail",
+        "test_preflight_records_curl_fallback_available",
+        "test_preflight_warning_message_in_text_output",
         "test_no_algorithm_changes",
     ]:
         if phrase not in tests_source:
@@ -3331,6 +3338,10 @@ def check_task57b(root: Path) -> list[str]:
     for phrase in ["data/", "reports/*.xlsx", "*.log"]:
         if phrase not in gitignore_source:
             failures.append(f".gitignore should ignore Task 57B runtime artifact: {phrase}.")
+    preflight_source = read_source(root / "core/runtime/data_source_preflight.py")
+    for phrase in ["curl_fallback_available", "preflight_warning_reason", "preflight_allows_run", "curl_ipv4", "curl_ipv6"]:
+        if phrase not in preflight_source:
+            failures.append(f"data_source_preflight.py is missing fallback preflight phrase: {phrase}.")
     return failures
 
 

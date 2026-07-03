@@ -172,12 +172,18 @@ def run_scheduled_daily_update(
             status.update(
                 {
                     "diagnosis_status": _diagnosis_status(preflight),
+                    "preflight_status": _diagnosis_status(preflight),
+                    "preflight_allows_run": _preflight_allows_run(preflight),
+                    "preflight_warning_reason": str(preflight.get("preflight_warning_reason") or ""),
+                    "curl_fallback_available": bool(preflight.get("curl_fallback_available")),
                     "duckdb_status": _duckdb_status(preflight),
                     "eastmoney_status": _eastmoney_status(preflight),
                     "suggested_action": preflight.get("suggested_action") or "；".join(preflight.get("suggestions", [])),
                 }
             )
-            if not preflight.get("ok"):
+            if status.get("preflight_warning_reason"):
+                _emit_stage(output_format, "数据源网络诊断", f"{status['diagnosis_status']}：{status['preflight_warning_reason']}，继续执行 {update_mode}。")
+            if not status["preflight_allows_run"]:
                 status.update(
                     {
                         "status": "failed",
@@ -913,6 +919,8 @@ def _has_update_warnings(status: dict[str, Any], steps: dict[str, dict[str, Any]
     update = steps.get("update_data", {})
     return (
         str(update.get("status", "")).lower() in WARNING_STATUSES
+        or str(status.get("diagnosis_status", "")).lower() in {"warning", "partial"}
+        or bool(status.get("preflight_warning_reason"))
         or int(status.get("empty_data_symbol_count", 0) or 0) > 0
         or int(status.get("network_timeout_count", 0) or 0) > 0
         or int(status.get("unavailable_symbol_count", 0) or 0) > 0
@@ -1003,6 +1011,10 @@ def _base_status(
         "failure_reason": "",
         "suggested_action": "",
         "diagnosis_status": "",
+        "preflight_status": "",
+        "preflight_allows_run": False,
+        "preflight_warning_reason": "",
+        "curl_fallback_available": False,
         "duckdb_status": "",
         "eastmoney_status": "",
         "candidate_count": 0,
@@ -1153,7 +1165,17 @@ def _safe_unlink(path: Path) -> None:
 
 
 def _diagnosis_status(preflight: dict[str, Any]) -> str:
+    status = str(preflight.get("status") or "").lower()
+    if status in {"warning", "partial"}:
+        return "warning"
     return "ok" if preflight.get("ok") else "failed"
+
+
+def _preflight_allows_run(preflight: dict[str, Any]) -> bool:
+    """Return whether preflight should allow the scheduled workflow to continue."""
+    if "preflight_allows_run" in preflight:
+        return bool(preflight.get("preflight_allows_run"))
+    return bool(preflight.get("ok"))
 
 
 def _duckdb_status(preflight: dict[str, Any]) -> str:
@@ -1163,7 +1185,10 @@ def _duckdb_status(preflight: dict[str, Any]) -> str:
 
 def _eastmoney_status(preflight: dict[str, Any]) -> str:
     eastmoney = preflight.get("eastmoney_kline", {})
-    return "ok" if eastmoney.get("ok") else ("skipped" if eastmoney.get("status") == "skipped" else "failed")
+    status = str(eastmoney.get("status") or "").lower()
+    if status in {"warning", "partial"}:
+        return "partial"
+    return "ok" if eastmoney.get("ok") else ("skipped" if status == "skipped" else "failed")
 
 
 def _workbook_output_path(report_dir: str | Path) -> Path:
@@ -1256,6 +1281,10 @@ def _print_status(status: dict[str, Any], output_format: str) -> None:
     if status.get("acceptance_mode"):
         print(f"- 验收模式: 本次为小批量验收运行，update_limit={status.get('update_limit')}，不代表正式全市场自动更新结果。")
     print(f"- 数据源诊断: {status.get('diagnosis_status') or '暂无'}")
+    if status.get("preflight_warning_reason"):
+        print(f"- 预检提示: {status.get('preflight_warning_reason')}")
+    if status.get("curl_fallback_available"):
+        print("- curl fallback: 可用")
     print(f"- DuckDB: {status.get('duckdb_status') or '暂无'}")
     print(f"- 今日候选: {status.get('candidate_count', 0)}")
     print(f"- 埃尔德复核: {status.get('elder_review_count', 0)}")

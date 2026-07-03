@@ -77,6 +77,27 @@ def test_eastmoney_precheck_curl_52_reports_diagnostics(monkeypatch: pytest.Monk
     assert result["headers_present"] == {"user_agent": True, "referer": True}
 
 
+def test_eastmoney_precheck_partial_when_fallback_curl_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default curl failure should be warning when another curl path returns klines."""
+    payload = {"rc": 0, "data": {"klines": ["2024-01-02,1,2,3,1,100,1000,0,0,0,1"]}}
+    calls = {"count": 0}
+
+    def fake_run(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _completed(stderr="Empty reply from server", returncode=52)
+        return _completed(stdout=json.dumps(payload), returncode=0)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    result = check_eastmoney_kline()
+
+    assert result["ok"] is True
+    assert result["status"] == "warning"
+    assert result["curl_fallback_available"] is True
+    assert "fallback" in result["warning_reason"]
+
+
 @pytest.mark.parametrize(
     "completed",
     [

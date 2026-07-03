@@ -59,6 +59,19 @@ def _ok_preflight() -> dict:
     }
 
 
+def _warning_preflight_with_curl() -> dict:
+    return {
+        "ok": True,
+        "status": "warning",
+        "preflight_allows_run": True,
+        "preflight_warning_reason": "Python 请求失败但 curl fallback 可用",
+        "curl_fallback_available": True,
+        "duckdb": {"ok": True, "locked": False},
+        "eastmoney_kline": {"ok": True, "status": "warning", "curl_fallback_available": True},
+        "suggested_action": "Python 请求失败但 curl fallback 可用",
+    }
+
+
 def test_scheduled_update_skips_before_scheduled_time(tmp_path: Path) -> None:
     """Before 18:00, non-force scheduled update should skip."""
     decision = should_run_scheduled_update(
@@ -151,6 +164,131 @@ def test_scheduled_update_preflight_failure_stops_before_heavy_update(tmp_path: 
     assert result["status"] == "failed"
     assert result["stage"] == "preflight"
     assert called["heavy"] is False
+
+
+def test_preflight_warning_allows_daily_incremental_when_curl_succeeds(tmp_path: Path) -> None:
+    """Python request failure with curl fallback should allow daily_incremental to continue."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        update_limit=0,
+        update_data=lambda: {"status": "success", "planned_symbols": 3},
+        workbook=lambda: _mock_workbook(tmp_path, strategy_rows=3),
+    )
+    assert result["status"] == "success"
+
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _warning_preflight_with_curl,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {"status": "success", "planned_symbols": 5},
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    assert result["stage"] == "done"
+    assert result["status"] == "warning"
+    assert result["preflight_allows_run"] is True
+    assert result["curl_fallback_available"] is True
+    assert "curl fallback" in result["preflight_warning_reason"]
+
+
+def test_preflight_fails_when_python_and_curl_all_fail(tmp_path: Path) -> None:
+    """Fatal preflight should stop before update_data."""
+    status_path, lock_path = _status_paths(tmp_path)
+    called = {"update": False}
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": lambda: {
+                "ok": False,
+                "status": "failed",
+                "preflight_allows_run": False,
+                "duckdb": {"ok": True, "locked": False},
+                "eastmoney_kline": {"ok": False, "status": "failed", "curl_fallback_available": False},
+                "message": "Python 和 curl 全部失败",
+            },
+            "update_data": lambda: called.update(update=True) or {"status": "success"},
+        },
+    )
+    assert result["status"] == "failed"
+    assert result["stage"] == "preflight"
+    assert called["update"] is False
+
+
+def test_preflight_records_curl_fallback_available(tmp_path: Path) -> None:
+    """Scheduled status JSON should record curl fallback availability."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _warning_preflight_with_curl,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {"status": "success"},
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    persisted = read_scheduled_status(status_path)
+    assert result["curl_fallback_available"] is True
+    assert persisted["curl_fallback_available"] is True
+    assert persisted["preflight_status"] == "warning"
+
+
+def test_preflight_warning_message_in_text_output(tmp_path: Path, capsys) -> None:
+    """Text output should explain curl fallback warning."""
+    status_path, lock_path = _status_paths(tmp_path)
+    run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        output_format="text",
+        step_overrides={
+            "preflight": _warning_preflight_with_curl,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {"status": "success"},
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    output = capsys.readouterr().out
+    assert "数据源网络诊断" in output
+    assert "Python 请求失败但 curl fallback 可用" in output
+    assert "curl fallback: 可用" in output
 
 
 def test_scheduled_update_writes_status_json(tmp_path: Path) -> None:

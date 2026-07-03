@@ -44,11 +44,14 @@ def run_data_source_preflight(
         if skip_network
         else check_eastmoney_kline(timeout_seconds=timeout_seconds)
     )
-    ok = bool(duckdb_result["ok"] and eastmoney_result["ok"])
+    dns_ok = dns_result.get("status") == "ok"
+    ok = bool(duckdb_result["ok"] and dns_ok and eastmoney_result["ok"])
     suggestions = []
     if not duckdb_result["ok"]:
         suggestions.extend(duckdb_result.get("suggestions", []))
-    if not eastmoney_result["ok"]:
+    if eastmoney_result.get("status") in {"warning", "partial"}:
+        suggestions.append(eastmoney_result.get("warning_reason", "Python 请求失败但 curl fallback 可用。"))
+    elif not eastmoney_result["ok"]:
         suggestions.extend(
             [
                 "检查 Clash / macOS 系统代理是否影响 Python 或 curl 访问。",
@@ -57,9 +60,13 @@ def run_data_source_preflight(
         )
     if proxy_result["has_proxy"]:
         suggestions.append("检测到系统代理；如 AKShare / 东方财富失败，请检查 Clash 规则或临时关闭代理。")
+    status = "success" if ok and eastmoney_result.get("status") == "success" else ("warning" if ok else "failed")
     return {
-        "status": "success" if ok else "failed",
+        "status": status,
         "ok": ok,
+        "preflight_allows_run": ok,
+        "preflight_warning_reason": eastmoney_result.get("warning_reason", "") if status == "warning" else "",
+        "curl_fallback_available": bool(eastmoney_result.get("curl_fallback_available")),
         "duckdb": duckdb_result,
         "proxy": proxy_result,
         "dns": dns_result,
@@ -67,7 +74,7 @@ def run_data_source_preflight(
         "ipv4_status": dns_result.get("ipv4_status"),
         "ipv6_status": dns_result.get("ipv6_status"),
         "eastmoney_kline": eastmoney_result,
-        "message": "数据源预检通过。" if ok else EASTMONEY_UNAVAILABLE_MESSAGE,
+        "message": _preflight_message(status, eastmoney_result),
         "suggested_action": "；".join(suggestions),
         "suggestions": suggestions,
     }
@@ -139,8 +146,47 @@ def check_duckdb_access(db_path: Path) -> dict[str, Any]:
 def check_eastmoney_kline(*, timeout_seconds: int = 8) -> dict[str, Any]:
     """Call the concrete Eastmoney kline API through system curl and validate klines."""
     used_url = EASTMONEY_KLINE_URL.format(end_date=date.today().strftime("%Y%m%d"))
+    variants = [
+        ("curl_default", []),
+        ("curl_ipv4", ["-4"]),
+        ("curl_ipv6", ["-6"]),
+        ("curl_noproxy", ["--noproxy", "*"]),
+        ("curl_ipv4_http1", ["-4", "--http1.1"]),
+    ]
+    attempts = [_run_eastmoney_curl_variant(name, used_url, timeout_seconds, extra_args=args) for name, args in variants]
+    successes = [item for item in attempts if item.get("ok")]
+    if successes:
+        best = successes[0]
+        default_ok = bool(attempts and attempts[0].get("ok"))
+        status = "success" if default_ok else "warning"
+        warning_reason = "" if default_ok else "默认请求失败，但 curl fallback 可用。"
+        return {
+            "status": status,
+            "ok": True,
+            "message": f"东方财富 K 线接口可用，返回 {best.get('kline_count', 0)} 行。" if default_ok else "东方财富 K 线接口 partial：默认路径失败，但 curl fallback 可用。",
+            "warning_reason": warning_reason,
+            "curl_fallback_available": True,
+            "kline_count": int(best.get("kline_count", 0) or 0),
+            "rc": best.get("rc"),
+            "used_url": used_url,
+            "headers_present": {"user_agent": True, "referer": True},
+            "attempts": attempts,
+        }
+    first = attempts[0] if attempts else {}
+    return _eastmoney_failure(
+        used_url=used_url,
+        curl_returncode=first.get("curl_returncode"),
+        stderr=str(first.get("stderr") or first.get("message") or ""),
+        message=f"{EASTMONEY_UNAVAILABLE_MESSAGE} curl_returncode={first.get('curl_returncode')}",
+        attempts=attempts,
+    )
+
+
+def _run_eastmoney_curl_variant(name: str, used_url: str, timeout_seconds: int, *, extra_args: list[str]) -> dict[str, Any]:
+    """Run one curl variant against Eastmoney kline API."""
     command = [
         "curl",
+        *extra_args,
         "-sSL",
         "--max-time",
         str(max(1, int(timeout_seconds))),
@@ -153,38 +199,45 @@ def check_eastmoney_kline(*, timeout_seconds: int = 8) -> dict[str, Any]:
     try:
         completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=timeout_seconds + 2)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return _eastmoney_failure(
-            used_url=used_url,
-            curl_returncode=None,
-            stderr=str(exc),
-            message=f"{EASTMONEY_UNAVAILABLE_MESSAGE} error={type(exc).__name__}: {exc}",
-        )
+        return {
+            "name": name,
+            "ok": False,
+            "status": "failed",
+            "curl_returncode": None,
+            "stderr": str(exc),
+            "message": f"{type(exc).__name__}: {exc}",
+        }
     if completed.returncode != 0:
-        return _eastmoney_failure(
-            used_url=used_url,
-            curl_returncode=completed.returncode,
-            stderr=completed.stderr,
-            message=f"{EASTMONEY_UNAVAILABLE_MESSAGE} curl_returncode={completed.returncode}",
-        )
+        return {
+            "name": name,
+            "ok": False,
+            "status": "failed",
+            "curl_returncode": completed.returncode,
+            "stderr": (completed.stderr or "").strip()[:500],
+            "message": f"curl_returncode={completed.returncode}",
+        }
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        return _eastmoney_failure(
-            used_url=used_url,
-            curl_returncode=completed.returncode,
-            stderr=completed.stderr,
-            message=f"{EASTMONEY_UNAVAILABLE_MESSAGE} JSON 解析失败：{exc}",
-        )
+        return {
+            "name": name,
+            "ok": False,
+            "status": "failed",
+            "curl_returncode": completed.returncode,
+            "stderr": (completed.stderr or "").strip()[:500],
+            "message": f"JSON 解析失败：{exc}",
+        }
     klines = ((payload.get("data") or {}).get("klines") or [])
     ok = payload.get("rc") == 0 and bool(klines)
     return {
-        "status": "success" if ok else "failed",
+        "name": name,
         "ok": ok,
-        "message": f"东方财富 K 线接口可用，返回 {len(klines)} 行。" if ok else EASTMONEY_UNAVAILABLE_MESSAGE,
+        "status": "success" if ok else "failed",
+        "curl_returncode": completed.returncode,
+        "stderr": (completed.stderr or "").strip()[:500],
         "kline_count": len(klines),
         "rc": payload.get("rc"),
-        "used_url": used_url,
-        "headers_present": {"user_agent": True, "referer": True},
+        "message": "ok" if ok else "rc/data.klines 不满足成功条件",
     }
 
 
@@ -221,6 +274,7 @@ def _eastmoney_failure(
     curl_returncode: int | None,
     stderr: str,
     message: str,
+    attempts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a detailed but concise Eastmoney preflight failure result."""
     return {
@@ -231,7 +285,18 @@ def _eastmoney_failure(
         "curl_returncode": curl_returncode,
         "stderr": (stderr or "").strip()[:500],
         "headers_present": {"user_agent": True, "referer": True},
+        "curl_fallback_available": False,
+        "attempts": attempts or [],
     }
+
+
+def _preflight_message(status: str, eastmoney_result: dict[str, Any]) -> str:
+    """Return user-facing preflight message."""
+    if status == "success":
+        return "数据源预检通过。"
+    if status == "warning":
+        return eastmoney_result.get("warning_reason") or "数据源预检 warning：存在降级访问路径，但可继续运行。"
+    return EASTMONEY_UNAVAILABLE_MESSAGE
 
 
 def _duckdb_holders(db_path: Path) -> list[dict[str, str]]:
