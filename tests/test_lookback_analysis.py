@@ -155,7 +155,20 @@ def test_lookback_streamlit_entry_exists() -> None:
     source = (Path(__file__).resolve().parents[1] / "web" / "streamlit_app.py").read_text(encoding="utf-8")
     assert "自动回看分析" in source
     assert "运行自动回看分析" in source
+    assert "刷新回看状态" in source
     assert "下载最新回看报告" in source
+    assert "自动回看状态摘要" in source
+    assert "尚无自动回看记录。可以点击运行自动回看分析生成结果。" in source
+
+
+def test_strategy_backtest_tab_renders_lookback_entry() -> None:
+    """The Strategy Backtest tab should render the automatic lookback entry."""
+    source = (Path(__file__).resolve().parents[1] / "web" / "streamlit_app.py").read_text(encoding="utf-8")
+    start = source.index("def _render_backtest_tab")
+    end = source.index("def _render_status_tab", start)
+    backtest_source = source[start:end]
+    assert "_render_lookback_analysis_section(st)" in backtest_source
+    assert "暂无回测结果。请先运行回测诊断；真实数据不足时不会生成结果。" not in backtest_source
 
 
 def test_lookback_command_allowlist() -> None:
