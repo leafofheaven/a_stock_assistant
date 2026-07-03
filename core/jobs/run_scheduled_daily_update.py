@@ -122,6 +122,8 @@ def run_scheduled_daily_update(
     )
     completed_trade_date = _latest_completed_trade_date(started_at, scheduled_time=scheduled_time, allow_intraday=allow_intraday, settings=resolved_settings)
     intraday_warning = _intraday_warning(started_at, scheduled_time=scheduled_time, allow_intraday=allow_intraday, settings=resolved_settings)
+    after_scheduled_time = _is_after_scheduled_time(started_at, scheduled_time)
+    formal_run_note = _formal_run_note(started_at, scheduled_time=scheduled_time)
     _emit_stage(output_format, "检查是否已到计划时间", decision.summary)
     base_status = _base_status(
         scheduled_time=scheduled_time,
@@ -137,7 +139,14 @@ def run_scheduled_daily_update(
     )
     base_status["update_limit"] = int(update_limit) if int(update_limit) > 0 else None
     base_status["acceptance_mode"] = int(update_limit) > 0
-    base_status["formal_run"] = _is_formal_run(update_limit=update_limit, allow_intraday=allow_intraday, intraday_warning=intraday_warning, dry_run=dry_run)
+    base_status["formal_run"] = _is_formal_run(
+        update_limit=update_limit,
+        allow_intraday=allow_intraday,
+        intraday_warning=intraday_warning,
+        dry_run=dry_run,
+        after_scheduled_time=after_scheduled_time,
+    )
+    base_status["formal_run_note"] = formal_run_note
     base_status["update_mode"] = update_mode
     base_status["recent_days"] = int(recent_days)
     base_status["max_update_symbols"] = int(max_update_symbols)
@@ -991,6 +1000,7 @@ def _base_status(
         "intraday_warning": intraday_warning,
         "allow_intraday": allow_intraday,
         "formal_run": False,
+        "formal_run_note": "",
         "formal_success_date": previous_formal_success_date,
         "acceptance_mode": False,
         "update_limit": None,
@@ -1081,8 +1091,21 @@ def _is_formal_success_for_date(previous: dict[str, Any], trade_date: str) -> bo
     return False
 
 
-def _is_formal_run(*, update_limit: int, allow_intraday: bool, intraday_warning: str, dry_run: bool) -> bool:
-    return not dry_run and int(update_limit) <= 0 and not allow_intraday and not str(intraday_warning or "").strip()
+def _is_formal_run(
+    *,
+    update_limit: int,
+    allow_intraday: bool,
+    intraday_warning: str,
+    dry_run: bool,
+    after_scheduled_time: bool,
+) -> bool:
+    return (
+        after_scheduled_time
+        and not dry_run
+        and int(update_limit) <= 0
+        and not allow_intraday
+        and not str(intraday_warning or "").strip()
+    )
 
 
 def _status_counts_as_formal_success(status: dict[str, Any]) -> bool:
@@ -1101,6 +1124,18 @@ def _positive_int(value: Any) -> int:
 def _parse_time(value: str) -> time:
     hour, minute = value.split(":", 1)
     return time(hour=int(hour), minute=int(minute))
+
+
+def _is_after_scheduled_time(current: datetime, scheduled_time: str) -> bool:
+    """Return whether current local time is at or after the configured scheduled time."""
+    return current.time() >= _parse_time(scheduled_time)
+
+
+def _formal_run_note(current: datetime, *, scheduled_time: str) -> str:
+    """Return a user-facing note when the run cannot count as a formal close-time run."""
+    if _is_after_scheduled_time(current, scheduled_time):
+        return ""
+    return "盘中运行不计入正式自动更新成功，不会阻止 18:00 收盘后更新。"
 
 
 def _latest_completed_trade_date(current: datetime, *, scheduled_time: str, allow_intraday: bool, settings: Settings) -> str:
@@ -1278,6 +1313,8 @@ def _print_status(status: dict[str, Any], output_format: str) -> None:
     print(f"- 更新模式: {status.get('update_mode') or 'daily_incremental'}")
     if status.get("intraday_warning"):
         print(f"- 盘中提示: {status.get('intraday_warning')}")
+    elif status.get("formal_run_note"):
+        print(f"- 盘中提示: {status.get('formal_run_note')}")
     if status.get("acceptance_mode"):
         print(f"- 验收模式: 本次为小批量验收运行，update_limit={status.get('update_limit')}，不代表正式全市场自动更新结果。")
     print(f"- 数据源诊断: {status.get('diagnosis_status') or '暂无'}")

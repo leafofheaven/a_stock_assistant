@@ -909,6 +909,7 @@ def test_force_before_scheduled_time_uses_previous_completed_trade_date_by_defau
         status_path,
         lock_path,
         now=datetime(2026, 7, 2, 9, 52),
+        update_limit=0,
         workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
     )
     assert result["run_date"] == "20260702"
@@ -916,6 +917,77 @@ def test_force_before_scheduled_time_uses_previous_completed_trade_date_by_defau
     assert result["latest_completed_trade_date"] == "20260701"
     assert result["trade_date"] == "20260701"
     assert result["intraday_warning"] == ""
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
+    assert "不会阻止 18:00" in result["formal_run_note"]
+
+
+def test_intraday_daily_incremental_does_not_set_formal_success_date(tmp_path: Path) -> None:
+    """A before-scheduled daily_incremental force run must not count as formal success."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 3, 9, 52),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260703"),
+    )
+    assert result["status"] == "success"
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
+    assert result["workbook_exists"] is True
+    assert result["research_trade_date"] == "20260702"
+
+
+def test_before_scheduled_time_uses_previous_completed_trade_date_unless_allow_intraday(tmp_path: Path) -> None:
+    """Before scheduled time should use previous completed date unless allow-intraday is explicit."""
+    status_path, lock_path = _status_paths(tmp_path)
+    default_result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 3, 9, 52),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260703"),
+    )
+    intraday_result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 3, 9, 52),
+        update_limit=0,
+        allow_intraday=True,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260703"),
+    )
+    assert default_result["research_trade_date"] == "20260702"
+    assert intraday_result["research_trade_date"] == "20260703"
+    assert intraday_result["formal_run"] is False
+
+
+def test_intraday_force_does_not_block_1800_formal_run(tmp_path: Path) -> None:
+    """A successful intraday force run should not make 18:00 already_ran_today true."""
+    status_path, lock_path = _status_paths(tmp_path)
+    intraday = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 3, 9, 52),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260703"),
+    )
+    assert intraday["formal_run"] is False
+
+    decision = should_run_scheduled_update(
+        now=datetime(2026, 7, 3, 18, 1),
+        scheduled_time="18:00",
+        previous_status=read_scheduled_status(status_path),
+        force=False,
+        catch_up=True,
+        settings=_settings(tmp_path),
+    )
+    assert decision.should_run is True
+    assert decision.already_ran_today is False
 
 
 def test_allow_intraday_uses_current_trade_date_with_warning(tmp_path: Path, capsys) -> None:
@@ -926,6 +998,7 @@ def test_allow_intraday_uses_current_trade_date_with_warning(tmp_path: Path, cap
         status_path,
         lock_path,
         now=datetime(2026, 7, 2, 9, 52),
+        update_limit=0,
         allow_intraday=True,
         output_format="text",
         workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
@@ -934,6 +1007,25 @@ def test_allow_intraday_uses_current_trade_date_with_warning(tmp_path: Path, cap
     assert result["research_trade_date"] == "20260702"
     assert "盘中强制运行" in result["intraday_warning"]
     assert "盘中强制运行" in output
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
+
+
+def test_allow_intraday_sets_formal_run_false(tmp_path: Path) -> None:
+    """--allow-intraday should always stay outside formal close-time success."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 9, 52),
+        update_limit=0,
+        allow_intraday=True,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
+    )
+    assert result["allow_intraday"] is True
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
 
 
 def test_scheduled_after_1800_uses_current_trade_date(tmp_path: Path) -> None:
@@ -944,10 +1036,39 @@ def test_scheduled_after_1800_uses_current_trade_date(tmp_path: Path) -> None:
         status_path,
         lock_path,
         now=datetime(2026, 7, 2, 18, 30),
+        update_limit=0,
         workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
     )
     assert result["research_trade_date"] == "20260702"
     assert result["latest_completed_trade_date"] == "20260702"
+    assert result["formal_run"] is True
+    assert result["formal_success_date"] == "20260702"
+
+
+def test_formal_success_only_after_scheduled_time(tmp_path: Path) -> None:
+    """Only after scheduled time may a completed run write formal_success_date."""
+    status_path, lock_path = _status_paths(tmp_path)
+    before = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 9, 52),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
+    )
+    assert before["formal_run"] is False
+    assert before["formal_success_date"] == ""
+
+    after = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 18, 30),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
+    )
+    assert after["formal_run"] is True
+    assert after["formal_success_date"] == "20260702"
 
 
 def test_macos_notification_builds_safe_message() -> None:
