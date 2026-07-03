@@ -362,6 +362,27 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
         "network_failed_count": network_failed_count,
         "selection_ready_count": selection_ready_count,
         "backtest_ready_count": backtest_ready_count,
+        "latest_trade_date": tables.get("_latest_trade_date") or tables.get("_latest_price_date") or _latest_date(daily_price, "trade_date"),
+        "latest_price_symbol_count": int(tables.get("_latest_price_symbol_count", 0) or 0),
+        "missing_latest_price_symbol_count": int(tables.get("_missing_latest_price_symbol_count", 0) or 0),
+        "latest_price_coverage_rate": float(tables.get("_latest_price_coverage_rate", 0.0) or 0.0),
+        "history_complete_symbol_count": int(tables.get("_history_complete_symbol_count", 0) or 0),
+        "history_incomplete_symbol_count": int(tables.get("_history_incomplete_symbol_count", 0) or 0),
+        "history_missing_symbol_count": int(tables.get("_history_missing_symbol_count", 0) or 0),
+        "available_days_20d_count": int(tables.get("_available_days_20d_count", 0) or 0),
+        "available_days_60d_count": int(tables.get("_available_days_60d_count", 0) or 0),
+        "available_days_120d_count": int(tables.get("_available_days_120d_count", 0) or 0),
+        "available_days_252d_count": int(tables.get("_available_days_252d_count", 0) or 0),
+        "factor_ready_symbol_count": int(tables.get("_factor_ready_symbol_count", selection_ready_count) or 0),
+        "elder_ready_symbol_count": int(tables.get("_elder_ready_symbol_count", 0) or 0),
+        "entry_zone_ready_symbol_count": int(tables.get("_entry_zone_ready_symbol_count", 0) or 0),
+        "lookback_ready_symbol_count": int(tables.get("_lookback_ready_symbol_count", 0) or 0),
+        "latest_updated_but_history_incomplete_count": int(tables.get("_latest_updated_but_history_incomplete_count", 0) or 0),
+        "latest_updated_but_history_incomplete_examples": list(tables.get("_latest_updated_but_history_incomplete_examples", []) or []),
+        "history_complete_but_latest_missing_count": int(tables.get("_history_complete_but_latest_missing_count", 0) or 0),
+        "history_complete_but_latest_missing_examples": list(tables.get("_history_complete_but_latest_missing_examples", []) or []),
+        "completely_missing_price_count": int(tables.get("_completely_missing_price_count", missing_count) or 0),
+        "completely_missing_price_examples": list(tables.get("_completely_missing_price_examples", []) or []),
         "duckdb_path": duckdb_path,
         "bse_filter_note": bse_filter_note,
         "batch_status": batch_status,
@@ -724,6 +745,12 @@ def _lightweight_database_metrics(settings: Any, store: Any, tables: dict[str, p
     priced_count = int(metrics.get("priced_symbol_count", 0) or 0)
     metrics["coverage_rate"] = float(priced_count / configured_count) if configured_count else 0.0
     metrics["missing_symbol_count"] = max(configured_count - priced_count, 0)
+    metrics["latest_trade_date"] = metrics.get("latest_price_date")
+    metrics["latest_price_symbol_count"] = priced_count
+    metrics["missing_latest_price_symbol_count"] = max(configured_count - priced_count, 0)
+    metrics["latest_price_coverage_rate"] = metrics["coverage_rate"]
+    metrics["history_missing_symbol_count"] = metrics["missing_symbol_count"]
+    metrics["completely_missing_price_count"] = metrics["missing_symbol_count"]
     if preset == "full" and configured_count and priced_count < configured_count:
         metrics["batch_status"] = "全市场数据未完成"
     elif configured_count:
@@ -783,6 +810,7 @@ def _computed_real_dashboard_data(settings: Any, store: Any, tables: dict[str, p
     real_tables["_duckdb_path"] = batch_diagnostic.get("duckdb_path", str(getattr(store, "db_path", "")))
     real_tables["_batch_status"] = _full_batch_status_text(batch_diagnostic)
     real_tables["_bse_filter_note"] = batch_diagnostic.get("bse_filter_note", "")
+    _apply_batch_diagnostic_to_tables(real_tables, batch_diagnostic)
     real_tables["_latest_workflow_report"] = load_latest_workflow_report()
     real_tables["_latest_daily_workflow_report"] = load_latest_daily_workflow_report()
     real_tables["_latest_selection_review_report"] = load_latest_selection_review_report()
@@ -844,6 +872,31 @@ def _apply_batch_diagnostic_to_tables(tables: dict[str, Any], diagnostic: dict[s
     tables["_duckdb_path"] = diagnostic.get("duckdb_path", "")
     tables["_batch_status"] = _full_batch_status_text(diagnostic)
     tables["_bse_filter_note"] = diagnostic.get("bse_filter_note", "")
+    for key in [
+        "latest_trade_date",
+        "latest_price_symbol_count",
+        "missing_latest_price_symbol_count",
+        "latest_price_coverage_rate",
+        "history_complete_symbol_count",
+        "history_incomplete_symbol_count",
+        "history_missing_symbol_count",
+        "available_days_20d_count",
+        "available_days_60d_count",
+        "available_days_120d_count",
+        "available_days_252d_count",
+        "factor_ready_symbol_count",
+        "elder_ready_symbol_count",
+        "entry_zone_ready_symbol_count",
+        "lookback_ready_symbol_count",
+        "latest_updated_but_history_incomplete_count",
+        "latest_updated_but_history_incomplete_examples",
+        "history_complete_but_latest_missing_count",
+        "history_complete_but_latest_missing_examples",
+        "completely_missing_price_count",
+        "completely_missing_price_examples",
+    ]:
+        if key in diagnostic:
+            tables[f"_{key}"] = diagnostic[key]
 
 
 def _full_batch_status_text(diagnostic: dict[str, Any]) -> str:
@@ -1502,13 +1555,70 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.metric("最新行情日期", status["latest_price_date"] or "暂无")
     st.metric("最新因子日期", status["latest_factor_date"] or "暂无")
     st.metric("最新选股日期", status["latest_selection_date"] or "暂无")
-    st.metric("配置股票数量", status["configured_symbol_count"])
-    st.metric("已有行情股票数量", status["priced_symbol_count"])
-    st.metric("缺数据股票数量", status["missing_symbol_count"])
-    st.metric("最新行情不足数量", status["stale_symbol_count"])
-    st.metric("可运行选股股票数量", status.get("selection_ready_count", 0))
-    st.metric("更新失败数量", status.get("update_failed_count", 0))
-    st.write({"覆盖率": f"{status['coverage_rate']:.2%}", "全市场状态": status.get("batch_status") or "暂无"})
+    st.write("最新数据覆盖")
+    st.write(
+        {
+            "latest_trade_date": status.get("latest_trade_date") or status["latest_price_date"] or "暂无",
+            "configured_symbol_count": status["configured_symbol_count"],
+            "latest_price_symbol_count": status.get("latest_price_symbol_count", 0),
+            "missing_latest_price_symbol_count": status.get("missing_latest_price_symbol_count", 0),
+            "latest_price_coverage_rate": f"{status.get('latest_price_coverage_rate', 0.0):.2%}",
+        }
+    )
+    st.write("历史数据完整度")
+    st.write(
+        {
+            "history_complete_symbol_count": status.get("history_complete_symbol_count", 0),
+            "history_incomplete_symbol_count": status.get("history_incomplete_symbol_count", 0),
+            "history_missing_symbol_count": status.get("history_missing_symbol_count", 0),
+            "available_days_20d_count": status.get("available_days_20d_count", 0),
+            "available_days_60d_count": status.get("available_days_60d_count", 0),
+            "available_days_120d_count": status.get("available_days_120d_count", 0),
+            "available_days_252d_count": status.get("available_days_252d_count", 0),
+        }
+    )
+    st.write("模块可用性")
+    st.write(
+        {
+            "factor_ready_symbol_count": status.get("factor_ready_symbol_count", status.get("selection_ready_count", 0)),
+            "elder_ready_symbol_count": status.get("elder_ready_symbol_count", 0),
+            "entry_zone_ready_symbol_count": status.get("entry_zone_ready_symbol_count", 0),
+            "lookback_ready_symbol_count": status.get("lookback_ready_symbol_count", 0),
+            "可运行选股股票数量": status.get("selection_ready_count", 0),
+            "可运行回测股票数量": status.get("backtest_ready_count", 0),
+        }
+    )
+    st.write("本次更新结果 / 历史补库状态")
+    st.write(
+        {
+            "已有任意行情股票数量": status["priced_symbol_count"],
+            "完全缺行情股票数量": status.get("completely_missing_price_count", status["missing_symbol_count"]),
+            "最新行情不足数量": status["stale_symbol_count"],
+            "更新失败数量": status.get("update_failed_count", 0),
+            "空数据 / 暂不可用股票数量": status.get("empty_data_count", 0),
+            "网络失败股票数量": status.get("network_failed_count", 0),
+            "任意行情覆盖率": f"{status['coverage_rate']:.2%}",
+            "全市场状态": status.get("batch_status") or "暂无",
+        }
+    )
+    if status.get("latest_updated_but_history_incomplete_count"):
+        st.info(
+            "部分股票已有最新交易日行情但历史区间不足；daily_incremental 不会因此失败，可用 full_backfill 或页面补数据修复历史缺口。"
+        )
+        st.write(
+            {
+                "latest_updated_but_history_incomplete_count": status.get("latest_updated_but_history_incomplete_count", 0),
+                "examples": status.get("latest_updated_but_history_incomplete_examples", []),
+            }
+        )
+    if status.get("history_complete_but_latest_missing_count"):
+        st.warning("部分股票历史数据较完整，但最新交易日行情未更新。")
+        st.write(
+            {
+                "history_complete_but_latest_missing_count": status.get("history_complete_but_latest_missing_count", 0),
+                "examples": status.get("history_complete_but_latest_missing_examples", []),
+            }
+        )
     if status.get("bse_filter_note"):
         st.caption(status["bse_filter_note"])
     if status.get("batch_status") == "全市场数据未完成":
@@ -1795,9 +1905,12 @@ def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
             "数据源": "akshare",
             "数据库路径": status.get("duckdb_path") or "暂无",
             "full 股票池数量": status.get("configured_symbol_count", 0),
-            "已有行情股票数量": status.get("priced_symbol_count", 0),
-            "覆盖率": f"{status.get('coverage_rate', 0.0):.2%}",
-            "缺数据股票数量": status.get("missing_symbol_count", 0),
+            "最新数据覆盖股票数量": status.get("latest_price_symbol_count", 0),
+            "最新数据覆盖率": f"{status.get('latest_price_coverage_rate', 0.0):.2%}",
+            "已有任意行情股票数量": status.get("priced_symbol_count", 0),
+            "任意行情覆盖率": f"{status.get('coverage_rate', 0.0):.2%}",
+            "完全缺行情股票数量": status.get("completely_missing_price_count", status.get("missing_symbol_count", 0)),
+            "历史不足但已有最新行情数量": status.get("latest_updated_but_history_incomplete_count", 0),
             "最新行情不足数量": status.get("stale_symbol_count", 0),
             "可运行选股股票数量": status.get("selection_ready_count", 0),
             "更新失败数量": status.get("update_failed_count", 0),

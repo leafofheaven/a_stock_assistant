@@ -464,6 +464,16 @@ def test_diagnose_update_batch_reports_stale_full_symbols(tmp_path: Path) -> Non
 
     assert result["configured_symbol_count"] == 4
     assert result["priced_symbol_count"] == 2
+    assert result["latest_trade_date"] == "20240131"
+    assert result["latest_price_symbol_count"] == 1
+    assert result["missing_latest_price_symbol_count"] == 3
+    assert result["latest_price_coverage_rate"] == 1 / 4
+    assert result["history_complete_symbol_count"] == 0
+    assert result["history_incomplete_symbol_count"] == 2
+    assert result["history_missing_symbol_count"] == 2
+    assert result["latest_updated_but_history_incomplete_count"] == 1
+    assert result["history_complete_but_latest_missing_count"] == 0
+    assert result["completely_missing_price_count"] == 2
     assert result["stale_symbol_count"] == 1
     assert result["stale_symbols"] == ["600000.SH"]
     assert set(result["missing_symbols"]) == {"300750.SZ", "688981.SH"}

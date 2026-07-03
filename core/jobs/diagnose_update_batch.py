@@ -14,7 +14,17 @@ from core.data_sources.universe_presets import get_universe_preset, to_ts_code
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 
-CORE_TABLES = ["stock_basic", "daily_price", "daily_basic", "adj_factor", "update_failures"]
+CORE_TABLES = [
+    "stock_basic",
+    "daily_price",
+    "daily_basic",
+    "adj_factor",
+    "update_failures",
+    "factor_scores",
+    "strategy_result",
+    "entry_zone_snapshots",
+    "watchlist_daily_snapshots",
+]
 FULL_UNIVERSE_PENDING = "__FULL_UNIVERSE_PENDING__"
 
 
@@ -97,7 +107,25 @@ def main() -> None:
     print(f"- 配置股票数量: {result['configured_symbol_count']}")
     print(f"- 数据库中实际有行情的股票数量: {result['priced_symbol_count']}")
     print(f"- 覆盖率: {result['coverage_rate']:.2%}")
-    print(f"- 缺数据股票数量: {len(result['missing_symbols'])}")
+    print("- 最新数据覆盖:")
+    print(f"  latest_trade_date: {result.get('latest_trade_date') or '暂无'}")
+    print(f"  latest_price_symbol_count: {result.get('latest_price_symbol_count', 0)}")
+    print(f"  missing_latest_price_symbol_count: {result.get('missing_latest_price_symbol_count', 0)}")
+    print(f"  latest_price_coverage_rate: {result.get('latest_price_coverage_rate', 0.0):.2%}")
+    print("- 历史数据完整度:")
+    print(f"  history_complete_symbol_count: {result.get('history_complete_symbol_count', 0)}")
+    print(f"  history_incomplete_symbol_count: {result.get('history_incomplete_symbol_count', 0)}")
+    print(f"  history_missing_symbol_count: {result.get('history_missing_symbol_count', 0)}")
+    print(f"  available_days_20d_count: {result.get('available_days_20d_count', 0)}")
+    print(f"  available_days_60d_count: {result.get('available_days_60d_count', 0)}")
+    print(f"  available_days_120d_count: {result.get('available_days_120d_count', 0)}")
+    print(f"  available_days_252d_count: {result.get('available_days_252d_count', 0)}")
+    print("- 模块可用性:")
+    print(f"  factor_ready_symbol_count: {result.get('factor_ready_symbol_count', result['factor_ready_count'])}")
+    print(f"  elder_ready_symbol_count: {result.get('elder_ready_symbol_count', 0)}")
+    print(f"  entry_zone_ready_symbol_count: {result.get('entry_zone_ready_symbol_count', 0)}")
+    print(f"  lookback_ready_symbol_count: {result.get('lookback_ready_symbol_count', 0)}")
+    print(f"- 完全缺行情股票数量: {result.get('completely_missing_price_count', len(result['missing_symbols']))}")
     print(f"- 最新行情不足数量: {result['stale_symbol_count']}")
     print(f"- 更新失败数量: {result['update_failed_count']}")
     print(f"- 空数据股票数量: {result['empty_data_count']}")
@@ -147,6 +175,7 @@ def _build_result(
     priced = [item for item in coverage if item["has_daily_price"]]
     factor_ready = [item for item in coverage if item["daily_price_rows"] >= 20 and item["has_daily_basic"]]
     backtest_ready = [item for item in coverage if item["daily_price_rows"] >= 60 and item["has_daily_basic"]]
+    data_quality = _data_quality_breakdown(configured_symbols, coverage, tables)
     failure_state = _failure_state(tables.get("update_failures", pd.DataFrame()))
     missing = [item["ts_code"] for item in coverage if not item["has_daily_price"]]
     missing = sorted(missing, key=lambda symbol: (symbol in failure_state, symbol))
@@ -194,9 +223,88 @@ def _build_result(
         "factor_ready_count": len(factor_ready),
         "selection_ready_count": len(factor_ready),
         "backtest_ready_count": len(backtest_ready),
+        **data_quality,
         "reasons": computed_reasons,
         "next_steps": _next_steps(len(priced), len(configured_symbols)),
     }
+
+
+def _data_quality_breakdown(
+    configured_symbols: list[str],
+    coverage: list[dict[str, Any]],
+    tables: dict[str, pd.DataFrame],
+) -> dict[str, Any]:
+    """Return latest coverage, history completeness, and module-readiness counters."""
+    latest_trade_date = _global_latest_date(tables.get("daily_price", pd.DataFrame()), "trade_date")
+    rows_by_symbol = {str(item["ts_code"]): int(item.get("daily_price_rows", 0) or 0) for item in coverage}
+    max_date_by_symbol = {str(item["ts_code"]): str(item.get("max_trade_date") or "") for item in coverage}
+    latest_symbols = [symbol for symbol in configured_symbols if latest_trade_date and max_date_by_symbol.get(symbol) == latest_trade_date]
+    history_complete = [symbol for symbol, row_count in rows_by_symbol.items() if row_count >= 252]
+    history_incomplete = [symbol for symbol, row_count in rows_by_symbol.items() if 0 < row_count < 252]
+    history_missing = [symbol for symbol, row_count in rows_by_symbol.items() if row_count <= 0]
+    latest_updated_but_history_incomplete = [symbol for symbol in latest_symbols if rows_by_symbol.get(symbol, 0) < 252]
+    history_complete_but_latest_missing = [
+        symbol for symbol in history_complete if latest_trade_date and max_date_by_symbol.get(symbol) != latest_trade_date
+    ]
+    configured_set = set(configured_symbols)
+    factor_symbols = _latest_table_symbols(tables.get("factor_scores", pd.DataFrame()), "trade_date").intersection(configured_set)
+    elder_symbols = _latest_table_symbols(tables.get("watchlist_daily_snapshots", pd.DataFrame()), "trade_date").intersection(configured_set)
+    entry_zone_symbols = _latest_table_symbols(tables.get("entry_zone_snapshots", pd.DataFrame()), "trade_date").intersection(configured_set)
+    lookback_symbols = {
+        symbol
+        for symbol, row_count in rows_by_symbol.items()
+        if row_count >= 80 and symbol in _table_symbols(tables.get("strategy_result", pd.DataFrame()))
+    }
+    return {
+        "latest_trade_date": latest_trade_date,
+        "latest_price_symbol_count": len(latest_symbols),
+        "missing_latest_price_symbol_count": max(len(configured_symbols) - len(latest_symbols), 0),
+        "latest_price_coverage_rate": (len(latest_symbols) / len(configured_symbols)) if configured_symbols else 0.0,
+        "history_complete_symbol_count": len(history_complete),
+        "history_incomplete_symbol_count": len(history_incomplete),
+        "history_missing_symbol_count": len(history_missing),
+        "available_days_20d_count": sum(1 for count in rows_by_symbol.values() if count >= 20),
+        "available_days_60d_count": sum(1 for count in rows_by_symbol.values() if count >= 60),
+        "available_days_120d_count": sum(1 for count in rows_by_symbol.values() if count >= 120),
+        "available_days_252d_count": sum(1 for count in rows_by_symbol.values() if count >= 252),
+        "factor_ready_symbol_count": len(factor_symbols) or sum(1 for item in coverage if item["daily_price_rows"] >= 20 and item["has_daily_basic"]),
+        "elder_ready_symbol_count": len(elder_symbols),
+        "entry_zone_ready_symbol_count": len(entry_zone_symbols),
+        "lookback_ready_symbol_count": len(lookback_symbols),
+        "latest_updated_but_history_incomplete_count": len(latest_updated_but_history_incomplete),
+        "latest_updated_but_history_incomplete_examples": latest_updated_but_history_incomplete[:10],
+        "history_complete_but_latest_missing_count": len(history_complete_but_latest_missing),
+        "history_complete_but_latest_missing_examples": history_complete_but_latest_missing[:10],
+        "completely_missing_price_count": len(history_missing),
+        "completely_missing_price_examples": history_missing[:10],
+    }
+
+
+def _global_latest_date(df: pd.DataFrame, column: str) -> str | None:
+    if df.empty or column not in df.columns:
+        return None
+    values = df[column].dropna().astype(str)
+    if values.empty:
+        return None
+    return str(values.max())
+
+
+def _latest_table_symbols(df: pd.DataFrame, date_column: str) -> set[str]:
+    if df.empty or "ts_code" not in df.columns:
+        return set()
+    if date_column not in df.columns:
+        return _table_symbols(df)
+    latest = _global_latest_date(df, date_column)
+    if not latest:
+        return set()
+    rows = df[df[date_column].astype(str) == latest]
+    return _table_symbols(rows)
+
+
+def _table_symbols(df: pd.DataFrame) -> set[str]:
+    if df.empty or "ts_code" not in df.columns:
+        return set()
+    return set(df["ts_code"].dropna().astype(str).tolist())
 
 
 def _symbol_has_current_market_tables(item: dict[str, Any], target_end_date: str) -> bool:

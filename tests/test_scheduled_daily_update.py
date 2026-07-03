@@ -368,7 +368,7 @@ def test_dry_run_does_not_run_heavy_update(tmp_path: Path) -> None:
 
 
 def test_force_update_limit_is_passed_to_update_stage(tmp_path: Path) -> None:
-    """update_limit should become run_full_batch_update --max-symbols."""
+    """full_backfill update_limit should become run_full_batch_update --max-symbols."""
     steps = _scheduled_steps(
         settings=_settings(tmp_path),
         workbook_path=tmp_path / "daily.xlsx",
@@ -376,6 +376,10 @@ def test_force_update_limit_is_passed_to_update_stage(tmp_path: Path) -> None:
         update_batch_size=20,
         update_lookback_days=250,
         update_max_retries=1,
+        update_mode="full_backfill",
+        recent_days=5,
+        max_update_symbols=0,
+        continue_on_symbol_failure=True,
         stage_timeout_seconds=180,
         update_stage_timeout_seconds=180,
         verbose=False,
@@ -386,6 +390,33 @@ def test_force_update_limit_is_passed_to_update_stage(tmp_path: Path) -> None:
     assert update.command[update.command.index("--max-symbols") + 1] == "50"
     assert update.command[update.command.index("--batch-size") + 1] == "20"
     assert update.env == {"REAL_DATA_END_DATE": "20260701"}
+
+
+def test_scheduled_update_defaults_to_daily_incremental(tmp_path: Path) -> None:
+    """The default scheduled update should use the lightweight daily_incremental stage."""
+    steps = _scheduled_steps(
+        settings=_settings(tmp_path),
+        workbook_path=tmp_path / "daily.xlsx",
+        update_limit=0,
+        update_batch_size=20,
+        update_lookback_days=250,
+        update_max_retries=1,
+        update_mode="daily_incremental",
+        recent_days=5,
+        max_update_symbols=0,
+        continue_on_symbol_failure=True,
+        stage_timeout_seconds=180,
+        update_stage_timeout_seconds=180,
+        verbose=False,
+        research_trade_date="20260701",
+    )
+    update = next(step for step in steps if step.name == "update_data")
+    assert "core.jobs.update_real_data" in update.command
+    assert update.env["FULL_UPDATE_MODE"] == "stale_only"
+    assert update.env["FULL_UPDATE_LOOKBACK_DAYS"] == "5"
+    assert update.env["REAL_DATA_END_DATE"] == "20260701"
+    assert update.env["FULL_UPDATE_MAX_SYMBOLS"] == "800"
+    assert "core.jobs.run_full_batch_update" not in update.command
 
 
 def test_text_mode_prints_start_immediately(tmp_path: Path, capsys) -> None:
@@ -675,6 +706,30 @@ def test_workflow_skipped_steps_not_mixed_with_skipped_symbols(tmp_path: Path) -
     assert result["workflow_skipped_step_count"] == 3
 
 
+def test_daily_incremental_partial_symbol_failures_continue_workflow(tmp_path: Path) -> None:
+    """daily_incremental should continue to workbook when only some symbols fail."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        update_limit=0,
+        update_data=lambda: {
+            "status": "warning",
+            "failed_symbol_count": 2,
+            "failed_symbol_examples": ["000001.SZ", "600000.SH"],
+            "update_skipped_symbol_count": 0,
+        },
+        workbook=lambda: _mock_workbook(tmp_path, strategy_rows=10),
+    )
+    assert result["status"] == "warning"
+    assert result["stage"] == "done"
+    assert result["workbook_exists"] is True
+    assert result["update_failed_symbol_count"] == 2
+    assert result["update_failed_symbol_examples"] == ["000001.SZ", "600000.SH"]
+    assert result["update_continued_after_partial_failure"] is True
+
+
 def test_empty_data_examples_are_clean_symbol_codes() -> None:
     """Example arrays should contain clean stock codes only."""
     from core.jobs.run_scheduled_daily_update import _parse_update_output
@@ -798,6 +853,8 @@ def test_install_scheduled_daily_update_generates_launchd_plist(tmp_path: Path) 
     assert str(tmp_path) in plist
     assert "run_scheduled_daily_update" in plist
     assert "--catch-up" in plist
+    assert "--update-mode" in plist
+    assert "daily_incremental" in plist
 
 
 def test_uninstall_scheduled_daily_update_dry_run(tmp_path: Path) -> None:

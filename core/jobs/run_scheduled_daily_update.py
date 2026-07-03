@@ -38,6 +38,8 @@ DEFAULT_UPDATE_LIMIT = 0
 DEFAULT_UPDATE_BATCH_SIZE = 50
 DEFAULT_UPDATE_LOOKBACK_DAYS = 250
 DEFAULT_UPDATE_MAX_RETRIES = 1
+DEFAULT_DAILY_INCREMENTAL_RECENT_DAYS = 5
+DEFAULT_DAILY_INCREMENTAL_MAX_SYMBOLS = 800
 DEFAULT_STAGE_TIMEOUT_SECONDS = 900
 # Environment counterpart: FULL_BATCH_UPDATE_TIMEOUT_SECONDS.
 DEFAULT_UPDATE_STAGE_TIMEOUT_SECONDS = 1800
@@ -79,6 +81,10 @@ def run_scheduled_daily_update(
     update_batch_size: int = DEFAULT_UPDATE_BATCH_SIZE,
     update_lookback_days: int = DEFAULT_UPDATE_LOOKBACK_DAYS,
     update_max_retries: int = DEFAULT_UPDATE_MAX_RETRIES,
+    update_mode: str = "daily_incremental",
+    recent_days: int = DEFAULT_DAILY_INCREMENTAL_RECENT_DAYS,
+    max_update_symbols: int = 0,
+    continue_on_symbol_failure: bool = True,
     stage_timeout_seconds: int = DEFAULT_STAGE_TIMEOUT_SECONDS,
     update_stage_timeout_seconds: int | None = None,
     verbose: bool = False,
@@ -89,6 +95,7 @@ def run_scheduled_daily_update(
 ) -> dict[str, Any]:
     """Run the scheduled daily update if schedule, state, and preflight allow it."""
     resolved_settings = settings or get_settings()
+    update_mode = _normalize_update_mode(update_mode)
     started_at = now or datetime.now()
     status_file = Path(status_path)
     lock_file = Path(lock_path)
@@ -131,6 +138,10 @@ def run_scheduled_daily_update(
     base_status["update_limit"] = int(update_limit) if int(update_limit) > 0 else None
     base_status["acceptance_mode"] = int(update_limit) > 0
     base_status["formal_run"] = _is_formal_run(update_limit=update_limit, allow_intraday=allow_intraday, intraday_warning=intraday_warning, dry_run=dry_run)
+    base_status["update_mode"] = update_mode
+    base_status["recent_days"] = int(recent_days)
+    base_status["max_update_symbols"] = int(max_update_symbols)
+    base_status["continue_on_symbol_failure"] = bool(continue_on_symbol_failure)
     if not decision.should_run and not force:
         status = {
             **base_status,
@@ -207,6 +218,10 @@ def run_scheduled_daily_update(
                 update_batch_size=update_batch_size,
                 update_lookback_days=update_lookback_days,
                 update_max_retries=update_max_retries,
+                update_mode=update_mode,
+                recent_days=recent_days,
+                max_update_symbols=max_update_symbols,
+                continue_on_symbol_failure=continue_on_symbol_failure,
                 stage_timeout_seconds=stage_timeout_seconds,
                 update_stage_timeout_seconds=update_stage_timeout_seconds
                 or int(getattr(resolved_settings, "full_batch_update_timeout_seconds", DEFAULT_UPDATE_STAGE_TIMEOUT_SECONDS) or DEFAULT_UPDATE_STAGE_TIMEOUT_SECONDS),
@@ -349,6 +364,10 @@ def _run_heavy_steps(
     update_batch_size: int,
     update_lookback_days: int,
     update_max_retries: int,
+    update_mode: str,
+    recent_days: int,
+    max_update_symbols: int,
+    continue_on_symbol_failure: bool,
     stage_timeout_seconds: int,
     update_stage_timeout_seconds: int,
     verbose: bool,
@@ -365,6 +384,10 @@ def _run_heavy_steps(
         update_batch_size=update_batch_size,
         update_lookback_days=update_lookback_days,
         update_max_retries=update_max_retries,
+        update_mode=update_mode,
+        recent_days=recent_days,
+        max_update_symbols=max_update_symbols,
+        continue_on_symbol_failure=continue_on_symbol_failure,
         stage_timeout_seconds=stage_timeout_seconds,
         update_stage_timeout_seconds=update_stage_timeout_seconds,
         verbose=verbose,
@@ -453,35 +476,33 @@ def _scheduled_steps(
     update_batch_size: int,
     update_lookback_days: int,
     update_max_retries: int,
+    update_mode: str,
+    recent_days: int,
+    max_update_symbols: int,
+    continue_on_symbol_failure: bool,
     stage_timeout_seconds: int,
     update_stage_timeout_seconds: int,
     verbose: bool,
     research_trade_date: str,
 ) -> list[StageCommand]:
     """Return bounded subprocess-backed scheduled stages."""
-    update_args = [
-        "--mode",
-        "missing_first",
-        "--batch-size",
-        str(max(1, int(update_batch_size))),
-        "--lookback-days",
-        str(max(1, int(update_lookback_days))),
-        "--max-retries",
-        str(max(1, int(update_max_retries))),
-        "--skip-network-preflight",
-    ]
-    if int(update_limit) > 0:
-        update_args.extend(["--max-symbols", str(max(1, int(update_limit)))])
-    if verbose:
-        update_args.append("--verbose")
+    update_mode = _normalize_update_mode(update_mode)
+    update_stage = _update_stage_command(
+        update_mode=update_mode,
+        update_limit=update_limit,
+        update_batch_size=update_batch_size,
+        update_lookback_days=update_lookback_days,
+        update_max_retries=update_max_retries,
+        recent_days=recent_days,
+        max_update_symbols=max_update_symbols,
+        continue_on_symbol_failure=continue_on_symbol_failure,
+        verbose=verbose,
+        research_trade_date=research_trade_date,
+        timeout_seconds=update_stage_timeout_seconds,
+    )
     steps = [
         StageCommand("backup", [sys.executable, "-m", "core.jobs.backup_local_data", "--label", "scheduled_daily_update"], stage_timeout_seconds),
-        StageCommand(
-            "update_data",
-            [sys.executable, "-m", "core.jobs.run_full_batch_update", *update_args],
-            update_stage_timeout_seconds,
-            env={"REAL_DATA_END_DATE": research_trade_date},
-        ),
+        update_stage,
         StageCommand("workflow", [sys.executable, "-m", "core.jobs.run_daily_workflow", "--doctor-before-run", "--skip-update", "--format", "all"], stage_timeout_seconds),
         StageCommand("elder_review", [sys.executable, "-m", "core.jobs.run_elder_review"], stage_timeout_seconds),
         StageCommand("entry_zone", [sys.executable, "-m", "core.jobs.calculate_entry_zones"], stage_timeout_seconds),
@@ -497,6 +518,78 @@ def _scheduled_steps(
         )
     steps.append(StageCommand("workbook", [sys.executable, "-m", "core.jobs.export_daily_research_workbook", "--trade-date", research_trade_date, "--output", str(workbook_path)], stage_timeout_seconds))
     return steps
+
+
+def _update_stage_command(
+    *,
+    update_mode: str,
+    update_limit: int,
+    update_batch_size: int,
+    update_lookback_days: int,
+    update_max_retries: int,
+    recent_days: int,
+    max_update_symbols: int,
+    continue_on_symbol_failure: bool,
+    verbose: bool,
+    research_trade_date: str,
+    timeout_seconds: int,
+) -> StageCommand:
+    """Build the scheduled update stage command for daily incremental or manual backfill."""
+    update_mode = _normalize_update_mode(update_mode)
+    if update_mode == "full_backfill":
+        update_args = [
+            "--mode",
+            "missing_first",
+            "--batch-size",
+            str(max(1, int(update_batch_size))),
+            "--lookback-days",
+            str(max(1, int(update_lookback_days))),
+            "--max-retries",
+            str(max(1, int(update_max_retries))),
+            "--skip-network-preflight",
+        ]
+        if int(update_limit) > 0:
+            update_args.extend(["--max-symbols", str(max(1, int(update_limit)))])
+        if verbose:
+            update_args.append("--verbose")
+        return StageCommand(
+            "update_data",
+            [sys.executable, "-m", "core.jobs.run_full_batch_update", *update_args],
+            timeout_seconds,
+            env={"REAL_DATA_END_DATE": research_trade_date},
+        )
+
+    effective_max = int(update_limit) if int(update_limit) > 0 else int(max_update_symbols or DEFAULT_DAILY_INCREMENTAL_MAX_SYMBOLS)
+    env = {
+        "DATA_PROVIDER": "akshare",
+        "AKSHARE_SAMPLE_SYMBOLS": "",
+        "REAL_UNIVERSE_PRESET": "full",
+        "REAL_DATA_END_DATE": research_trade_date,
+        "FULL_UPDATE_MODE": "stale_only",
+        "FULL_UPDATE_BATCH_SIZE": str(max(1, int(update_batch_size))),
+        "FULL_UPDATE_LOOKBACK_DAYS": str(max(1, int(recent_days))),
+        "FULL_UPDATE_MAX_RETRIES": str(max(0, int(update_max_retries))),
+        "FULL_UPDATE_MAX_SYMBOLS": str(max(0, effective_max)),
+        "FULL_UPDATE_MAX_BATCHES": "0",
+        "FULL_UPDATE_RESUME": "true",
+        "FULL_UPDATE_SKIP_EMPTY_UNAVAILABLE": "true",
+        "FULL_ENABLE_STOCK_BASIC_ENRICHMENT": "false",
+        "FULL_ENABLE_VALUATION_ENRICHMENT": "false",
+    }
+    if continue_on_symbol_failure:
+        env["SCHEDULED_UPDATE_CONTINUE_ON_SYMBOL_FAILURE"] = "true"
+    return StageCommand(
+        "update_data",
+        [sys.executable, "-m", "core.jobs.update_real_data"],
+        timeout_seconds,
+        env=env,
+    )
+
+
+def _normalize_update_mode(value: str) -> str:
+    """Normalize scheduled update mode."""
+    value = str(value or "daily_incremental").strip().lower()
+    return value if value in {"daily_incremental", "full_backfill"} else "daily_incremental"
 
 
 def _run_module_stage(
@@ -586,13 +679,17 @@ def _run_module_stage(
 
 
 def _parse_update_output(stdout: str) -> dict[str, Any]:
-    """Extract compact update counters from run_full_batch_update text output."""
+    """Extract compact update counters from update_real_data or run_full_batch_update output."""
     mapping = {
         "full_universe_count": "full 股票池数量",
         "planned_symbols": "本次计划处理",
+        "planned_count": "本次计划",
         "success_symbols": "成功数量",
+        "success_symbols_alt": "成功",
         "raw_failed_symbol_count": "失败数量",
+        "raw_failed_symbol_count_alt": "失败",
         "update_skipped_symbol_count": "本次未处理数量",
+        "deferred_symbols": "暂未处理",
     }
     parsed: dict[str, Any] = {}
     for key, label in mapping.items():
@@ -602,6 +699,14 @@ def _parse_update_output(stdout: str) -> dict[str, Any]:
     empty_count = _extract_int_after_label(stdout, "空数据股票")
     if empty_count is None:
         empty_count = 0
+    if "success_symbols" not in parsed and "success_symbols_alt" in parsed:
+        parsed["success_symbols"] = parsed["success_symbols_alt"]
+    if "planned_symbols" not in parsed and "planned_count" in parsed:
+        parsed["planned_symbols"] = parsed["planned_count"]
+    if "update_skipped_symbol_count" not in parsed and "deferred_symbols" in parsed:
+        parsed["update_skipped_symbol_count"] = parsed["deferred_symbols"]
+    if "raw_failed_symbol_count" not in parsed and "raw_failed_symbol_count_alt" in parsed:
+        parsed["raw_failed_symbol_count"] = parsed["raw_failed_symbol_count_alt"]
     raw_failed = int(parsed.get("raw_failed_symbol_count", 0) or 0)
     parsed["empty_data_symbol_count"] = int(empty_count or 0)
     parsed["empty_data_symbol_examples"] = _extract_examples(stdout, "空数据股票")
@@ -683,12 +788,16 @@ def _update_heartbeat_from_line(status: dict[str, Any], line: str, *, stage: str
     """Parse known progress/summary lines into heartbeat counters."""
     stage = stage or "update_data"
     status["last_heartbeat_at"] = datetime.now().isoformat(timespec="seconds")
-    if "本次计划处理" in line:
+    if "本次计划处理" in line or "本次计划" in line:
         value = _extract_int_after_label(line, "本次计划处理")
+        if value is None:
+            value = _extract_int_after_label(line, "本次计划")
         if value is not None:
             status["total_symbol_count"] = value
-    if "成功数量" in line:
+    if "成功数量" in line or "成功" in line:
         value = _extract_int_after_label(line, "成功数量")
+        if value is None:
+            value = _extract_int_after_label(line, "成功")
         if value is not None:
             status["processed_symbol_count"] = value
     if "失败数量" in line:
@@ -783,11 +892,21 @@ def _merge_update_stage_summary(status: dict[str, Any], stage: str, result: dict
         "failed_symbol_examples",
         "update_warning_count",
         "update_warning_examples",
+        "planned_symbols",
+        "success_symbols",
     ]:
         if key in result:
             status[key] = result[key]
     if "update_skipped_symbol_count" in result:
         status["skipped_symbol_count"] = result["update_skipped_symbol_count"]
+    status["update_failed_symbol_count"] = int(status.get("failed_symbol_count", 0) or 0)
+    status["update_failed_symbol_examples"] = list(status.get("failed_symbol_examples", []) or [])
+    status["update_continued_after_partial_failure"] = bool(
+        int(status.get("empty_data_symbol_count", 0) or 0) > 0
+        or int(status.get("network_timeout_count", 0) or 0) > 0
+        or int(status.get("unavailable_symbol_count", 0) or 0) > 0
+        or int(status.get("failed_symbol_count", 0) or 0) > 0
+    )
 
 
 def _has_update_warnings(status: dict[str, Any], steps: dict[str, dict[str, Any]]) -> bool:
@@ -867,6 +986,10 @@ def _base_status(
         "formal_success_date": previous_formal_success_date,
         "acceptance_mode": False,
         "update_limit": None,
+        "update_mode": "daily_incremental",
+        "recent_days": DEFAULT_DAILY_INCREMENTAL_RECENT_DAYS,
+        "max_update_symbols": 0,
+        "continue_on_symbol_failure": True,
         "is_trade_day": decision.is_trade_day,
         "catch_up": catch_up,
         "force": force,
@@ -901,6 +1024,9 @@ def _base_status(
         "network_failed_symbol_count": 0,
         "failed_symbol_count": 0,
         "failed_symbol_examples": [],
+        "update_failed_symbol_count": 0,
+        "update_failed_symbol_examples": [],
+        "update_continued_after_partial_failure": False,
         "update_warning_count": 0,
         "update_warning_examples": [],
         "data_update_elapsed_seconds": 0,
@@ -1124,6 +1250,7 @@ def _print_status(status: dict[str, Any], output_format: str) -> None:
     print(f"- 完成时间: {status.get('finished_at') or '暂无'}")
     print(f"- 运行日期: {status.get('run_date') or status.get('trade_date')}")
     print(f"- 研究交易日: {status.get('research_trade_date') or status.get('trade_date')}")
+    print(f"- 更新模式: {status.get('update_mode') or 'daily_incremental'}")
     if status.get("intraday_warning"):
         print(f"- 盘中提示: {status.get('intraday_warning')}")
     if status.get("acceptance_mode"):
@@ -1174,6 +1301,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--update-batch-size", type=int, default=DEFAULT_UPDATE_BATCH_SIZE)
     parser.add_argument("--update-lookback-days", type=int, default=DEFAULT_UPDATE_LOOKBACK_DAYS)
     parser.add_argument("--update-max-retries", type=int, default=DEFAULT_UPDATE_MAX_RETRIES)
+    parser.add_argument("--update-mode", choices=["daily_incremental", "full_backfill"], default="daily_incremental")
+    parser.add_argument("--recent-days", type=int, default=DEFAULT_DAILY_INCREMENTAL_RECENT_DAYS)
+    parser.add_argument("--max-update-symbols", type=int, default=0)
+    parser.add_argument("--continue-on-symbol-failure", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--stage-timeout-seconds", type=int, default=DEFAULT_STAGE_TIMEOUT_SECONDS)
     parser.add_argument("--update-stage-timeout-seconds", type=int, default=None)
     parser.add_argument("--verbose", action="store_true", help="Print verbose per-symbol update details when supported.")
@@ -1194,6 +1325,10 @@ def main(argv: list[str] | None = None) -> int:
         update_batch_size=args.update_batch_size,
         update_lookback_days=args.update_lookback_days,
         update_max_retries=args.update_max_retries,
+        update_mode=args.update_mode,
+        recent_days=args.recent_days,
+        max_update_symbols=args.max_update_symbols,
+        continue_on_symbol_failure=args.continue_on_symbol_failure,
         stage_timeout_seconds=args.stage_timeout_seconds,
         update_stage_timeout_seconds=args.update_stage_timeout_seconds,
         verbose=args.verbose,

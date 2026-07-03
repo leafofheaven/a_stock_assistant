@@ -33,6 +33,8 @@ def build_launchd_plist(
         "--catch-up",
         "--scheduled-time",
         scheduled_time,
+        "--update-mode",
+        "daily_incremental",
     ]
     if status_path:
         args.extend(["--status-path", str(status_path)])
