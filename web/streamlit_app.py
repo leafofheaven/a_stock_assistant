@@ -1527,8 +1527,11 @@ def _render_positions_tab(st: Any, positions_df: pd.DataFrame) -> None:
 
 def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:
     st.subheader("策略回测")
+    _render_lookback_analysis_section(st)
+    st.divider()
+    st.write("传统回测诊断")
     if not backtest:
-        st.info("暂无回测结果。请先运行回测诊断；真实数据不足时不会生成结果。")
+        st.caption("传统回测诊断暂未生成；上方自动回看分析可用于查看历史样本表现。")
         return
     if backtest.get("data_quality_notes"):
         for note in backtest["data_quality_notes"]:
@@ -1830,9 +1833,10 @@ def _render_scheduled_update_section(st: Any) -> None:
 def _render_lookback_analysis_section(st: Any) -> None:
     """Render automatic lookback analysis status and controls."""
     st.subheader("自动回看分析")
+    st.write("自动回看状态摘要")
     status = _read_lookback_status()
     if not status:
-        st.info("尚无自动回看记录。")
+        st.info("尚无自动回看记录。可以点击运行自动回看分析生成结果。")
     else:
         st.write(
             {

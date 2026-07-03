@@ -3388,9 +3388,19 @@ def check_task58(root: Path) -> list[str]:
     if "run_lookback_analysis" not in command_source:
         failures.append("command_runner.py is missing run_lookback_analysis allowlist entry.")
     streamlit_source = read_source(root / "web/streamlit_app.py")
-    for phrase in ["自动回看分析", "运行自动回看分析", "下载最新回看报告", "run_lookback_analysis"]:
+    for phrase in ["自动回看分析", "自动回看状态摘要", "运行自动回看分析", "刷新回看状态", "下载最新回看报告", "run_lookback_analysis"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing Task 58 phrase: {phrase}.")
+    backtest_marker = "def _render_backtest_tab"
+    status_marker = "def _render_status_tab"
+    if backtest_marker in streamlit_source and status_marker in streamlit_source:
+        backtest_source = streamlit_source[streamlit_source.index(backtest_marker) : streamlit_source.index(status_marker, streamlit_source.index(backtest_marker))]
+        if "_render_lookback_analysis_section(st)" not in backtest_source:
+            failures.append("Strategy Backtest tab does not render the automatic lookback analysis section.")
+        if "暂无回测结果。请先运行回测诊断；真实数据不足时不会生成结果。" in backtest_source:
+            failures.append("Strategy Backtest tab still uses the old missing-backtest main prompt.")
+    else:
+        failures.append("web/streamlit_app.py is missing Strategy Backtest tab render markers.")
     scheduled_source = read_source(root / "core/jobs/run_scheduled_daily_update.py")
     for phrase in ["run_lookback_after_daily_update", "lookback_analysis"]:
         if phrase not in scheduled_source:
