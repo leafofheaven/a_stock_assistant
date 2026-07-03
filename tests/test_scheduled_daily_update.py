@@ -31,6 +31,24 @@ def _status_paths(tmp_path: Path) -> tuple[Path, Path]:
     return tmp_path / "runtime" / "scheduled_daily_update_status.json", tmp_path / "runtime" / "scheduled_daily_update.lock"
 
 
+def _formal_success_status(trade_date: str) -> dict:
+    return {
+        "status": "success",
+        "stage": "done",
+        "trade_date": trade_date,
+        "research_trade_date": trade_date,
+        "formal_run": True,
+        "formal_success_date": trade_date,
+        "acceptance_mode": False,
+        "update_limit": None,
+        "allow_intraday": False,
+        "intraday_warning": "",
+        "workbook_exists": True,
+        "workbook_path": "/tmp/daily_research.xlsx",
+        "workbook_size_bytes": 1234,
+    }
+
+
 def _ok_preflight() -> dict:
     return {
         "ok": True,
@@ -38,6 +56,19 @@ def _ok_preflight() -> dict:
         "duckdb": {"ok": True, "locked": False},
         "eastmoney_kline": {"ok": True, "status": "success"},
         "suggested_action": "",
+    }
+
+
+def _warning_preflight_with_curl() -> dict:
+    return {
+        "ok": True,
+        "status": "warning",
+        "preflight_allows_run": True,
+        "preflight_warning_reason": "Python 请求失败但 curl fallback 可用",
+        "curl_fallback_available": True,
+        "duckdb": {"ok": True, "locked": False},
+        "eastmoney_kline": {"ok": True, "status": "warning", "curl_fallback_available": True},
+        "suggested_action": "Python 请求失败但 curl fallback 可用",
     }
 
 
@@ -57,8 +88,8 @@ def test_scheduled_update_skips_before_scheduled_time(tmp_path: Path) -> None:
 
 
 def test_scheduled_update_skips_if_already_success_today(tmp_path: Path) -> None:
-    """A successful status for today should prevent duplicate runs."""
-    previous = {"status": "success", "trade_date": "20260701"}
+    """A formal successful status for today should prevent duplicate runs."""
+    previous = _formal_success_status("20260701")
     decision = should_run_scheduled_update(
         now=datetime(2026, 7, 1, 18, 30),
         scheduled_time="18:00",
@@ -68,7 +99,7 @@ def test_scheduled_update_skips_if_already_success_today(tmp_path: Path) -> None
         settings=_settings(tmp_path),
     )
     assert not decision.should_run
-    assert "今日已成功更新" in decision.summary
+    assert "今日已完成正式自动更新" in decision.summary
 
 
 def test_scheduled_update_runs_after_scheduled_time_when_not_success(tmp_path: Path) -> None:
@@ -133,6 +164,131 @@ def test_scheduled_update_preflight_failure_stops_before_heavy_update(tmp_path: 
     assert result["status"] == "failed"
     assert result["stage"] == "preflight"
     assert called["heavy"] is False
+
+
+def test_preflight_warning_allows_daily_incremental_when_curl_succeeds(tmp_path: Path) -> None:
+    """Python request failure with curl fallback should allow daily_incremental to continue."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        update_limit=0,
+        update_data=lambda: {"status": "success", "planned_symbols": 3},
+        workbook=lambda: _mock_workbook(tmp_path, strategy_rows=3),
+    )
+    assert result["status"] == "success"
+
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _warning_preflight_with_curl,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {"status": "success", "planned_symbols": 5},
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    assert result["stage"] == "done"
+    assert result["status"] == "warning"
+    assert result["preflight_allows_run"] is True
+    assert result["curl_fallback_available"] is True
+    assert "curl fallback" in result["preflight_warning_reason"]
+
+
+def test_preflight_fails_when_python_and_curl_all_fail(tmp_path: Path) -> None:
+    """Fatal preflight should stop before update_data."""
+    status_path, lock_path = _status_paths(tmp_path)
+    called = {"update": False}
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": lambda: {
+                "ok": False,
+                "status": "failed",
+                "preflight_allows_run": False,
+                "duckdb": {"ok": True, "locked": False},
+                "eastmoney_kline": {"ok": False, "status": "failed", "curl_fallback_available": False},
+                "message": "Python 和 curl 全部失败",
+            },
+            "update_data": lambda: called.update(update=True) or {"status": "success"},
+        },
+    )
+    assert result["status"] == "failed"
+    assert result["stage"] == "preflight"
+    assert called["update"] is False
+
+
+def test_preflight_records_curl_fallback_available(tmp_path: Path) -> None:
+    """Scheduled status JSON should record curl fallback availability."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        step_overrides={
+            "preflight": _warning_preflight_with_curl,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {"status": "success"},
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    persisted = read_scheduled_status(status_path)
+    assert result["curl_fallback_available"] is True
+    assert persisted["curl_fallback_available"] is True
+    assert persisted["preflight_status"] == "warning"
+
+
+def test_preflight_warning_message_in_text_output(tmp_path: Path, capsys) -> None:
+    """Text output should explain curl fallback warning."""
+    status_path, lock_path = _status_paths(tmp_path)
+    run_scheduled_daily_update(
+        now=datetime(2026, 7, 1, 18, 30),
+        force=True,
+        status_path=status_path,
+        lock_path=lock_path,
+        report_dir=tmp_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+        output_format="text",
+        step_overrides={
+            "preflight": _warning_preflight_with_curl,
+            "backup": lambda: {"status": "success"},
+            "update_data": lambda: {"status": "success"},
+            "workflow": lambda: {"status": "success", "candidate_count": 2},
+            "elder_review": lambda: {"status": "success", "review_count": 2},
+            "entry_zone": lambda: {"status": "success", "calculated_count": 2},
+            "watchlist": lambda: {"status": "success", "snapshot_count": 1},
+            "workbook": lambda: _mock_workbook(tmp_path),
+        },
+    )
+    output = capsys.readouterr().out
+    assert "数据源网络诊断" in output
+    assert "Python 请求失败但 curl fallback 可用" in output
+    assert "curl fallback: 可用" in output
 
 
 def test_scheduled_update_writes_status_json(tmp_path: Path) -> None:
@@ -350,7 +506,7 @@ def test_dry_run_does_not_run_heavy_update(tmp_path: Path) -> None:
 
 
 def test_force_update_limit_is_passed_to_update_stage(tmp_path: Path) -> None:
-    """update_limit should become run_full_batch_update --max-symbols."""
+    """full_backfill update_limit should become run_full_batch_update --max-symbols."""
     steps = _scheduled_steps(
         settings=_settings(tmp_path),
         workbook_path=tmp_path / "daily.xlsx",
@@ -358,6 +514,10 @@ def test_force_update_limit_is_passed_to_update_stage(tmp_path: Path) -> None:
         update_batch_size=20,
         update_lookback_days=250,
         update_max_retries=1,
+        update_mode="full_backfill",
+        recent_days=5,
+        max_update_symbols=0,
+        continue_on_symbol_failure=True,
         stage_timeout_seconds=180,
         update_stage_timeout_seconds=180,
         verbose=False,
@@ -368,6 +528,33 @@ def test_force_update_limit_is_passed_to_update_stage(tmp_path: Path) -> None:
     assert update.command[update.command.index("--max-symbols") + 1] == "50"
     assert update.command[update.command.index("--batch-size") + 1] == "20"
     assert update.env == {"REAL_DATA_END_DATE": "20260701"}
+
+
+def test_scheduled_update_defaults_to_daily_incremental(tmp_path: Path) -> None:
+    """The default scheduled update should use the lightweight daily_incremental stage."""
+    steps = _scheduled_steps(
+        settings=_settings(tmp_path),
+        workbook_path=tmp_path / "daily.xlsx",
+        update_limit=0,
+        update_batch_size=20,
+        update_lookback_days=250,
+        update_max_retries=1,
+        update_mode="daily_incremental",
+        recent_days=5,
+        max_update_symbols=0,
+        continue_on_symbol_failure=True,
+        stage_timeout_seconds=180,
+        update_stage_timeout_seconds=180,
+        verbose=False,
+        research_trade_date="20260701",
+    )
+    update = next(step for step in steps if step.name == "update_data")
+    assert "core.jobs.update_real_data" in update.command
+    assert update.env["FULL_UPDATE_MODE"] == "stale_only"
+    assert update.env["FULL_UPDATE_LOOKBACK_DAYS"] == "5"
+    assert update.env["REAL_DATA_END_DATE"] == "20260701"
+    assert update.env["FULL_UPDATE_MAX_SYMBOLS"] == "800"
+    assert "core.jobs.run_full_batch_update" not in update.command
 
 
 def test_text_mode_prints_start_immediately(tmp_path: Path, capsys) -> None:
@@ -554,7 +741,92 @@ def test_update_limit_sets_acceptance_mode(tmp_path: Path, capsys) -> None:
     output = capsys.readouterr().out
     assert result["acceptance_mode"] is True
     assert result["update_limit"] == 50
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
     assert "本次为小批量验收运行" in output
+
+
+def test_acceptance_run_does_not_block_formal_scheduled_run(tmp_path: Path) -> None:
+    """A prior update-limit acceptance run must not block the 18:00 formal run."""
+    previous = {
+        **_formal_success_status("20260701"),
+        "formal_run": False,
+        "formal_success_date": "",
+        "acceptance_mode": True,
+        "update_limit": 500,
+    }
+    decision = should_run_scheduled_update(
+        now=datetime(2026, 7, 2, 18, 0, 4),
+        scheduled_time="18:00",
+        previous_status=previous,
+        force=False,
+        catch_up=True,
+        settings=_settings(tmp_path),
+    )
+    assert decision.should_run
+    assert decision.already_ran_today is False
+
+
+def test_intraday_run_does_not_block_formal_scheduled_run(tmp_path: Path) -> None:
+    """A prior --allow-intraday run must not block the formal close-time run."""
+    previous = {
+        **_formal_success_status("20260702"),
+        "formal_run": False,
+        "formal_success_date": "",
+        "allow_intraday": True,
+        "intraday_warning": "盘中强制运行，结果可能基于未完成交易日数据，不代表正式收盘后结果。",
+    }
+    decision = should_run_scheduled_update(
+        now=datetime(2026, 7, 2, 18, 30),
+        scheduled_time="18:00",
+        previous_status=previous,
+        force=False,
+        catch_up=True,
+        settings=_settings(tmp_path),
+    )
+    assert decision.should_run
+
+
+def test_update_limit_run_does_not_set_formal_success(tmp_path: Path) -> None:
+    """update_limit runs should not write formal_success_date."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(tmp_path, status_path, lock_path, update_limit=300)
+    assert result["acceptance_mode"] is True
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
+
+
+def test_formal_success_blocks_duplicate_formal_run(tmp_path: Path) -> None:
+    """Only a completed formal run with workbook metadata should block duplicates."""
+    previous = _formal_success_status("20260702")
+    decision = should_run_scheduled_update(
+        now=datetime(2026, 7, 2, 18, 30),
+        scheduled_time="18:00",
+        previous_status=previous,
+        force=False,
+        catch_up=True,
+        settings=_settings(tmp_path),
+    )
+    assert not decision.should_run
+    assert decision.already_ran_today is True
+
+
+def test_skipped_status_from_acceptance_state_does_not_clear_previous_formal_fields(tmp_path: Path) -> None:
+    """A skipped before-time status should preserve previous formal_success_date."""
+    status_path, lock_path = _status_paths(tmp_path)
+    status_path.parent.mkdir(parents=True)
+    previous = _formal_success_status("20260701")
+    previous.update({"acceptance_mode": True, "update_limit": 500, "status": "success", "trade_date": "20260702"})
+    status_path.write_text(json.dumps(previous), encoding="utf-8")
+    result = run_scheduled_daily_update(
+        now=datetime(2026, 7, 2, 17, 30),
+        status_path=status_path,
+        lock_path=lock_path,
+        settings=_settings(tmp_path),
+        skip_notify=True,
+    )
+    assert result["status"] == "skipped"
+    assert result["formal_success_date"] == "20260701"
 
 
 def test_workflow_skipped_steps_not_mixed_with_skipped_symbols(tmp_path: Path) -> None:
@@ -570,6 +842,30 @@ def test_workflow_skipped_steps_not_mixed_with_skipped_symbols(tmp_path: Path) -
     assert result["update_skipped_symbol_count"] == 5001
     assert result["skipped_symbol_count"] == 5001
     assert result["workflow_skipped_step_count"] == 3
+
+
+def test_daily_incremental_partial_symbol_failures_continue_workflow(tmp_path: Path) -> None:
+    """daily_incremental should continue to workbook when only some symbols fail."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        update_limit=0,
+        update_data=lambda: {
+            "status": "warning",
+            "failed_symbol_count": 2,
+            "failed_symbol_examples": ["000001.SZ", "600000.SH"],
+            "update_skipped_symbol_count": 0,
+        },
+        workbook=lambda: _mock_workbook(tmp_path, strategy_rows=10),
+    )
+    assert result["status"] == "warning"
+    assert result["stage"] == "done"
+    assert result["workbook_exists"] is True
+    assert result["update_failed_symbol_count"] == 2
+    assert result["update_failed_symbol_examples"] == ["000001.SZ", "600000.SH"]
+    assert result["update_continued_after_partial_failure"] is True
 
 
 def test_empty_data_examples_are_clean_symbol_codes() -> None:
@@ -613,6 +909,7 @@ def test_force_before_scheduled_time_uses_previous_completed_trade_date_by_defau
         status_path,
         lock_path,
         now=datetime(2026, 7, 2, 9, 52),
+        update_limit=0,
         workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
     )
     assert result["run_date"] == "20260702"
@@ -620,6 +917,77 @@ def test_force_before_scheduled_time_uses_previous_completed_trade_date_by_defau
     assert result["latest_completed_trade_date"] == "20260701"
     assert result["trade_date"] == "20260701"
     assert result["intraday_warning"] == ""
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
+    assert "不会阻止 18:00" in result["formal_run_note"]
+
+
+def test_intraday_daily_incremental_does_not_set_formal_success_date(tmp_path: Path) -> None:
+    """A before-scheduled daily_incremental force run must not count as formal success."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 3, 9, 52),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260703"),
+    )
+    assert result["status"] == "success"
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
+    assert result["workbook_exists"] is True
+    assert result["research_trade_date"] == "20260702"
+
+
+def test_before_scheduled_time_uses_previous_completed_trade_date_unless_allow_intraday(tmp_path: Path) -> None:
+    """Before scheduled time should use previous completed date unless allow-intraday is explicit."""
+    status_path, lock_path = _status_paths(tmp_path)
+    default_result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 3, 9, 52),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260703"),
+    )
+    intraday_result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 3, 9, 52),
+        update_limit=0,
+        allow_intraday=True,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260703"),
+    )
+    assert default_result["research_trade_date"] == "20260702"
+    assert intraday_result["research_trade_date"] == "20260703"
+    assert intraday_result["formal_run"] is False
+
+
+def test_intraday_force_does_not_block_1800_formal_run(tmp_path: Path) -> None:
+    """A successful intraday force run should not make 18:00 already_ran_today true."""
+    status_path, lock_path = _status_paths(tmp_path)
+    intraday = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 3, 9, 52),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260703"),
+    )
+    assert intraday["formal_run"] is False
+
+    decision = should_run_scheduled_update(
+        now=datetime(2026, 7, 3, 18, 1),
+        scheduled_time="18:00",
+        previous_status=read_scheduled_status(status_path),
+        force=False,
+        catch_up=True,
+        settings=_settings(tmp_path),
+    )
+    assert decision.should_run is True
+    assert decision.already_ran_today is False
 
 
 def test_allow_intraday_uses_current_trade_date_with_warning(tmp_path: Path, capsys) -> None:
@@ -630,6 +998,7 @@ def test_allow_intraday_uses_current_trade_date_with_warning(tmp_path: Path, cap
         status_path,
         lock_path,
         now=datetime(2026, 7, 2, 9, 52),
+        update_limit=0,
         allow_intraday=True,
         output_format="text",
         workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
@@ -638,6 +1007,25 @@ def test_allow_intraday_uses_current_trade_date_with_warning(tmp_path: Path, cap
     assert result["research_trade_date"] == "20260702"
     assert "盘中强制运行" in result["intraday_warning"]
     assert "盘中强制运行" in output
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
+
+
+def test_allow_intraday_sets_formal_run_false(tmp_path: Path) -> None:
+    """--allow-intraday should always stay outside formal close-time success."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 9, 52),
+        update_limit=0,
+        allow_intraday=True,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
+    )
+    assert result["allow_intraday"] is True
+    assert result["formal_run"] is False
+    assert result["formal_success_date"] == ""
 
 
 def test_scheduled_after_1800_uses_current_trade_date(tmp_path: Path) -> None:
@@ -648,10 +1036,39 @@ def test_scheduled_after_1800_uses_current_trade_date(tmp_path: Path) -> None:
         status_path,
         lock_path,
         now=datetime(2026, 7, 2, 18, 30),
+        update_limit=0,
         workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
     )
     assert result["research_trade_date"] == "20260702"
     assert result["latest_completed_trade_date"] == "20260702"
+    assert result["formal_run"] is True
+    assert result["formal_success_date"] == "20260702"
+
+
+def test_formal_success_only_after_scheduled_time(tmp_path: Path) -> None:
+    """Only after scheduled time may a completed run write formal_success_date."""
+    status_path, lock_path = _status_paths(tmp_path)
+    before = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 9, 52),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
+    )
+    assert before["formal_run"] is False
+    assert before["formal_success_date"] == ""
+
+    after = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 18, 30),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260702"),
+    )
+    assert after["formal_run"] is True
+    assert after["formal_success_date"] == "20260702"
 
 
 def test_macos_notification_builds_safe_message() -> None:
@@ -695,6 +1112,8 @@ def test_install_scheduled_daily_update_generates_launchd_plist(tmp_path: Path) 
     assert str(tmp_path) in plist
     assert "run_scheduled_daily_update" in plist
     assert "--catch-up" in plist
+    assert "--update-mode" in plist
+    assert "daily_incremental" in plist
 
 
 def test_uninstall_scheduled_daily_update_dry_run(tmp_path: Path) -> None:

@@ -756,7 +756,9 @@ def _build_symbol_update_plan(
         else:
             earliest_latest = min(str(value) for value in latest_dates.values() if value is not None)
             start_dates[ts_code] = min(_next_yyyymmdd(earliest_latest), target_end_date)
-    if mode == "stale_first":
+    if mode == "stale_only":
+        pending = [*incremental_original]
+    elif mode == "stale_first":
         pending = [*incremental_original, *initial_original]
     elif mode == "auto":
         pending = [*initial_original, *incremental_original]
@@ -1132,7 +1134,7 @@ def _effective_update_mode(settings: Settings, full_mode: bool) -> str:
     if not full_mode:
         return "missing_first"
     value = str(getattr(settings, "full_update_mode", "missing_first") or "missing_first")
-    return value if value in {"missing_first", "stale_first", "auto"} else "missing_first"
+    return value if value in {"missing_first", "stale_first", "stale_only", "auto"} else "missing_first"
 
 
 def _effective_skip_empty_unavailable(settings: Settings, full_mode: bool) -> bool:

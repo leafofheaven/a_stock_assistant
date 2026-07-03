@@ -141,6 +141,34 @@ def test_preflight_includes_network_diagnosis_summary_on_failure(monkeypatch: py
     assert "suggested_action" in result
 
 
+def test_preflight_warning_when_curl_fallback_is_available(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Preflight should allow runs when Eastmoney is reachable through curl fallback."""
+    monkeypatch.setattr("core.runtime.data_source_preflight.check_duckdb_access", lambda path: {"ok": True, "message": "ok"})
+    monkeypatch.setattr("core.runtime.data_source_preflight.detect_proxy_settings", lambda: {"has_proxy": True, "message": "proxy"})
+    monkeypatch.setattr(
+        "core.runtime.data_source_preflight.check_eastmoney_dns",
+        lambda: {"status": "ok", "ipv4_status": "available", "ipv6_status": "available"},
+    )
+    monkeypatch.setattr(
+        "core.runtime.data_source_preflight.check_eastmoney_kline",
+        lambda **kwargs: {
+            "ok": True,
+            "status": "warning",
+            "warning_reason": "Python 请求失败但 curl fallback 可用",
+            "curl_fallback_available": True,
+            "message": "partial",
+        },
+    )
+
+    result = run_data_source_preflight(settings=_settings(tmp_path), skip_network=False)
+
+    assert result["status"] == "warning"
+    assert result["ok"] is True
+    assert result["preflight_allows_run"] is True
+    assert result["curl_fallback_available"] is True
+    assert "curl fallback" in result["preflight_warning_reason"]
+
+
 def test_streamlit_has_network_diagnosis_button() -> None:
     """Streamlit should expose a safe network diagnosis command without auto-running updates."""
     source = Path("web/streamlit_app.py").read_text(encoding="utf-8")

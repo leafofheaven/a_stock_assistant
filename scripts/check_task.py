@@ -3227,6 +3227,20 @@ def check_task57b(root: Path) -> list[str]:
         "update_limit",
         "allow_intraday",
         "intraday_warning",
+        "formal_run",
+        "formal_run_note",
+        "formal_success_date",
+        "update_mode",
+        "daily_incremental",
+        "full_backfill",
+        "recent_days",
+        "max_update_symbols",
+        "update_failed_symbol_count",
+        "update_continued_after_partial_failure",
+        "preflight_allows_run",
+        "curl_fallback_available",
+        "preflight_warning_reason",
+        "_is_formal_success_for_date",
         "latest_completed_trade_date",
         "research_trade_date",
         "stage_timeout_seconds",
@@ -3243,7 +3257,7 @@ def check_task57b(root: Path) -> list[str]:
             failures.append(f"run_scheduled_daily_update.py is missing Task 57B phrase: {phrase}.")
 
     launchd_source = read_source(root / "core/jobs/install_scheduled_daily_update.py")
-    for phrase in ["LaunchAgent", "StartCalendarInterval", "Hour", "Minute", "run_scheduled_daily_update", "--catch-up", "launchctl", "dry_run"]:
+    for phrase in ["LaunchAgent", "StartCalendarInterval", "Hour", "Minute", "run_scheduled_daily_update", "--catch-up", "--update-mode", "daily_incremental", "launchctl", "dry_run"]:
         if phrase not in launchd_source:
             failures.append(f"install_scheduled_daily_update.py is missing {phrase}.")
     uninstall_source = read_source(root / "core/jobs/uninstall_scheduled_daily_update.py")
@@ -3285,6 +3299,22 @@ def check_task57b(root: Path) -> list[str]:
         "test_force_before_scheduled_time_uses_previous_completed_trade_date_by_default",
         "test_allow_intraday_uses_current_trade_date_with_warning",
         "test_scheduled_after_1800_uses_current_trade_date",
+        "test_intraday_daily_incremental_does_not_set_formal_success_date",
+        "test_intraday_force_does_not_block_1800_formal_run",
+        "test_allow_intraday_sets_formal_run_false",
+        "test_before_scheduled_time_uses_previous_completed_trade_date_unless_allow_intraday",
+        "test_formal_success_only_after_scheduled_time",
+        "test_acceptance_run_does_not_block_formal_scheduled_run",
+        "test_intraday_run_does_not_block_formal_scheduled_run",
+        "test_update_limit_run_does_not_set_formal_success",
+        "test_formal_success_blocks_duplicate_formal_run",
+        "test_skipped_status_from_acceptance_state_does_not_clear_previous_formal_fields",
+        "test_scheduled_update_defaults_to_daily_incremental",
+        "test_daily_incremental_partial_symbol_failures_continue_workflow",
+        "test_preflight_warning_allows_daily_incremental_when_curl_succeeds",
+        "test_preflight_fails_when_python_and_curl_all_fail",
+        "test_preflight_records_curl_fallback_available",
+        "test_preflight_warning_message_in_text_output",
         "test_no_algorithm_changes",
     ]:
         if phrase not in tests_source:
@@ -3295,9 +3325,17 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in verify_source:
             failures.append(f"verify_task.py task57b is missing {phrase}.")
     docs_source = read_source(root / "docs/commands_reference.md")
-    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "18:00", "自动更新状态", "--update-limit 50", "--allow-intraday", "research_trade_date", "last_heartbeat_at", "DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS"]:
+    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "18:00", "自动更新状态", "--update-limit 50", "--allow-intraday", "--update-mode daily_incremental", "full_backfill", "research_trade_date", "last_heartbeat_at", "DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS"]:
         if phrase not in docs_source:
             failures.append(f"docs/commands_reference.md is missing Task 57B wording: {phrase}.")
+    diagnose_source = read_source(root / "core/jobs/diagnose_update_batch.py")
+    for phrase in ["latest_price_symbol_count", "history_complete_symbol_count", "elder_ready_symbol_count", "latest_updated_but_history_incomplete_count"]:
+        if phrase not in diagnose_source:
+            failures.append(f"diagnose_update_batch.py is missing latest/history coverage field: {phrase}.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["最新数据覆盖", "历史数据完整度", "模块可用性", "本次更新结果"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing data update status section: {phrase}.")
     env_source = read_source(root / ".env.example")
     for phrase in ["DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS", "FULL_BATCH_UPDATE_TIMEOUT_SECONDS"]:
         if phrase not in env_source:
@@ -3306,6 +3344,10 @@ def check_task57b(root: Path) -> list[str]:
     for phrase in ["data/", "reports/*.xlsx", "*.log"]:
         if phrase not in gitignore_source:
             failures.append(f".gitignore should ignore Task 57B runtime artifact: {phrase}.")
+    preflight_source = read_source(root / "core/runtime/data_source_preflight.py")
+    for phrase in ["curl_fallback_available", "preflight_warning_reason", "preflight_allows_run", "curl_ipv4", "curl_ipv6"]:
+        if phrase not in preflight_source:
+            failures.append(f"data_source_preflight.py is missing fallback preflight phrase: {phrase}.")
     return failures
 
 
