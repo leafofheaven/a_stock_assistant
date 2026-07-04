@@ -21,6 +21,7 @@ from core.explain.selection_logic import (
     get_selection_logic_summary,
 )
 from core.jobs.diagnose_local_state import diagnose_local_state
+from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.reporting.selection_review_report import (
     REVIEW_CHECKLIST,
     load_latest_selection_review_report,
@@ -40,6 +41,7 @@ from core.external_positions.importer import position_template_frame, trade_temp
 ALLOWED_COMMANDS.setdefault("run_full_batch_update", [sys.executable, "-m", "core.jobs.run_full_batch_update"])
 ALLOWED_COMMANDS.setdefault("preflight_data_source", [sys.executable, "-m", "core.jobs.preflight_data_source"])
 ALLOWED_COMMANDS.setdefault("diagnose_data_source_network", [sys.executable, "-m", "core.jobs.diagnose_data_source_network"])
+ALLOWED_COMMANDS.setdefault("refresh_data_quality_status", [sys.executable, "-m", "core.jobs.refresh_data_quality_status"])
 ALLOWED_COMMANDS.setdefault("run_scheduled_daily_update", [sys.executable, "-m", "core.jobs.run_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("install_scheduled_daily_update", [sys.executable, "-m", "core.jobs.install_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("uninstall_scheduled_daily_update", [sys.executable, "-m", "core.jobs.uninstall_scheduled_daily_update"])
@@ -1553,231 +1555,184 @@ def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:
 
 def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     st.subheader("数据更新状态")
-    st.info("本页用于补充 / 更新 full 股票池行情数据。会执行数据源预检、DuckDB 锁检测、代理检测，通过后才批量更新。")
-    status = summarize_update_status(tables)
-    st.metric("最新行情日期", status["latest_price_date"] or "暂无")
-    st.metric("最新因子日期", status["latest_factor_date"] or "暂无")
-    st.metric("最新选股日期", status["latest_selection_date"] or "暂无")
-    st.write("最新数据覆盖")
-    st.write(
-        {
-            "latest_trade_date": status.get("latest_trade_date") or status["latest_price_date"] or "暂无",
-            "configured_symbol_count": status["configured_symbol_count"],
-            "latest_price_symbol_count": status.get("latest_price_symbol_count", 0),
-            "missing_latest_price_symbol_count": status.get("missing_latest_price_symbol_count", 0),
-            "latest_price_coverage_rate": f"{status.get('latest_price_coverage_rate', 0.0):.2%}",
-        }
-    )
-    st.write("历史数据完整度")
-    st.write(
-        {
-            "history_complete_symbol_count": status.get("history_complete_symbol_count", 0),
-            "history_incomplete_symbol_count": status.get("history_incomplete_symbol_count", 0),
-            "history_missing_symbol_count": status.get("history_missing_symbol_count", 0),
-            "available_days_20d_count": status.get("available_days_20d_count", 0),
-            "available_days_60d_count": status.get("available_days_60d_count", 0),
-            "available_days_120d_count": status.get("available_days_120d_count", 0),
-            "available_days_252d_count": status.get("available_days_252d_count", 0),
-        }
-    )
-    st.write("模块可用性")
-    st.write(
-        {
-            "factor_ready_symbol_count": status.get("factor_ready_symbol_count", status.get("selection_ready_count", 0)),
-            "elder_ready_symbol_count": status.get("elder_ready_symbol_count", 0),
-            "entry_zone_ready_symbol_count": status.get("entry_zone_ready_symbol_count", 0),
-            "lookback_ready_symbol_count": status.get("lookback_ready_symbol_count", 0),
-            "可运行选股股票数量": status.get("selection_ready_count", 0),
-            "可运行回测股票数量": status.get("backtest_ready_count", 0),
-        }
-    )
-    st.write("本次更新结果 / 历史补库状态")
-    st.write(
-        {
-            "已有任意行情股票数量": status["priced_symbol_count"],
-            "完全缺行情股票数量": status.get("completely_missing_price_count", status["missing_symbol_count"]),
-            "最新行情不足数量": status["stale_symbol_count"],
-            "更新失败数量": status.get("update_failed_count", 0),
-            "空数据 / 暂不可用股票数量": status.get("empty_data_count", 0),
-            "网络失败股票数量": status.get("network_failed_count", 0),
-            "任意行情覆盖率": f"{status['coverage_rate']:.2%}",
-            "全市场状态": status.get("batch_status") or "暂无",
-        }
-    )
-    if status.get("latest_updated_but_history_incomplete_count"):
-        st.info(
-            "部分股票已有最新交易日行情但历史区间不足；daily_incremental 不会因此失败，可用 full_backfill 或页面补数据修复历史缺口。"
-        )
-        st.write(
-            {
-                "latest_updated_but_history_incomplete_count": status.get("latest_updated_but_history_incomplete_count", 0),
-                "examples": status.get("latest_updated_but_history_incomplete_examples", []),
-            }
-        )
-    if status.get("history_complete_but_latest_missing_count"):
-        st.warning("部分股票历史数据较完整，但最新交易日行情未更新。")
-        st.write(
-            {
-                "history_complete_but_latest_missing_count": status.get("history_complete_but_latest_missing_count", 0),
-                "examples": status.get("history_complete_but_latest_missing_examples", []),
-            }
-        )
-    if status.get("bse_filter_note"):
-        st.caption(status["bse_filter_note"])
-    if status.get("batch_status") == "全市场数据未完成":
-        st.warning("全市场数据未完成：当前结果只基于本地已有行情股票。请在本页下方“全市场批量补数据”区域继续补齐缺行情或最新不足的股票。")
-    st.write({"是否 sample 数据": status["is_sample_data"], "是否真实数据": status["is_real_data"]})
-    basic_quality = status.get("basic_quality", {})
-    if basic_quality:
-        st.write("基础信息 / 估值字段完整率")
-        quality_rows = []
-        for group_name, group in basic_quality.items():
-            for field, stats in group.items():
-                quality_rows.append(
-                    {
-                        "table": group_name,
-                        "field": field,
-                        "non_null_rate": stats["non_null_rate"],
-                        "missing_count": stats["missing_count"],
-                    }
-                )
-        display_dataframe(st, pd.DataFrame(quality_rows))
-    local_state = status.get("local_state")
-    if isinstance(local_state, dict) and local_state:
-        st.write("本地状态 / 备份")
-        st.write(
-            {
-                "DuckDB 路径": local_state.get("duckdb_path"),
-                "DuckDB 文件大小": local_state.get("duckdb_size"),
-                "核心表行数": local_state.get("table_counts"),
-                "观察池记录数": local_state.get("review_decisions_rows"),
-                "复核历史记录数": local_state.get("review_decision_history_rows"),
-                "watchlist snapshots": local_state.get("watchlist_snapshots_rows"),
-                "reports 文件数量": local_state.get("reports_count"),
-                "backups 数量": local_state.get("backups_count"),
-                "最近备份时间": local_state.get("latest_backup_time") or "暂无",
-                "最近备份路径": local_state.get("latest_backup_path") or "暂无",
-            }
-        )
-        st.caption("个人本地工具，建议定期备份。")
-    if status["field_missing"]:
-        st.warning(f"存在字段缺失：{status['field_missing']}")
-    st.write("核心数据表状态")
-    display_dataframe(st, pd.DataFrame(status["table_rows"].items(), columns=["table", "rows"]))
-    report = status.get("latest_workflow_report")
-    if report:
-        st.write("最近 workflow 报告")
-        st.write(
-            {
-                "最近运行时间": report.get("run_time") or "暂无",
-                "整体状态": report.get("overall_status") or "暂无",
-                "数据来源": report.get("data_provider") or "暂无",
-                "最新行情日期": report.get("latest_price_date") or "暂无",
-                "覆盖率": _format_optional_rate(report.get("coverage_rate")),
-                "候选股票数量": report.get("candidate_count", 0),
-                "是否回退 sample": bool(report.get("fallback_to_sample")),
-                "报告路径": report.get("path"),
-            }
-        )
-    daily_report = status.get("latest_daily_workflow_report")
-    if daily_report:
-        st.write("最近 daily_workflow 日报")
-        st.write(
-            {
-                "最近运行时间": daily_report.get("run_time") or "暂无",
-                "整体状态": daily_report.get("overall_status") or "暂无",
-                "数据来源": daily_report.get("data_provider") or "暂无",
-                "最新行情日期": daily_report.get("latest_price_date") or "暂无",
-                "报告路径": daily_report.get("path"),
-            }
-        )
-        top_candidates = daily_report.get("top_candidates") or []
-        if top_candidates:
-            st.write("最近日报 Top10 候选")
-            display_dataframe(st, pd.DataFrame(top_candidates))
-        watchlist_items = daily_report.get("watchlist") or []
-        if watchlist_items:
-            st.write("最近日报观察池摘要")
-            display_dataframe(st, pd.DataFrame(watchlist_items))
-    selection_review = status.get("latest_selection_review_report")
-    if selection_review:
-        st.write("最近 selection_review 报告")
-        st.write(
-            {
-                "最近运行时间": selection_review.get("generated_at") or "暂无",
-                "数据来源": selection_review.get("data_source") or "暂无",
-                "最新行情日期": selection_review.get("latest_price_date") or "暂无",
-                "候选股票数量": selection_review.get("candidate_count", 0),
-                "是否回退 sample": bool(selection_review.get("fallback_to_sample")),
-                "报告路径": selection_review.get("path"),
-            }
-        )
-    review_template = status.get("latest_review_template")
-    if review_template:
-        st.write("最近 review_template")
-        st.write(review_template)
-    watchlist_report = status.get("latest_watchlist_report")
-    if watchlist_report:
-        st.write("最近 watchlist 报告")
-        st.write(watchlist_report)
-    watchlist_df = _watchlist_from_tables(tables)
-    if not watchlist_df.empty:
-        st.write("观察池当前状态")
-        watchlist_columns = [
-            "ts_code",
-            "name",
-            "decision",
-            "review_status",
-            "reason",
-            "notes",
-            "industry",
-            "pe",
-            "pb",
-            "latest_action_at",
-            "history_count",
-        ]
-        display_dataframe(st, watchlist_df, columns=watchlist_columns)
-    history_df = tables.get("review_decision_history", pd.DataFrame())
-    if isinstance(history_df, pd.DataFrame) and not history_df.empty:
-        st.write("最近复核历史")
-        history_display = history_df.sort_values("created_at", ascending=False).head(10)
-        history_columns = [
-            "created_at",
-            "ts_code",
-            "name",
-            "action_type",
-            "old_decision",
-            "new_decision",
-            "old_review_status",
-            "new_review_status",
-            "reason",
-        ]
-        display_dataframe(st, history_display, columns=history_columns)
-    tracking_report = status.get("latest_watchlist_tracking_report")
-    if tracking_report:
-        st.write("最近 watchlist_tracking 报告")
-        st.write(tracking_report)
-    snapshot_df = tables.get("_watchlist_snapshot", pd.DataFrame())
-    if isinstance(snapshot_df, pd.DataFrame) and not snapshot_df.empty:
-        st.write("观察池最新 snapshot")
-        display_columns = [
-            "ts_code",
-            "name",
-            "snapshot_date",
-            "latest_trade_date",
-            "latest_close",
-            "total_score",
-            "trend_score",
-            "momentum_score",
-            "liquidity_score",
-            "volatility_score",
-            "data_quality_note",
-        ]
-        display_dataframe(st, snapshot_df, columns=display_columns)
-    st.info(status["last_job_status"])
-    _render_scheduled_update_section(st)
-    _render_lookback_analysis_section(st)
+    st.info("本页用于补充 / 更新 full 股票池行情数据；当前主视图只展示统一数据质量快照和更新入口。页面启动不会自动联网、写库或生成 Excel。")
+    legacy_status = summarize_update_status(tables)
+    scheduled = read_scheduled_status(DEFAULT_STATUS_PATH)
+    snapshot = _status_page_quality_snapshot(tables, scheduled, legacy_status)
+    status = {**legacy_status, **snapshot}
+
+    _render_status_quality_main(st, scheduled, status)
+    _render_status_buttons(st)
     _render_full_batch_update_section(st, status)
+    _render_status_advanced_sections(st, tables, scheduled, legacy_status)
+
+
+def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: dict[str, Any], legacy_status: dict[str, Any]) -> dict[str, Any]:
+    """Return the authoritative quality snapshot for the status page."""
+    if scheduled.get("data_quality_snapshot_source") and scheduled.get("latest_daily_price_symbol_count") is not None:
+        return dict(scheduled)
+    db_path = str(tables.get("_duckdb_path") or legacy_status.get("duckdb_path") or "")
+    target_date = str(
+        scheduled.get("latest_completed_trade_date")
+        or scheduled.get("research_trade_date")
+        or legacy_status.get("latest_trade_date")
+        or legacy_status.get("latest_price_date")
+        or ""
+    )
+    if db_path and target_date:
+        try:
+            return build_data_quality_snapshot(
+                db_path=db_path,
+                research_trade_date=target_date,
+                latest_completed_trade_date=target_date,
+            )
+        except Exception:
+            pass
+    return {
+        "data_quality_status": "unknown",
+        "formal_result_usable": False,
+        "formal_result_warning_reason": "当前缺少数据质量快照，请运行刷新数据状态或检查 DuckDB。",
+        "configured_symbol_count": int(legacy_status.get("configured_symbol_count", 0) or 0),
+        "research_trade_date": target_date,
+        "latest_completed_trade_date": target_date,
+    }
+
+
+def _render_status_quality_main(st: Any, scheduled: dict[str, Any], status: dict[str, Any]) -> None:
+    """Render only the default data-quality dashboard sections."""
+    quality_status = status.get("data_quality_status") or "unknown"
+    if quality_status in {"poor", "failed", "unknown"}:
+        st.error("流程完成不等于数据完整；当前结果不可作为正式全市场研究结果。")
+    elif quality_status == "warning":
+        st.warning("数据基本可用但仍有缺口，请结合覆盖率人工复核。")
+    else:
+        st.success("最新交易日数据覆盖满足正式研究使用口径。")
+    st.write("顶部结论卡片")
+    display_dataframe(st, pd.DataFrame([_status_conclusion_row(scheduled, status)]))
+    st.write("最新交易日覆盖")
+    display_dataframe(st, _status_latest_coverage_frame(status))
+    st.write("历史数据完整度")
+    display_dataframe(st, _status_history_frame(status))
+    st.info("任意历史行情覆盖不等于最新交易日覆盖；历史完整按 252 日窗口统计。")
+    st.write("模块可用性")
+    display_dataframe(st, _status_module_frame(status))
+    st.write("本次运行结果")
+    display_dataframe(st, pd.DataFrame([_status_run_result_row(scheduled)]))
+
+
+def _status_conclusion_row(scheduled: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "流程状态": scheduled.get("status") or "暂无",
+        "当前阶段": scheduled.get("stage") or "暂无",
+        "研究交易日": status.get("latest_completed_trade_date") or status.get("research_trade_date") or scheduled.get("research_trade_date") or "暂无",
+        "数据质量": status.get("data_quality_status") or "unknown",
+        "正式全市场研究结果可用": "是" if status.get("formal_result_usable") is True else "否",
+        "主要提示": status.get("formal_result_warning_reason") or scheduled.get("failure_reason") or "暂无",
+    }
+
+
+def _status_latest_coverage_frame(status: dict[str, Any]) -> pd.DataFrame:
+    total = int(status.get("configured_symbol_count", 0) or 0)
+    rows = []
+    for label, count_key, missing_key, rate_key in [
+        ("daily_price", "latest_daily_price_symbol_count", "missing_latest_daily_price_symbol_count", "latest_daily_price_coverage_rate"),
+        ("daily_basic", "latest_daily_basic_symbol_count", "missing_latest_daily_basic_symbol_count", "latest_daily_basic_coverage_rate"),
+        ("adj_factor", "latest_adj_factor_symbol_count", "missing_latest_adj_factor_symbol_count", "latest_adj_factor_coverage_rate"),
+        ("全部必需表", "latest_all_required_tables_symbol_count", "missing_latest_all_required_tables_symbol_count", "latest_all_required_tables_coverage_rate"),
+    ]:
+        count = int(status.get(count_key, 0) or 0)
+        rate = float(status.get(rate_key, 0.0) or 0.0)
+        rows.append({"表名": label, "已覆盖": f"{count} / {total}", "缺失": int(status.get(missing_key, max(total - count, 0)) or 0), "覆盖率": f"{rate:.2%}"})
+    return pd.DataFrame(rows)
+
+
+def _status_history_frame(status: dict[str, Any]) -> pd.DataFrame:
+    total = int(status.get("configured_symbol_count", 0) or 0)
+    any_count = int(status.get("any_daily_price_symbol_count", 0) or 0)
+    any_rate = float(status.get("any_daily_price_coverage_rate", 0.0) or 0.0)
+    return pd.DataFrame(
+        [
+            {"指标": "任意历史行情覆盖", "数量": f"{any_count} / {total}", "说明": f"{any_rate:.2%}，数据库任意日期出现过行情"},
+            {"指标": "完全缺行情", "数量": int(status.get("history_missing_symbol_count", 0) or 0), "说明": "配置股票池中从未有 daily_price 的股票"},
+            {"指标": "历史完整", "数量": int(status.get("history_complete_symbol_count", 0) or 0), "说明": "本地行情行数达到 252 日口径"},
+            {"指标": "历史不足", "数量": int(status.get("history_incomplete_symbol_count", 0) or 0), "说明": "有行情但不足 252 日"},
+            {"指标": "20 日可用", "数量": int(status.get("available_days_20d_count", 0) or 0), "说明": "可支撑短期观察"},
+            {"指标": "60 日可用", "数量": int(status.get("available_days_60d_count", 0) or 0), "说明": "可支撑买入区间 / 埃尔德基础判断"},
+            {"指标": "120 日可用", "数量": int(status.get("available_days_120d_count", 0) or 0), "说明": "可支撑较长周期观察"},
+            {"指标": "252 日可用", "数量": int(status.get("available_days_252d_count", 0) or 0), "说明": "可支撑一年窗口观察"},
+        ]
+    )
+
+
+def _status_module_frame(status: dict[str, Any]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"模块": "综合分", "可用股票数量": int(status.get("factor_ready_symbol_count", 0) or 0), "说明": "最新交易日 factor_scores 可用"},
+            {"模块": "埃尔德复核", "可用股票数量": int(status.get("elder_ready_symbol_count", 0) or 0), "说明": "最新观察池 / 复核快照可用"},
+            {"模块": "买入区间", "可用股票数量": int(status.get("entry_zone_ready_symbol_count", 0) or 0), "说明": "买入区间快照可用"},
+            {"模块": "自动回看", "可用股票数量": int(status.get("lookback_ready_symbol_count", 0) or 0), "说明": "候选且历史样本足够"},
+        ]
+    )
+
+
+def _status_run_result_row(scheduled: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "update_mode": scheduled.get("update_mode") or "暂无",
+        "started_at": scheduled.get("started_at") or "暂无",
+        "finished_at": scheduled.get("finished_at") or "暂无",
+        "processed_symbol_count": scheduled.get("processed_symbol_count", 0),
+        "total_symbol_count": scheduled.get("total_symbol_count", 0),
+        "update_failed_symbol_count": scheduled.get("update_failed_symbol_count", 0),
+        "empty_data_symbol_count": scheduled.get("empty_data_symbol_count", 0),
+        "network_timeout_count": scheduled.get("network_timeout_count", 0),
+        "workbook_path": scheduled.get("workbook_path") or "暂无",
+    }
+
+
+def _render_status_buttons(st: Any) -> None:
+    st.write("按钮区")
+    st.markdown("**1. 只读状态 / 诊断**")
+    st.caption("不联网；不写 DuckDB；不生成 Excel；不改变今日研究结果。")
+    col1, col2, col3 = st.columns(3)
+    if col1.button("刷新页面数据质量", key="refresh_data_quality_status_button"):
+        _run_streaming_console_action(st, "刷新页面数据质量", "refresh_data_quality_status", ["--format", "text"], success_message="数据质量状态刷新完成。请刷新页面查看最新结果。")
+    if col2.button("运行数据质量诊断", key="run_real_data_diagnostic"):
+        _run_streaming_console_action(st, "运行数据质量诊断", "diagnose_real_data", [], success_message="数据质量诊断完成。")
+    if col3.button("运行批量更新诊断", key="run_update_batch_diagnostic"):
+        _run_streaming_console_action(st, "运行批量更新诊断", "diagnose_update_batch", [], success_message="批量更新诊断完成。")
+    st.markdown("**2. daily_incremental：补跑每日自动更新**")
+    st.caption("会联网；会写 DuckDB；会生成每日研究 Excel；会更新今日研究结果。")
+    if st.button("手动补跑 18:00 自动更新", key="scheduled_daily_update_manual_catchup"):
+        _run_streaming_console_action(st, "手动补跑 18:00 自动更新", "run_scheduled_daily_update", ["--force", "--format", "text"], success_message="自动更新补跑命令执行完成。请刷新页面查看最新状态。")
+
+
+def _render_status_advanced_sections(st: Any, tables: dict[str, pd.DataFrame], scheduled: dict[str, Any], status: dict[str, Any]) -> None:
+    with st.expander("高级：原始自动更新状态 JSON", expanded=False):
+        if scheduled:
+            st.json(scheduled)
+        else:
+            st.info("暂无自动更新状态 JSON。")
+    with st.expander("高级：旧版诊断信息", expanded=False):
+        st.write({"是否 sample 数据": status.get("is_sample_data"), "是否真实数据": status.get("is_real_data"), "字段缺失": status.get("field_missing", {})})
+        display_dataframe(st, pd.DataFrame(status.get("table_rows", {}).items(), columns=["table", "rows"]))
+    with st.expander("高级：最近报告文件", expanded=False):
+        for label, key in [
+            ("workflow", "latest_workflow_report"),
+            ("daily_workflow", "latest_daily_workflow_report"),
+            ("selection_review", "latest_selection_review_report"),
+            ("watchlist", "latest_watchlist_report"),
+            ("watchlist_tracking", "latest_watchlist_tracking_report"),
+        ]:
+            st.write({label: status.get(key) or "暂无"})
+    with st.expander("高级：观察池明细", expanded=False):
+        watchlist_df = _watchlist_from_tables(tables)
+        if watchlist_df.empty:
+            st.info("暂无观察池明细。")
+        else:
+            display_dataframe(st, watchlist_df)
+    with st.expander("高级：本地数据库和备份", expanded=False):
+        local_state = status.get("local_state")
+        st.write(local_state if isinstance(local_state, dict) and local_state else "暂无本地状态 / 备份信息。")
 
 
 def _render_scheduled_update_section(st: Any) -> None:
@@ -1820,7 +1775,7 @@ def _render_scheduled_update_section(st: Any) -> None:
         elif scheduled.get("workbook_path"):
             st.warning("最新自动更新 Excel 文件不存在，可能已被清理，请重新运行自动更新。")
     st.caption("页面启动不会自动执行自动更新；手动补跑会先做数据源预检，失败时不会启动重型更新。")
-    if st.button("手动补跑一次自动更新", key="scheduled_daily_update_manual_catchup"):
+    if st.button("手动补跑一次自动更新", key="legacy_scheduled_daily_update_manual_catchup"):
         _run_streaming_console_action(
             st,
             "手动补跑一次自动更新",
@@ -1893,38 +1848,25 @@ def _read_lookback_status() -> dict[str, Any] | None:
 def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
     """Render page controls for bounded full-universe batch updates."""
     st.subheader("全市场批量补数据")
-    st.caption("仅供个人研究使用，不自动交易。页面启动时不会自动更新，只有点击按钮才会联网补数据。")
-    st.write("数据源网络诊断")
-    st.caption("诊断会检查 DuckDB、代理、DNS、东方财富 K 线接口、Python 请求和 curl IPv4 / IPv6 路径；诊断失败不会自动启动数据更新。")
-    if st.button("运行数据源网络诊断", key="data_source_network_diagnosis"):
-        _run_streaming_console_action(
-            st,
-            "运行数据源网络诊断",
-            "diagnose_data_source_network",
-            ["--format", "text"],
-            success_message="数据源网络诊断完成。请根据主要结论决定是否继续补数据。",
+    st.caption("会联网；补数据按钮会写 DuckDB；不生成 Excel；不会直接重算今日研究结果，需后续本地重算或每日自动更新。")
+    display_dataframe(st, pd.DataFrame([_full_batch_summary_row(status)]))
+    with st.expander("高级：全市场批量补数据原始诊断", expanded=False):
+        st.write(
+            {
+                "数据源": "akshare",
+                "数据库路径": status.get("duckdb_path") or "暂无",
+                "full 股票池数量": status.get("configured_symbol_count", 0),
+                "最新数据覆盖股票数量": status.get("latest_daily_price_symbol_count", 0),
+                "最新数据覆盖率": f"{float(status.get('latest_daily_price_coverage_rate', 0.0) or 0.0):.2%}",
+                "已有任意行情股票数量": status.get("any_daily_price_symbol_count", 0),
+                "任意行情覆盖率": f"{float(status.get('any_daily_price_coverage_rate', 0.0) or 0.0):.2%}",
+                "完全缺行情股票数量": status.get("history_missing_symbol_count", 0),
+                "历史不足但已有最新行情数量": status.get("latest_updated_but_history_incomplete_count", 0),
+                "更新失败数量": status.get("update_failed_count", 0),
+                "空数据 / 暂不可用股票数量": status.get("empty_data_count", 0),
+                "网络失败股票数量": status.get("network_failed_count", 0),
+            }
         )
-    st.write(
-        {
-            "数据源": "akshare",
-            "数据库路径": status.get("duckdb_path") or "暂无",
-            "full 股票池数量": status.get("configured_symbol_count", 0),
-            "最新数据覆盖股票数量": status.get("latest_price_symbol_count", 0),
-            "最新数据覆盖率": f"{status.get('latest_price_coverage_rate', 0.0):.2%}",
-            "已有任意行情股票数量": status.get("priced_symbol_count", 0),
-            "任意行情覆盖率": f"{status.get('coverage_rate', 0.0):.2%}",
-            "完全缺行情股票数量": status.get("completely_missing_price_count", status.get("missing_symbol_count", 0)),
-            "历史不足但已有最新行情数量": status.get("latest_updated_but_history_incomplete_count", 0),
-            "最新行情不足数量": status.get("stale_symbol_count", 0),
-            "可运行选股股票数量": status.get("selection_ready_count", 0),
-            "更新失败数量": status.get("update_failed_count", 0),
-            "空数据 / 暂不可用股票数量": status.get("empty_data_count", 0),
-            "网络失败股票数量": status.get("network_failed_count", 0),
-            "最新行情日期": status.get("latest_price_date") or "暂无",
-            "最新因子日期": status.get("latest_factor_date") or "暂无",
-            "最新选股日期": status.get("latest_selection_date") or "暂无",
-        }
-    )
     st.info("全市场更新可能耗时较长；建议先用 50 或 200 只小批量确认网络稳定。")
     mode_label = st.selectbox(
         "更新模式",
@@ -1954,20 +1896,60 @@ def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
         skip_empty_unavailable=skip_empty,
         preflight=preflight,
     )
-    st.write(
-        {
-            "FULL_UPDATE_MAX_SYMBOLS": max_symbols,
-            "FULL_UPDATE_BATCH_SIZE": batch_size,
-            "FULL_UPDATE_LOOKBACK_DAYS": lookback_days,
-            "FULL_UPDATE_MAX_RETRIES": max_retries,
-            "说明": "本次未处理数量表示 full 股票池中本次未纳入计划的股票，不代表永久跳过。",
-        }
-    )
+    with st.expander("高级：本次补数据命令参数", expanded=False):
+        st.write(
+            {
+                "FULL_UPDATE_MAX_SYMBOLS": max_symbols,
+                "FULL_UPDATE_BATCH_SIZE": batch_size,
+                "FULL_UPDATE_LOOKBACK_DAYS": lookback_days,
+                "FULL_UPDATE_MAX_RETRIES": max_retries,
+                "说明": "本次未处理数量表示 full 股票池中本次未纳入计划的股票，不代表永久跳过。",
+            }
+        )
     if st.button("运行数据源预检", key="full_update_preflight"):
         _run_streaming_console_action(st, "运行数据源预检", "preflight_data_source", [], success_message="预检完成。")
-    if st.button("开始补数据", key="full_batch_update_start"):
+    col1, col2, col3 = st.columns(3)
+    if col1.button("小批量补数据 50 只", key="full_batch_update_50"):
+        small_args = build_full_batch_update_args(
+            mode_label=mode_label,
+            max_symbols=50,
+            batch_size=batch_size,
+            lookback_days=lookback_days,
+            max_retries=max_retries,
+            skip_empty_unavailable=skip_empty,
+            preflight=preflight,
+        )
         st.info("点击后会先做 DuckDB 锁、代理和东方财富 K 线接口预检；预检失败不会启动批量更新。")
-        _run_streaming_console_action(st, "全市场批量补数据", "run_full_batch_update", args, success_message="批量补数据命令执行完成。请刷新页面查看覆盖率变化。")
+        _run_streaming_console_action(st, "小批量补数据 50 只", "run_full_batch_update", small_args, success_message="小批量补数据完成。请刷新页面查看覆盖率变化。")
+    if col2.button("小批量补数据 200 只", key="full_batch_update_200"):
+        small_args = build_full_batch_update_args(
+            mode_label=mode_label,
+            max_symbols=200,
+            batch_size=batch_size,
+            lookback_days=lookback_days,
+            max_retries=max_retries,
+            skip_empty_unavailable=skip_empty,
+            preflight=preflight,
+        )
+        st.info("点击后会先做 DuckDB 锁、代理和东方财富 K 线接口预检；预检失败不会启动批量更新。")
+        _run_streaming_console_action(st, "小批量补数据 200 只", "run_full_batch_update", small_args, success_message="小批量补数据完成。请刷新页面查看覆盖率变化。")
+    if col3.button("按当前参数开始补数据", key="full_batch_update_start"):
+        st.info("点击后会先做 DuckDB 锁、代理和东方财富 K 线接口预检；预检失败不会启动批量更新。")
+        _run_streaming_console_action(st, "按当前参数开始补数据", "run_full_batch_update", args, success_message="批量补数据命令执行完成。请刷新页面查看覆盖率变化。")
+
+
+def _full_batch_summary_row(status: dict[str, Any]) -> dict[str, Any]:
+    total = int(status.get("configured_symbol_count", 0) or 0)
+    any_count = int(status.get("any_daily_price_symbol_count", 0) or 0)
+    latest_count = int(status.get("latest_daily_price_symbol_count", 0) or 0)
+    return {
+        "数据源": "akshare",
+        "full 股票池数量": total,
+        "任意历史行情覆盖": f"{any_count} / {total} ({float(status.get('any_daily_price_coverage_rate', 0.0) or 0.0):.2%})",
+        "最新交易日覆盖": f"{latest_count} / {total} ({float(status.get('latest_daily_price_coverage_rate', 0.0) or 0.0):.2%})",
+        "完全缺行情": int(status.get("history_missing_symbol_count", 0) or 0),
+        "建议": "建议先小批量 50 或 200 只确认网络稳定。",
+    }
 
 
 def build_full_batch_update_args(

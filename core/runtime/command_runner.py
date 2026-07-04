@@ -22,6 +22,7 @@ ALLOWED_COMMANDS: dict[str, list[str]] = {
     "run_daily_workflow": [sys.executable, "-m", "core.jobs.run_daily_workflow"],
     "run_daily_selection": [sys.executable, "-m", "core.jobs.run_daily_selection"],
     "diagnose_data_quality": [sys.executable, "-m", "core.jobs.diagnose_data_quality"],
+    "refresh_data_quality_status": [sys.executable, "-m", "core.jobs.refresh_data_quality_status"],
     "diagnose_factors": [sys.executable, "-m", "core.jobs.diagnose_factors"],
     "refresh_watchlist_scores": [sys.executable, "-m", "core.jobs.refresh_watchlist_scores"],
     "diagnose_watchlist": [sys.executable, "-m", "core.jobs.diagnose_watchlist"],

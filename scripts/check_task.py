@@ -3196,11 +3196,14 @@ def check_task57b(root: Path) -> list[str]:
         root,
         [
             "core/jobs/run_scheduled_daily_update.py",
+            "core/jobs/refresh_data_quality_status.py",
+            "core/diagnostics/data_quality_snapshot.py",
             "core/jobs/install_scheduled_daily_update.py",
             "core/jobs/uninstall_scheduled_daily_update.py",
             "core/notifications/macos.py",
             "core/notifications/email.py",
             "tests/test_scheduled_daily_update.py",
+            "tests/test_task57c_data_quality_snapshot.py",
             "scripts/verify_task.py",
             "web/streamlit_app.py",
         ],
@@ -3266,16 +3269,40 @@ def check_task57b(root: Path) -> list[str]:
             failures.append(f"uninstall_scheduled_daily_update.py is missing {phrase}.")
 
     command_source = read_source(root / "core/runtime/command_runner.py")
-    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "uninstall_scheduled_daily_update"]:
+    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "uninstall_scheduled_daily_update", "refresh_data_quality_status"]:
         if phrase not in command_source:
             failures.append(f"command_runner.py is missing {phrase}.")
+
+    snapshot_source = read_source(root / "core/diagnostics/data_quality_snapshot.py")
+    for phrase in [
+        "build_data_quality_snapshot",
+        "normalize_trade_date",
+        "replace(CAST(trade_date AS VARCHAR), '-', '')",
+        "any_daily_price_symbol_count",
+        "history_missing_symbol_count",
+        "formal_result_usable",
+        "readonly_duckdb_sql",
+    ]:
+        if phrase not in snapshot_source:
+            failures.append(f"data_quality_snapshot.py is missing Task 57C phrase: {phrase}.")
+
+    refresh_source = read_source(root / "core/jobs/refresh_data_quality_status.py")
+    for phrase in [
+        "refresh_data_quality_status",
+        "read_only SQL counts",
+        "trade_date 分布 top 10",
+        "any_daily_price_symbol_count",
+        "history_missing_symbol_count",
+    ]:
+        if phrase not in refresh_source:
+            failures.append(f"refresh_data_quality_status.py is missing Task 57C phrase: {phrase}.")
 
     streamlit_source = read_source(root / "web/streamlit_app.py")
     for phrase in ["自动更新状态", "下载最新自动更新 Excel", "手动补跑一次自动更新", "read_scheduled_status"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing Task 57B phrase: {phrase}.")
 
-    tests_source = read_source(root / "tests/test_scheduled_daily_update.py")
+    tests_source = read_source(root / "tests/test_scheduled_daily_update.py") + read_source(root / "tests/test_task57c_data_quality_snapshot.py") + read_source(root / "tests/test_streamlit_app.py")
     for phrase in [
         "test_scheduled_update_skips_before_scheduled_time",
         "test_scheduled_update_skips_if_already_success_today",
@@ -3316,6 +3343,23 @@ def check_task57b(root: Path) -> list[str]:
         "test_preflight_records_curl_fallback_available",
         "test_preflight_warning_message_in_text_output",
         "test_no_algorithm_changes",
+        "test_data_quality_snapshot_counts_latest_trade_date",
+        "test_data_quality_snapshot_counts_daily_basic_latest_trade_date",
+        "test_data_quality_snapshot_counts_adj_factor_latest_trade_date",
+        "test_data_quality_snapshot_counts_any_history_separately",
+        "test_history_missing_uses_any_history_count",
+        "test_history_complete_is_separate_from_any_history",
+        "test_refresh_data_quality_status_writes_status_json",
+        "test_refresh_data_quality_status_is_read_only",
+        "test_refresh_data_quality_status_prints_sql_counts",
+        "test_streamlit_status_page_prefers_data_quality_snapshot",
+        "test_streamlit_status_page_does_not_use_tables_summary_for_latest_coverage",
+        "test_streamlit_status_page_does_not_use_full_batch_for_latest_coverage",
+        "test_missing_quality_fields_fallbacks_to_readonly_snapshot",
+        "test_buttons_grouped_by_side_effects",
+        "test_raw_json_sections_collapsed_by_default",
+        "test_status_page_no_lookback_button",
+        "test_no_duplicate_streamlit_keys",
     ]:
         if phrase not in tests_source:
             failures.append(f"Task 57B tests are missing {phrase}.")
@@ -3333,7 +3377,7 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in diagnose_source:
             failures.append(f"diagnose_update_batch.py is missing latest/history coverage field: {phrase}.")
     streamlit_source = read_source(root / "web/streamlit_app.py")
-    for phrase in ["最新数据覆盖", "历史数据完整度", "模块可用性", "本次更新结果"]:
+    for phrase in ["顶部结论卡片", "最新交易日覆盖", "历史数据完整度", "模块可用性", "本次运行结果", "按钮区", "全市场批量补数据"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing data update status section: {phrase}.")
     env_source = read_source(root / ".env.example")

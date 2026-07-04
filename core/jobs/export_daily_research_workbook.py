@@ -15,6 +15,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.config import Settings, get_settings
+from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 SHEET_NAMES = [
@@ -222,8 +223,9 @@ def export_daily_research_workbook(
     watchlist_sheet = _with_display_order(_preferred_columns(watchlist_sheet, _watchlist_columns()))
     external_sheet = _latest_external_positions(external_positions)
     risk_sheet = _build_risk_sheet(entry_sheet, watchlist_sheet, external_sheet)
+    data_quality_snapshot = _safe_data_quality_snapshot(resolved_store, selected_trade_date)
     quality_sheet = (
-        _build_data_quality_sheet(resolved_store, selected_trade_date)
+        _build_data_quality_sheet(resolved_store, selected_trade_date, data_quality_snapshot)
         if include_data_quality
         else _message_frame("数据质量导出已关闭。")
     )
@@ -239,6 +241,7 @@ def export_daily_research_workbook(
         watchlist_rows=len(watchlist_sheet),
         external_position_rows=len(external_sheet),
         lookback_status=lookback_status,
+        data_quality_snapshot=data_quality_snapshot,
     )
     help_sheet = _help_sheet()
 
@@ -563,7 +566,8 @@ def _build_risk_sheet(
     return pd.DataFrame(rows)
 
 
-def _build_data_quality_sheet(store: DuckDBStore, trade_date: str) -> pd.DataFrame:
+def _build_data_quality_sheet(store: DuckDBStore, trade_date: str, snapshot: dict[str, Any] | None = None) -> pd.DataFrame:
+    snapshot_rows = _data_quality_snapshot_rows(snapshot or {})
     metrics = [
         _table_metric(store, "stock_basic", "ts_code"),
         _table_metric(store, "daily_price", "ts_code", "trade_date"),
@@ -575,6 +579,8 @@ def _build_data_quality_sheet(store: DuckDBStore, trade_date: str) -> pd.DataFra
         _table_metric(store, "external_position_snapshots", "ts_code", "snapshot_date"),
     ]
     quality = pd.DataFrame(metrics)
+    if snapshot_rows:
+        quality = pd.concat([pd.DataFrame(snapshot_rows), quality], ignore_index=True, sort=False)
     if trade_date:
         quality.loc[len(quality)] = {
             "table_name": "export_scope",
@@ -587,6 +593,19 @@ def _build_data_quality_sheet(store: DuckDBStore, trade_date: str) -> pd.DataFra
     if missing_metrics:
         quality = pd.concat([quality, pd.DataFrame(missing_metrics)], ignore_index=True, sort=False)
     return quality
+
+
+def _data_quality_snapshot_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    if not snapshot:
+        return []
+    return [
+        {"table_name": "data_quality_snapshot", "row_count": "", "distinct_symbols": "", "latest_date": snapshot.get("latest_completed_trade_date"), "note": f"data_quality_status={snapshot.get('data_quality_status')}"},
+        {"table_name": "latest_daily_price", "row_count": "", "distinct_symbols": snapshot.get("latest_daily_price_symbol_count", 0), "latest_date": snapshot.get("latest_completed_trade_date"), "note": f"coverage={float(snapshot.get('latest_daily_price_coverage_rate', 0.0) or 0.0):.2%}"},
+        {"table_name": "latest_daily_basic", "row_count": "", "distinct_symbols": snapshot.get("latest_daily_basic_symbol_count", 0), "latest_date": snapshot.get("latest_completed_trade_date"), "note": f"coverage={float(snapshot.get('latest_daily_basic_coverage_rate', 0.0) or 0.0):.2%}"},
+        {"table_name": "latest_adj_factor", "row_count": "", "distinct_symbols": snapshot.get("latest_adj_factor_symbol_count", 0), "latest_date": snapshot.get("latest_completed_trade_date"), "note": f"coverage={float(snapshot.get('latest_adj_factor_coverage_rate', 0.0) or 0.0):.2%}"},
+        {"table_name": "any_daily_price", "row_count": "", "distinct_symbols": snapshot.get("any_daily_price_symbol_count", 0), "latest_date": "", "note": f"coverage={float(snapshot.get('any_daily_price_coverage_rate', 0.0) or 0.0):.2%}"},
+        {"table_name": "history_missing", "row_count": "", "distinct_symbols": snapshot.get("history_missing_symbol_count", 0), "latest_date": "", "note": "完全缺行情股票数量"},
+    ]
 
 
 def _table_metric(
@@ -697,6 +716,7 @@ def _build_summary_sheet(
     watchlist_rows: int,
     external_position_rows: int,
     lookback_status: dict[str, Any] | None = None,
+    data_quality_snapshot: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     rows = [
         {"metric": "导出时间", "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
@@ -707,6 +727,17 @@ def _build_summary_sheet(
         {"metric": "观察池记录数量", "value": watchlist_rows},
         {"metric": "外部模拟持仓记录数量", "value": external_position_rows},
     ]
+    if data_quality_snapshot:
+        rows.extend(
+            [
+                {"metric": "数据质量状态", "value": data_quality_snapshot.get("data_quality_status") or "unknown"},
+                {"metric": "正式全市场研究结果可用", "value": "是" if data_quality_snapshot.get("formal_result_usable") is True else "否"},
+                {"metric": "最新交易日 daily_price 覆盖", "value": f"{data_quality_snapshot.get('latest_daily_price_symbol_count', 0)} / {data_quality_snapshot.get('configured_symbol_count', 0)}"},
+                {"metric": "任意历史行情覆盖", "value": f"{data_quality_snapshot.get('any_daily_price_symbol_count', 0)} / {data_quality_snapshot.get('configured_symbol_count', 0)}"},
+            ]
+        )
+        if data_quality_snapshot.get("data_quality_status") == "poor":
+            rows.append({"metric": "数据质量提示", "value": "当前结果仅供流程检查，不代表完整全市场筛选。"})
     if lookback_status:
         rows.extend(
             [
@@ -725,6 +756,18 @@ def _build_summary_sheet(
         ]
     )
     return pd.DataFrame(rows)
+
+
+def _safe_data_quality_snapshot(store: DuckDBStore, trade_date: str) -> dict[str, Any]:
+    try:
+        return build_data_quality_snapshot(db_path=store.db_path, research_trade_date=trade_date, latest_completed_trade_date=trade_date)
+    except Exception:
+        return {
+            "data_quality_status": "unknown",
+            "formal_result_usable": False,
+            "formal_result_warning_reason": "数据质量快照不可用。",
+            "latest_completed_trade_date": trade_date,
+        }
 
 
 def _read_lookback_status(status_path: str | Path | None = None) -> dict[str, Any] | None:

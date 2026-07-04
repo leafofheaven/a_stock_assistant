@@ -24,6 +24,9 @@ from web.streamlit_app import (
     prepare_display_table,
     render_dashboard,
     _extract_workbook_output_path,
+    _status_history_frame,
+    _status_latest_coverage_frame,
+    _status_page_quality_snapshot,
     _render_section,
     _lightweight_database_metrics,
     summarize_update_status,
@@ -140,6 +143,126 @@ def test_update_entrypoints_are_consolidated() -> None:
     assert "preflight_data_source" in source
     assert "run_full_batch_update" in ALLOWED_COMMANDS
     assert "preflight_data_source" in ALLOWED_COMMANDS
+
+
+def test_streamlit_status_page_prefers_data_quality_snapshot() -> None:
+    """Status page should prefer scheduled snapshot fields when present."""
+    scheduled = {
+        "data_quality_snapshot_source": "readonly_duckdb_sql",
+        "latest_completed_trade_date": "20260703",
+        "configured_symbol_count": 5055,
+        "latest_daily_price_symbol_count": 68,
+        "any_daily_price_symbol_count": 4995,
+        "data_quality_status": "poor",
+        "formal_result_usable": False,
+    }
+
+    snapshot = _status_page_quality_snapshot({}, scheduled, {"latest_price_symbol_count": 0})
+
+    assert snapshot["latest_daily_price_symbol_count"] == 68
+    assert snapshot["any_daily_price_symbol_count"] == 4995
+
+
+def test_streamlit_status_page_does_not_use_tables_summary_for_latest_coverage() -> None:
+    """Tables summary zeros must not replace a valid scheduled snapshot."""
+    scheduled = {
+        "data_quality_snapshot_source": "readonly_duckdb_sql",
+        "latest_completed_trade_date": "20260703",
+        "configured_symbol_count": 5055,
+        "latest_daily_price_symbol_count": 68,
+        "latest_daily_price_coverage_rate": 68 / 5055,
+        "data_quality_status": "poor",
+        "formal_result_usable": False,
+    }
+    snapshot = _status_page_quality_snapshot({"daily_price": pd.DataFrame()}, scheduled, {"latest_price_symbol_count": 0, "latest_price_coverage_rate": 0.0})
+    frame = _status_latest_coverage_frame(snapshot)
+
+    assert frame.iloc[0]["已覆盖"] == "68 / 5055"
+
+
+def test_streamlit_status_page_does_not_use_full_batch_for_latest_coverage() -> None:
+    """Full-batch any-history counts must not be reused as latest-date coverage."""
+    scheduled = {
+        "data_quality_snapshot_source": "readonly_duckdb_sql",
+        "latest_completed_trade_date": "20260703",
+        "configured_symbol_count": 5055,
+        "latest_daily_price_symbol_count": 68,
+        "any_daily_price_symbol_count": 4995,
+        "any_daily_price_coverage_rate": 4995 / 5055,
+        "history_missing_symbol_count": 60,
+        "data_quality_status": "poor",
+        "formal_result_usable": False,
+    }
+    snapshot = _status_page_quality_snapshot({}, scheduled, {"priced_symbol_count": 4995, "coverage_rate": 0.9881})
+
+    latest = _status_latest_coverage_frame(snapshot)
+    history = _status_history_frame(snapshot)
+    assert latest.iloc[0]["已覆盖"] == "68 / 5055"
+    assert history.iloc[0]["数量"] == "4995 / 5055"
+
+
+def test_missing_quality_fields_fallbacks_to_readonly_snapshot(monkeypatch) -> None:
+    """Missing scheduled fields should trigger a read-only snapshot when possible."""
+    calls = []
+
+    def fake_snapshot(**kwargs):
+        calls.append(kwargs)
+        return {"data_quality_snapshot_source": "readonly_duckdb_sql", "latest_daily_price_symbol_count": 68}
+
+    monkeypatch.setattr("web.streamlit_app.build_data_quality_snapshot", fake_snapshot)
+    snapshot = _status_page_quality_snapshot({"_duckdb_path": "data/a_stock_assistant.duckdb"}, {"research_trade_date": "20260703"}, {})
+
+    assert calls[0]["latest_completed_trade_date"] == "20260703"
+    assert snapshot["latest_daily_price_symbol_count"] == 68
+
+
+def test_missing_quality_fields_do_not_default_to_ok() -> None:
+    """Missing snapshot fields should render as unknown and unusable."""
+    snapshot = _status_page_quality_snapshot({}, {}, {})
+
+    assert snapshot["data_quality_status"] == "unknown"
+    assert snapshot["formal_result_usable"] is False
+
+
+def test_buttons_grouped_by_side_effects() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    for phrase in [
+        "只读状态 / 诊断",
+        "不联网；不写 DuckDB；不生成 Excel；不改变今日研究结果。",
+        "daily_incremental：补跑每日自动更新",
+        "会联网；会写 DuckDB；会生成每日研究 Excel；会更新今日研究结果。",
+        "运行数据源预检",
+        "小批量补数据 50 只",
+        "小批量补数据 200 只",
+        "按当前参数开始补数据",
+    ]:
+        assert phrase in source
+
+
+def test_raw_json_sections_collapsed_by_default() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    assert 'st.expander("高级：原始自动更新状态 JSON", expanded=False)' in source
+    assert 'st.expander("高级：全市场批量补数据原始诊断", expanded=False)' in source
+
+
+def test_status_page_no_lookback_button() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    start = source.index("def _render_status_tab")
+    end = source.index("def _status_page_quality_snapshot")
+    body = source[start:end]
+
+    assert "run_lookback_analysis_button" not in body
+
+
+def test_no_duplicate_streamlit_keys() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    keys = [
+        'key="run_lookback_analysis_button"',
+        'key="full_batch_update_start"',
+        'key="scheduled_daily_update_manual_catchup"',
+    ]
+    for key in keys:
+        assert source.count(key) == 1
 
 
 def test_export_workbook_page_feedback_helpers() -> None:
