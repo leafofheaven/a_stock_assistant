@@ -18,6 +18,7 @@ def refresh_data_quality_status(
     *,
     status_path: str | Path = DEFAULT_STATUS_PATH,
     output_format: str = "text",
+    db_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Read-only refresh of scheduled update quality fields, then update status JSON."""
     path = Path(status_path)
@@ -26,7 +27,7 @@ def refresh_data_quality_status(
     research_trade_date = normalize_trade_date(status.get("research_trade_date") or status.get("trade_date") or "")
     latest_completed_trade_date = normalize_trade_date(status.get("latest_completed_trade_date") or research_trade_date)
     snapshot = build_data_quality_snapshot(
-        db_path=settings.duckdb_path,
+        db_path=db_path or settings.duckdb_path,
         research_trade_date=research_trade_date,
         latest_completed_trade_date=latest_completed_trade_date,
     )
@@ -39,7 +40,7 @@ def refresh_data_quality_status(
     if output_format == "json":
         print(json.dumps(refreshed, ensure_ascii=False, indent=2, default=str))
     else:
-        _print_text(refreshed, settings.duckdb_path)
+        _print_text(refreshed, Path(db_path or settings.duckdb_path))
     return refreshed
 
 

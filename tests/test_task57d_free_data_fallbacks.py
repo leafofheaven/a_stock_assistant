@@ -215,6 +215,30 @@ def test_partial_success_does_not_mark_formal_usable(tmp_path: Path) -> None:
     assert payload["formal_result_usable"] is False
 
 
+def test_status_json_has_quality_contract_when_snapshot_refresh_fails(tmp_path: Path, monkeypatch) -> None:
+    status_path = _status_path(tmp_path)
+    monkeypatch.setattr(
+        "core.jobs.market_data_status.refresh_data_quality_status",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot failed")),
+    )
+
+    update_market_data(
+        provider="akshare_spot_snapshot",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        force_snapshot=True,
+    )
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+    assert payload["data_quality_snapshot_source"] == "unavailable"
+    assert payload["data_quality_status"] == "unknown"
+    assert payload["formal_result_usable"] is False
+    assert "数据质量快照未能刷新" in payload["formal_result_warning_reason"]
+
+
 def test_streamlit_free_provider_fallback_section() -> None:
     source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
 

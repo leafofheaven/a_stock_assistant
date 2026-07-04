@@ -33,6 +33,7 @@ def record_provider_attempt(
     error_message: str = "",
     trade_date: str = "",
     status_path: str | Path = DEFAULT_STATUS_PATH,
+    db_path: str | Path | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Append one provider attempt to scheduled status JSON."""
@@ -68,8 +69,20 @@ def record_provider_attempt(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(status, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     try:
-        return refresh_data_quality_status(status_path=path, output_format="silent")
-    except TypeError:
-        return status
+        refreshed = refresh_data_quality_status(status_path=path, output_format="silent", db_path=db_path)
+        if partial_update:
+            refreshed["latest_update_completeness"] = "partial"
+            refreshed["formal_result_usable"] = False
+            refreshed["formal_result_warning_reason"] = refreshed.get("formal_result_warning_reason") or "本次仅完成部分更新，当前结果不可作为正式全市场研究结果。"
+            path.write_text(json.dumps(refreshed, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        return refreshed
     except Exception:
-        return status
+        fallback = {
+            **status,
+            "data_quality_snapshot_source": "unavailable",
+            "data_quality_status": "unknown",
+            "formal_result_usable": False,
+            "formal_result_warning_reason": "数据质量快照未能刷新，当前结果不可作为正式全市场研究结果。",
+        }
+        path.write_text(json.dumps(fallback, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        return fallback

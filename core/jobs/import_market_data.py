@@ -92,6 +92,7 @@ def import_market_data(
         partial_update=True,
         trade_date=str(normalized["trade_date"].max()) if not normalized.empty and "trade_date" in normalized.columns else "",
         status_path=status_path,
+        db_path=store.db_path,
         extra={"manual_import_last_file": str(source), "manual_import_last_result": f"{table} written_rows={written}"},
     )
     return {"status": "success", "table": table, "written_rows": written, "source_file": str(source)}

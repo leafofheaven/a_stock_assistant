@@ -68,6 +68,7 @@ def update_market_data(
             store=store,
             force_snapshot=force_snapshot,
             status_path=status_path,
+            db_path=store.db_path,
             settings=resolved_settings,
             akshare_client=akshare_client,
             spot_client=spot_client,
@@ -95,6 +96,7 @@ def update_market_data(
         error_type="all_providers_failed",
         error_message=final["message"],
         status_path=status_path,
+        db_path=store.db_path,
     )
     return final
 
@@ -110,6 +112,7 @@ def _run_provider(
     force_snapshot: bool,
     status_path: str | Path,
     settings: Settings,
+    db_path: str | Path | None = None,
     akshare_client: AKShareClient | None,
     spot_client: AKShareSpotSnapshotClient | None,
     baostock_client: BaoStockClient | None,
@@ -125,13 +128,13 @@ def _run_provider(
             )
             price = client.get_daily_price(start_date, end_date, symbols)
             written = _write_price_and_partial_basic(store, price, write_basic=False)
-            _record(provider, mode, written, ["daily_price"], False, end_date, status_path)
+            _record(provider, mode, written, ["daily_price"], False, end_date, status_path, db_path=db_path)
             return {"status": "success" if written else "failed", "provider": provider, "written_row_count": written, "partial_update": False}
         if provider == "akshare_spot_snapshot":
             client = spot_client or AKShareSpotSnapshotClient()
             payload = client.fetch_latest(trade_date=end_date, symbols=symbols, force=force_snapshot)
             if payload.get("status") == "skipped":
-                _record(provider, mode, 0, [], True, end_date, status_path, success=False, error_message=str(payload.get("message") or "skipped"))
+                _record(provider, mode, 0, [], True, end_date, status_path, db_path=db_path, success=False, error_message=str(payload.get("message") or "skipped"))
                 return {"status": "skipped", "provider": provider, "written_row_count": 0, "message": payload.get("message"), "partial_update": True}
             price = payload.get("daily_price", pd.DataFrame())
             basic = payload.get("daily_basic", pd.DataFrame())
@@ -139,29 +142,29 @@ def _run_provider(
             written_basic = store.upsert_dataframe("daily_basic", basic) if isinstance(basic, pd.DataFrame) and not basic.empty else 0
             written_adj = forward_fill_adj_factor(store, end_date=end_date, symbols=symbols)
             written = written_price + written_basic + written_adj
-            _record(provider, mode, written, ["daily_price", "daily_basic", "adj_factor"], True, end_date, status_path)
+            _record(provider, mode, written, ["daily_price", "daily_basic", "adj_factor"], True, end_date, status_path, db_path=db_path)
             return {"status": "success" if written_price else "failed", "provider": provider, "written_row_count": written, "partial_update": True, "written_price_rows": written_price}
         if provider == "baostock":
             client = baostock_client or BaoStockClient()
             payload = client.get_daily_price(start_date=start_date, end_date=end_date, symbols=symbols, limit=0)
             price = payload.get("daily_price", pd.DataFrame())
             written = _write_price_and_partial_basic(store, price, write_basic=False)
-            _record(provider, mode, written, ["daily_price"], True, end_date, status_path)
+            _record(provider, mode, written, ["daily_price"], True, end_date, status_path, db_path=db_path)
             return {"status": "success" if written else "failed", "provider": provider, "written_row_count": written, "partial_update": True}
         if provider == "tushare_optional":
             if not settings.tushare_token:
                 message = "Tushare token 未配置；Tushare 仅作为可选项，已跳过。"
-                _record(provider, mode, 0, [], True, end_date, status_path, success=False, error_message=message)
+                _record(provider, mode, 0, [], True, end_date, status_path, db_path=db_path, success=False, error_message=message)
                 return {"status": "skipped", "provider": provider, "written_row_count": 0, "message": message, "partial_update": True}
         if provider == "csv":
             message = "CSV / Excel 需要用户通过 import_market_data 手动导入。"
-            _record(provider, mode, 0, [], True, end_date, status_path, success=False, error_message=message)
+            _record(provider, mode, 0, [], True, end_date, status_path, db_path=db_path, success=False, error_message=message)
             return {"status": "skipped", "provider": provider, "written_row_count": 0, "message": message, "partial_update": True}
     except BaoStockUnavailable as exc:
-        _record(provider, mode, 0, [], True, end_date, status_path, success=False, error_type="provider_unavailable", error_message=str(exc))
+        _record(provider, mode, 0, [], True, end_date, status_path, db_path=db_path, success=False, error_type="provider_unavailable", error_message=str(exc))
         return {"status": "failed", "provider": provider, "written_row_count": 0, "error_message": str(exc), "partial_update": True}
     except Exception as exc:
-        _record(provider, mode, 0, [], True, end_date, status_path, success=False, error_type=type(exc).__name__, error_message=str(exc))
+        _record(provider, mode, 0, [], True, end_date, status_path, db_path=db_path, success=False, error_type=type(exc).__name__, error_message=str(exc))
         return {"status": "failed", "provider": provider, "written_row_count": 0, "error_message": str(exc), "partial_update": True}
     return {"status": "skipped", "provider": provider, "written_row_count": 0, "partial_update": True}
 
@@ -215,6 +218,7 @@ def _record(
     trade_date: str,
     status_path: str | Path,
     *,
+    db_path: str | Path | None = None,
     success: bool | None = None,
     error_type: str = "",
     error_message: str = "",
@@ -230,6 +234,7 @@ def _record(
         error_message=error_message,
         trade_date=trade_date,
         status_path=status_path,
+        db_path=db_path,
     )
 
 
