@@ -2092,27 +2092,29 @@ def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
             ["--format", "text"],
             success_message="数据源网络诊断完成。请根据主要结论决定是否继续补数据。",
         )
-    st.write(
-        {
-            "数据源": "akshare",
-            "数据库路径": status.get("duckdb_path") or "暂无",
-            "full 股票池数量": status.get("configured_symbol_count", 0),
-            "最新数据覆盖股票数量": status.get("latest_price_symbol_count", 0),
-            "最新数据覆盖率": f"{status.get('latest_price_coverage_rate', 0.0):.2%}",
-            "已有任意行情股票数量": status.get("priced_symbol_count", 0),
-            "任意行情覆盖率": f"{status.get('coverage_rate', 0.0):.2%}",
-            "完全缺行情股票数量": status.get("completely_missing_price_count", status.get("missing_symbol_count", 0)),
-            "历史不足但已有最新行情数量": status.get("latest_updated_but_history_incomplete_count", 0),
-            "最新行情不足数量": status.get("stale_symbol_count", 0),
-            "可运行选股股票数量": status.get("selection_ready_count", 0),
-            "更新失败数量": status.get("update_failed_count", 0),
-            "空数据 / 暂不可用股票数量": status.get("empty_data_count", 0),
-            "网络失败股票数量": status.get("network_failed_count", 0),
-            "最新行情日期": status.get("latest_price_date") or "暂无",
-            "最新因子日期": status.get("latest_factor_date") or "暂无",
-            "最新选股日期": status.get("latest_selection_date") or "暂无",
-        }
-    )
+    display_dataframe(st, pd.DataFrame([_full_batch_summary_row(status)]))
+    with st.expander("高级：全市场批量补数据原始诊断", expanded=False):
+        st.write(
+            {
+                "数据源": "akshare",
+                "数据库路径": status.get("duckdb_path") or "暂无",
+                "full 股票池数量": status.get("configured_symbol_count", 0),
+                "最新数据覆盖股票数量": status.get("latest_price_symbol_count", 0),
+                "最新数据覆盖率": f"{status.get('latest_price_coverage_rate', 0.0):.2%}",
+                "已有任意行情股票数量": status.get("priced_symbol_count", 0),
+                "任意行情覆盖率": f"{status.get('coverage_rate', 0.0):.2%}",
+                "完全缺行情股票数量": status.get("completely_missing_price_count", status.get("missing_symbol_count", 0)),
+                "历史不足但已有最新行情数量": status.get("latest_updated_but_history_incomplete_count", 0),
+                "最新行情不足数量": status.get("stale_symbol_count", 0),
+                "可运行选股股票数量": status.get("selection_ready_count", 0),
+                "更新失败数量": status.get("update_failed_count", 0),
+                "空数据 / 暂不可用股票数量": status.get("empty_data_count", 0),
+                "网络失败股票数量": status.get("network_failed_count", 0),
+                "最新行情日期": status.get("latest_price_date") or "暂无",
+                "最新因子日期": status.get("latest_factor_date") or "暂无",
+                "最新选股日期": status.get("latest_selection_date") or "暂无",
+            }
+        )
     st.info("全市场更新可能耗时较长；建议先用 50 或 200 只小批量确认网络稳定。")
     mode_label = st.selectbox(
         "更新模式",
@@ -2142,7 +2144,8 @@ def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
         skip_empty_unavailable=skip_empty,
         preflight=preflight,
     )
-    st.write(
+    with st.expander("高级：本次补数据命令参数", expanded=False):
+        st.write(
         {
             "FULL_UPDATE_MAX_SYMBOLS": max_symbols,
             "FULL_UPDATE_BATCH_SIZE": batch_size,
@@ -2150,12 +2153,24 @@ def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
             "FULL_UPDATE_MAX_RETRIES": max_retries,
             "说明": "本次未处理数量表示 full 股票池中本次未纳入计划的股票，不代表永久跳过。",
         }
-    )
+        )
     if st.button("运行数据源预检", key="full_update_preflight"):
         _run_streaming_console_action(st, "运行数据源预检", "preflight_data_source", [], success_message="预检完成。")
     if st.button("开始补数据", key="full_batch_update_start"):
         st.info("点击后会先做 DuckDB 锁、代理和东方财富 K 线接口预检；预检失败不会启动批量更新。")
         _run_streaming_console_action(st, "全市场批量补数据", "run_full_batch_update", args, success_message="批量补数据命令执行完成。请刷新页面查看覆盖率变化。")
+
+
+def _full_batch_summary_row(status: dict[str, Any]) -> dict[str, Any]:
+    """Return concise full-batch status row for default display."""
+    return {
+        "数据源": "akshare",
+        "full 股票池数量": status.get("configured_symbol_count", 0),
+        "任意历史行情覆盖": f"{status.get('any_daily_price_symbol_count', status.get('priced_symbol_count', 0))} / {status.get('configured_symbol_count', 0)} ({float(status.get('any_daily_price_coverage_rate', status.get('coverage_rate', 0.0)) or 0.0):.2%})",
+        "最新交易日覆盖": f"{status.get('latest_daily_price_symbol_count', status.get('latest_price_symbol_count', 0))} / {status.get('configured_symbol_count', 0)} ({float(status.get('latest_daily_price_coverage_rate', status.get('latest_price_coverage_rate', 0.0)) or 0.0):.2%})",
+        "完全缺行情": status.get("completely_missing_price_count", status.get("missing_symbol_count", 0)),
+        "建议": "建议先小批量 50 或 200 只确认网络稳定。",
+    }
 
 
 def build_full_batch_update_args(

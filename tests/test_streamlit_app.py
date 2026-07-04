@@ -29,6 +29,7 @@ from web.streamlit_app import (
     _render_section,
     _render_status_tab,
     _lightweight_database_metrics,
+    _full_batch_summary_row,
     _status_data_quality_snapshot,
     summarize_update_status,
 )
@@ -671,6 +672,75 @@ def test_latest_coverage_counts_actual_trade_date(tmp_path: Path) -> None:
     assert snapshot["any_daily_price_coverage_rate"] == 4995 / 5055
     assert snapshot["data_quality_status"] == "poor"
     assert snapshot["formal_result_usable"] is False
+
+
+def test_update_status_page_uses_snapshot_counts_not_zero_defaults(tmp_path: Path) -> None:
+    """summarize_update_status should use DuckDB snapshot counts, not zero defaults."""
+    store = DuckDBStore(tmp_path / "status-counts.duckdb")
+    store.initialize()
+    symbols = [f"{index:06d}.SZ" for index in range(1, 101)]
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame({"ts_code": symbols, "symbol": [code[:6] for code in symbols], "name": symbols}),
+    )
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": symbol,
+                    "trade_date": "20260703" if index < 68 else "20260702",
+                    "open": 1,
+                    "high": 1,
+                    "low": 1,
+                    "close": 1,
+                    "pre_close": 1,
+                    "change": 0,
+                    "pct_chg": 0,
+                    "vol": 1,
+                    "amount": 1,
+                }
+                for index, symbol in enumerate(symbols[:90])
+            ]
+        ),
+    )
+    tables = {
+        "stock_basic": store.read_table("stock_basic", limit=10),
+        "daily_price": pd.DataFrame(),
+        "daily_basic": pd.DataFrame(),
+        "factor_scores": pd.DataFrame(),
+        "strategy_result": pd.DataFrame(),
+        "_duckdb_path": str(store.db_path),
+        "_latest_price_date": "20260703",
+        "_configured_symbol_count": 100,
+    }
+
+    status = summarize_update_status(tables)
+
+    assert status["latest_daily_price_symbol_count"] == 68
+    assert status["any_daily_price_symbol_count"] == 90
+    assert status["data_quality_status"] == "poor"
+    assert status["formal_result_usable"] is False
+
+
+def test_full_batch_section_raw_json_collapsed_by_default() -> None:
+    """Full batch raw diagnostics should not be displayed as default JSON."""
+    source = (Path(__file__).resolve().parents[1] / "web" / "streamlit_app.py").read_text(encoding="utf-8")
+
+    assert "高级：全市场批量补数据原始诊断" in source
+    assert 'st.expander("高级：全市场批量补数据原始诊断", expanded=False)' in source
+    summary = _full_batch_summary_row(
+        {
+            "configured_symbol_count": 100,
+            "any_daily_price_symbol_count": 90,
+            "any_daily_price_coverage_rate": 0.9,
+            "latest_daily_price_symbol_count": 68,
+            "latest_daily_price_coverage_rate": 0.68,
+            "completely_missing_price_count": 10,
+        }
+    )
+    assert summary["任意历史行情覆盖"] == "90 / 100 (90.00%)"
+    assert summary["最新交易日覆盖"] == "68 / 100 (68.00%)"
 
 
 def test_render_dashboard_shows_database_locked_status(monkeypatch) -> None:

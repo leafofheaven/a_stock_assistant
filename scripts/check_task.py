@@ -3196,6 +3196,7 @@ def check_task57b(root: Path) -> list[str]:
         root,
         [
             "core/jobs/run_scheduled_daily_update.py",
+            "core/jobs/refresh_data_quality_status.py",
             "core/jobs/install_scheduled_daily_update.py",
             "core/jobs/uninstall_scheduled_daily_update.py",
             "core/diagnostics/data_quality_snapshot.py",
@@ -3281,6 +3282,7 @@ def check_task57b(root: Path) -> list[str]:
         + read_source(root / "tests/test_streamlit_app.py")
         + read_source(root / "tests/test_daily_research_workbook.py")
         + read_source(root / "tests/test_data_quality_snapshot.py")
+        + read_source(root / "tests/test_refresh_data_quality_status.py")
     )
     for phrase in [
         "test_scheduled_update_skips_before_scheduled_time",
@@ -3326,6 +3328,13 @@ def check_task57b(root: Path) -> list[str]:
         "test_latest_coverage_counts_only_latest_trade_date",
         "test_any_history_coverage_is_named_separately",
         "test_zero_count_cannot_have_high_latest_coverage",
+        "test_data_quality_snapshot_counts_daily_price_by_trade_date_string",
+        "test_data_quality_snapshot_counts_daily_basic_by_trade_date_string",
+        "test_data_quality_snapshot_normalizes_trade_date",
+        "test_refresh_data_quality_status_outputs_actual_counts",
+        "test_refresh_data_quality_status_updates_status_json",
+        "test_update_status_page_uses_snapshot_counts_not_zero_defaults",
+        "test_full_batch_section_raw_json_collapsed_by_default",
         "test_missing_data_quality_fields_do_not_default_to_ok",
         "test_missing_formal_result_usable_does_not_default_to_true",
         "test_data_update_page_uses_current_snapshot_for_poor_quality",
@@ -3349,15 +3358,19 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in docs_source:
             failures.append(f"docs/commands_reference.md is missing Task 57B wording: {phrase}.")
     snapshot_source = read_source(root / "core/diagnostics/data_quality_snapshot.py")
-    for phrase in ["build_data_quality_snapshot", "latest_daily_price_symbol_count", "any_daily_price_symbol_count", "formal_result_usable", "latest_all_required_tables_coverage_rate"]:
+    for phrase in ["build_data_quality_snapshot", "normalize_trade_date", "regexp_replace", "latest_daily_price_symbol_count", "any_daily_price_symbol_count", "formal_result_usable", "latest_all_required_tables_coverage_rate"]:
         if phrase not in snapshot_source:
             failures.append(f"data_quality_snapshot.py is missing shared snapshot phrase: {phrase}.")
+    refresh_source = read_source(root / "core/jobs/refresh_data_quality_status.py")
+    for phrase in ["refresh_data_quality_status", "build_data_quality_snapshot", "latest_daily_price_symbol_count", "formal_result_usable", "any_daily_price_symbol_count"]:
+        if phrase not in refresh_source:
+            failures.append(f"refresh_data_quality_status.py is missing phrase: {phrase}.")
     diagnose_source = read_source(root / "core/jobs/diagnose_update_batch.py")
     for phrase in ["latest_price_symbol_count", "any_daily_price_symbol_count", "latest_daily_basic_symbol_count", "latest_adj_factor_symbol_count", "latest_all_required_tables_symbol_count", "history_complete_symbol_count", "elder_ready_symbol_count", "latest_updated_but_history_incomplete_count"]:
         if phrase not in diagnose_source:
             failures.append(f"diagnose_update_batch.py is missing latest/history coverage field: {phrase}.")
     streamlit_source = read_source(root / "web/streamlit_app.py")
-    for phrase in ["顶部结论卡片", "最新交易日覆盖", "任意历史行情覆盖", "历史数据完整度", "模块可用性", "本次更新结果", "数据质量等级", "正式全市场研究结果可用", "运行数据质量诊断", "运行批量更新诊断", "高级：原始自动更新状态 JSON"]:
+    for phrase in ["顶部结论卡片", "最新交易日覆盖", "任意历史行情覆盖", "历史数据完整度", "模块可用性", "本次更新结果", "数据质量等级", "正式全市场研究结果可用", "运行数据质量诊断", "运行批量更新诊断", "高级：原始自动更新状态 JSON", "高级：全市场批量补数据原始诊断"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing data update status section: {phrase}.")
     scheduled_source = read_source(root / "core/jobs/run_scheduled_daily_update.py")

@@ -63,3 +63,52 @@ def test_zero_count_cannot_have_high_latest_coverage() -> None:
     assert snapshot["latest_daily_price_symbol_count"] == 0
     assert snapshot["latest_daily_price_coverage_rate"] == 0.0
     assert snapshot["formal_result_usable"] is False
+
+
+def test_data_quality_snapshot_counts_daily_price_by_trade_date_string() -> None:
+    """String trade_date rows should be counted exactly for latest coverage."""
+    symbols = [f"{index:06d}.SZ" for index in range(1, 101)]
+    tables = {
+        "stock_basic": pd.DataFrame({"ts_code": symbols}),
+        "daily_price": pd.DataFrame(
+            {
+                "ts_code": symbols[:68] + symbols[68:90],
+                "trade_date": ["20260703"] * 68 + ["20260702"] * 22,
+            }
+        ),
+    }
+
+    snapshot = build_data_quality_snapshot(tables=tables, latest_completed_trade_date="20260703")
+
+    assert snapshot["latest_daily_price_symbol_count"] == 68
+    assert snapshot["any_daily_price_symbol_count"] == 90
+
+
+def test_data_quality_snapshot_counts_daily_basic_by_trade_date_string() -> None:
+    """daily_basic latest rows should be counted by the same trade-date rule."""
+    symbols = [f"{index:06d}.SZ" for index in range(1, 11)]
+    tables = {
+        "stock_basic": pd.DataFrame({"ts_code": symbols}),
+        "daily_basic": pd.DataFrame({"ts_code": symbols[:3], "trade_date": ["20260703"] * 3}),
+    }
+
+    snapshot = build_data_quality_snapshot(tables=tables, latest_completed_trade_date="20260703")
+
+    assert snapshot["latest_daily_basic_symbol_count"] == 3
+
+
+def test_data_quality_snapshot_normalizes_trade_date() -> None:
+    """Latest coverage should support int, compact string, and dashed string dates."""
+    tables = {
+        "stock_basic": pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ", "000003.SZ"]}),
+        "daily_price": pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000002.SZ", "000003.SZ"],
+                "trade_date": [20260703, "20260703", "2026-07-03"],
+            }
+        ),
+    }
+
+    snapshot = build_data_quality_snapshot(tables=tables, latest_completed_trade_date="20260703")
+
+    assert snapshot["latest_daily_price_symbol_count"] == 3
