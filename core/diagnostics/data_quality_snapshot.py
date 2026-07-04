@@ -193,7 +193,10 @@ def _build_data_quality_snapshot_from_duckdb(
             latest_price_symbols = _query_symbols_at_date(connection, "daily_price", target_date).intersection(configured_set)
             latest_basic_symbols = _query_symbols_at_date(connection, "daily_basic", target_date).intersection(configured_set)
             latest_adj_symbols = _query_symbols_at_date(connection, "adj_factor", target_date).intersection(configured_set)
-            any_price_symbols = set(_query_symbols(connection, "daily_price")).intersection(configured_set)
+            latest_price_count = _query_symbol_count_at_date(connection, "daily_price", target_date)
+            latest_basic_count = _query_symbol_count_at_date(connection, "daily_basic", target_date)
+            latest_adj_count = _query_symbol_count_at_date(connection, "adj_factor", target_date)
+            any_price_count = _query_symbol_count(connection, "daily_price")
             row_counts = _query_row_counts(connection, "daily_price")
     except DuckDBStoreError:
         return None
@@ -209,7 +212,7 @@ def _build_data_quality_snapshot_from_duckdb(
     entry_ready = _query_symbols_for_date_safe(resolved_store, "entry_zone_snapshots", target_date).intersection(configured_set)
     strategy_symbols = _query_symbols_for_date_safe(resolved_store, "strategy_result", target_date).intersection(configured_set)
     lookback_ready = {symbol for symbol in strategy_symbols if row_counts.get(symbol, 0) >= 80}
-    price_rate = _rate(len(latest_price_symbols), denominator)
+    price_rate = _rate(latest_price_count, denominator)
     quality_status = _quality_status(price_rate)
     formal_usable = quality_status not in {"poor", "failed"}
     warning_reason = "" if formal_usable else "最新交易日数据覆盖严重不足，当前结果仅供流程检查，不代表完整全市场筛选。"
@@ -219,21 +222,21 @@ def _build_data_quality_snapshot_from_duckdb(
         "research_trade_date": normalize_trade_date(research_trade_date) or target_date,
         "latest_completed_trade_date": target_date,
         "configured_symbol_count": denominator,
-        "latest_daily_price_symbol_count": len(latest_price_symbols),
-        "missing_latest_daily_price_symbol_count": max(denominator - len(latest_price_symbols), 0),
+        "latest_daily_price_symbol_count": latest_price_count,
+        "missing_latest_daily_price_symbol_count": max(denominator - latest_price_count, 0),
         "latest_daily_price_coverage_rate": price_rate,
-        "latest_daily_basic_symbol_count": len(latest_basic_symbols),
-        "missing_latest_daily_basic_symbol_count": max(denominator - len(latest_basic_symbols), 0),
-        "latest_daily_basic_coverage_rate": _rate(len(latest_basic_symbols), denominator),
-        "latest_adj_factor_symbol_count": len(latest_adj_symbols),
-        "missing_latest_adj_factor_symbol_count": max(denominator - len(latest_adj_symbols), 0),
-        "latest_adj_factor_coverage_rate": _rate(len(latest_adj_symbols), denominator),
+        "latest_daily_basic_symbol_count": latest_basic_count,
+        "missing_latest_daily_basic_symbol_count": max(denominator - latest_basic_count, 0),
+        "latest_daily_basic_coverage_rate": _rate(latest_basic_count, denominator),
+        "latest_adj_factor_symbol_count": latest_adj_count,
+        "missing_latest_adj_factor_symbol_count": max(denominator - latest_adj_count, 0),
+        "latest_adj_factor_coverage_rate": _rate(latest_adj_count, denominator),
         "latest_all_required_tables_symbol_count": len(latest_all_required),
         "missing_latest_all_required_tables_symbol_count": max(denominator - len(latest_all_required), 0),
         "latest_all_required_tables_coverage_rate": _rate(len(latest_all_required), denominator),
-        "any_daily_price_symbol_count": len(any_price_symbols),
-        "missing_any_daily_price_symbol_count": max(denominator - len(any_price_symbols), 0),
-        "any_daily_price_coverage_rate": _rate(len(any_price_symbols), denominator),
+        "any_daily_price_symbol_count": any_price_count,
+        "missing_any_daily_price_symbol_count": max(denominator - any_price_count, 0),
+        "any_daily_price_coverage_rate": _rate(any_price_count, denominator),
         "history_complete_symbol_count": len(history_complete),
         "history_incomplete_symbol_count": len(history_incomplete),
         "history_missing_symbol_count": len(history_missing),
@@ -282,6 +285,42 @@ def _query_symbols(connection: Any, table_name: str) -> set[str]:
     except Exception:
         return set()
     return _symbols_from_table(frame)
+
+
+def _query_symbol_count(connection: Any, table_name: str) -> int:
+    try:
+        return int(
+            connection.execute(
+                f"""
+                SELECT COUNT(DISTINCT ts_code)
+                FROM {table_name}
+                WHERE ts_code IS NOT NULL
+                """
+            ).fetchone()[0]
+            or 0
+        )
+    except Exception:
+        return 0
+
+
+def _query_symbol_count_at_date(connection: Any, table_name: str, target_date: str) -> int:
+    if not target_date:
+        return 0
+    try:
+        return int(
+            connection.execute(
+                f"""
+                SELECT COUNT(DISTINCT ts_code)
+                FROM {table_name}
+                WHERE ts_code IS NOT NULL
+                  AND replace(CAST(trade_date AS VARCHAR), '-', '') = ?
+                """,
+                [target_date],
+            ).fetchone()[0]
+            or 0
+        )
+    except Exception:
+        return 0
 
 
 def _query_symbols_at_date(connection: Any, table_name: str, target_date: str) -> set[str]:

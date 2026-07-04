@@ -1824,6 +1824,9 @@ def _render_scheduled_update_section(st: Any, update_status: dict[str, Any] | No
         elif scheduled.get("workbook_path"):
             st.warning("最新自动更新 Excel 文件不存在，可能已被清理，请重新运行自动更新。")
     st.caption("页面启动不会自动执行自动更新；手动补跑会先做数据源预检，失败时不会启动重型更新。")
+    st.write("按钮区")
+    st.markdown("**1. 只读状态 / 诊断**")
+    st.caption("不联网；不写 DuckDB；不生成 Excel；不改变今日研究结果。")
     diag_col1, diag_col2, diag_col3 = st.columns(3)
     if diag_col1.button("刷新数据状态", key="refresh_scheduled_update_status"):
         st.info("已读取本地状态文件；如未变化，请点击页面右上角刷新。")
@@ -1843,10 +1846,12 @@ def _render_scheduled_update_section(st: Any, update_status: dict[str, Any] | No
             [],
             success_message="批量更新诊断完成。",
         )
-    if st.button("手动补跑一次自动更新", key="scheduled_daily_update_manual_catchup"):
+    st.markdown("**2. daily_incremental：补跑每日自动更新**")
+    st.caption("会联网；会写 DuckDB；会生成每日研究 Excel；会更新今日研究结果。")
+    if st.button("手动补跑 18:00 自动更新", key="scheduled_daily_update_manual_catchup"):
         _run_streaming_console_action(
             st,
-            "手动补跑一次自动更新",
+            "手动补跑 18:00 自动更新",
             "run_scheduled_daily_update",
             ["--force", "--format", "text"],
             success_message="自动更新补跑命令执行完成。请刷新页面查看最新状态。",
@@ -2121,16 +2126,6 @@ def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
     """Render page controls for bounded full-universe batch updates."""
     st.subheader("全市场批量补数据")
     st.caption("仅供个人研究使用，不自动交易。页面启动时不会自动更新，只有点击按钮才会联网补数据。")
-    st.write("数据源网络诊断")
-    st.caption("诊断会检查 DuckDB、代理、DNS、东方财富 K 线接口、Python 请求和 curl IPv4 / IPv6 路径；诊断失败不会自动启动数据更新。")
-    if st.button("运行数据源网络诊断", key="data_source_network_diagnosis"):
-        _run_streaming_console_action(
-            st,
-            "运行数据源网络诊断",
-            "diagnose_data_source_network",
-            ["--format", "text"],
-            success_message="数据源网络诊断完成。请根据主要结论决定是否继续补数据。",
-        )
     display_dataframe(st, pd.DataFrame([_full_batch_summary_row(status)]))
     with st.expander("高级：全市场批量补数据原始诊断", expanded=False):
         st.write(
@@ -2193,11 +2188,38 @@ def _render_full_batch_update_section(st: Any, status: dict[str, Any]) -> None:
             "说明": "本次未处理数量表示 full 股票池中本次未纳入计划的股票，不代表永久跳过。",
         }
         )
+    st.markdown("**3. 全市场批量补数据**")
+    st.caption("会联网；补数据按钮会写 DuckDB；不生成 Excel；不会直接重算今日研究结果，需后续本地重算或每日自动更新。")
     if st.button("运行数据源预检", key="full_update_preflight"):
         _run_streaming_console_action(st, "运行数据源预检", "preflight_data_source", [], success_message="预检完成。")
-    if st.button("开始补数据", key="full_batch_update_start"):
+    small_col1, small_col2, custom_col = st.columns(3)
+    small_args_50 = build_full_batch_update_args(
+        mode_label=mode_label,
+        max_symbols=50,
+        batch_size=batch_size,
+        lookback_days=lookback_days,
+        max_retries=max_retries,
+        skip_empty_unavailable=skip_empty,
+        preflight=preflight,
+    )
+    small_args_200 = build_full_batch_update_args(
+        mode_label=mode_label,
+        max_symbols=200,
+        batch_size=batch_size,
+        lookback_days=lookback_days,
+        max_retries=max_retries,
+        skip_empty_unavailable=skip_empty,
+        preflight=preflight,
+    )
+    if small_col1.button("小批量补数据 50 只", key="full_batch_update_50"):
         st.info("点击后会先做 DuckDB 锁、代理和东方财富 K 线接口预检；预检失败不会启动批量更新。")
-        _run_streaming_console_action(st, "全市场批量补数据", "run_full_batch_update", args, success_message="批量补数据命令执行完成。请刷新页面查看覆盖率变化。")
+        _run_streaming_console_action(st, "小批量补数据 50 只", "run_full_batch_update", small_args_50, success_message="小批量补数据完成。请刷新页面查看覆盖率变化。")
+    if small_col2.button("小批量补数据 200 只", key="full_batch_update_200"):
+        st.info("点击后会先做 DuckDB 锁、代理和东方财富 K 线接口预检；预检失败不会启动批量更新。")
+        _run_streaming_console_action(st, "小批量补数据 200 只", "run_full_batch_update", small_args_200, success_message="小批量补数据完成。请刷新页面查看覆盖率变化。")
+    if custom_col.button("按当前参数开始补数据", key="full_batch_update_start"):
+        st.info("点击后会先做 DuckDB 锁、代理和东方财富 K 线接口预检；预检失败不会启动批量更新。")
+        _run_streaming_console_action(st, "按当前参数开始补数据", "run_full_batch_update", args, success_message="批量补数据命令执行完成。请刷新页面查看覆盖率变化。")
 
 
 def _full_batch_summary_row(status: dict[str, Any]) -> dict[str, Any]:

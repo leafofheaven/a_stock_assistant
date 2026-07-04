@@ -26,6 +26,8 @@ def test_refresh_data_quality_status_outputs_actual_counts(tmp_path: Path, monke
     assert result["any_daily_price_symbol_count"] == 90
     assert "daily_price 20260703: 68" in output
     assert "daily_basic 20260703: 3" in output
+    assert "read_only SQL counts" in output
+    assert "any_daily_price_symbol_count: 90" in output
     assert "formal_result_usable: False" in output
 
 
@@ -49,6 +51,23 @@ def test_refresh_data_quality_status_updates_status_json(tmp_path: Path, monkeyp
     assert payload["latest_daily_basic_symbol_count"] == 3
     assert payload["latest_adj_factor_symbol_count"] == 0
     assert payload["any_daily_price_symbol_count"] == 90
+
+
+def test_refresh_data_quality_status_prints_debug_sql_counts(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Refresh text output should include explicit read-only SQL self-check counts."""
+    db_path, status_path = _seed_quality_db(tmp_path)
+    monkeypatch.setattr("core.jobs.refresh_data_quality_status.get_settings", lambda: SimpleNamespace(duckdb_path=db_path))
+
+    refresh_data_quality_status(status_path=status_path, output_format="text")
+    output = capsys.readouterr().out
+
+    assert "daily_price trade_date 分布 top 10" in output
+    assert "daily_basic trade_date 分布 top 10" in output
+    assert "adj_factor trade_date 分布 top 10" in output
+    assert "daily_price 20260703: 68" in output
+    assert "daily_basic 20260703: 3" in output
+    assert "adj_factor 20260703: 0" in output
+    assert "any_daily_price_symbol_count: 90" in output
 
 
 def _seed_quality_db(tmp_path: Path) -> tuple[Path, Path]:

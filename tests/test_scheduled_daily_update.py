@@ -1234,7 +1234,7 @@ def test_streamlit_shows_scheduled_update_status_and_download() -> None:
     source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
     assert "自动更新状态" in source
     assert "下载最新自动更新 Excel" in source
-    assert "手动补跑一次自动更新" in source
+    assert "手动补跑 18:00 自动更新" in source
     assert "run_scheduled_daily_update" in ALLOWED_COMMANDS
     assert "install_scheduled_daily_update" in ALLOWED_COMMANDS
     assert "uninstall_scheduled_daily_update" in ALLOWED_COMMANDS

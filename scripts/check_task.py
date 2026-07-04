@@ -3273,7 +3273,7 @@ def check_task57b(root: Path) -> list[str]:
             failures.append(f"command_runner.py is missing {phrase}.")
 
     streamlit_source = read_source(root / "web/streamlit_app.py")
-    for phrase in ["自动更新状态", "下载最新自动更新 Excel", "手动补跑一次自动更新", "read_scheduled_status"]:
+    for phrase in ["自动更新状态", "下载最新自动更新 Excel", "手动补跑 18:00 自动更新", "read_scheduled_status"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing Task 57B phrase: {phrase}.")
 
