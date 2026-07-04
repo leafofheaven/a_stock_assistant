@@ -3198,6 +3198,7 @@ def check_task57b(root: Path) -> list[str]:
             "core/jobs/run_scheduled_daily_update.py",
             "core/jobs/install_scheduled_daily_update.py",
             "core/jobs/uninstall_scheduled_daily_update.py",
+            "core/diagnostics/data_quality_snapshot.py",
             "core/notifications/macos.py",
             "core/notifications/email.py",
             "tests/test_scheduled_daily_update.py",
@@ -3279,6 +3280,7 @@ def check_task57b(root: Path) -> list[str]:
         read_source(root / "tests/test_scheduled_daily_update.py")
         + read_source(root / "tests/test_streamlit_app.py")
         + read_source(root / "tests/test_daily_research_workbook.py")
+        + read_source(root / "tests/test_data_quality_snapshot.py")
     )
     for phrase in [
         "test_scheduled_update_skips_before_scheduled_time",
@@ -3321,6 +3323,13 @@ def check_task57b(root: Path) -> list[str]:
         "test_preflight_warning_message_in_text_output",
         "test_formal_success_not_written_when_latest_coverage_poor",
         "test_data_quality_poor_when_latest_daily_price_coverage_low",
+        "test_latest_coverage_counts_only_latest_trade_date",
+        "test_any_history_coverage_is_named_separately",
+        "test_zero_count_cannot_have_high_latest_coverage",
+        "test_missing_data_quality_fields_do_not_default_to_ok",
+        "test_missing_formal_result_usable_does_not_default_to_true",
+        "test_data_update_page_uses_current_snapshot_for_poor_quality",
+        "test_data_update_page_raw_json_is_collapsed_by_default",
         "test_status_json_records_latest_table_coverages",
         "test_non_trade_day_force_uses_latest_completed_trade_date",
         "test_data_update_status_page_shows_data_quality_section",
@@ -3339,12 +3348,16 @@ def check_task57b(root: Path) -> list[str]:
     for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "18:00", "自动更新状态", "--update-limit 50", "--allow-intraday", "--update-mode daily_incremental", "full_backfill", "research_trade_date", "last_heartbeat_at", "DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS"]:
         if phrase not in docs_source:
             failures.append(f"docs/commands_reference.md is missing Task 57B wording: {phrase}.")
+    snapshot_source = read_source(root / "core/diagnostics/data_quality_snapshot.py")
+    for phrase in ["build_data_quality_snapshot", "latest_daily_price_symbol_count", "any_daily_price_symbol_count", "formal_result_usable", "latest_all_required_tables_coverage_rate"]:
+        if phrase not in snapshot_source:
+            failures.append(f"data_quality_snapshot.py is missing shared snapshot phrase: {phrase}.")
     diagnose_source = read_source(root / "core/jobs/diagnose_update_batch.py")
-    for phrase in ["latest_price_symbol_count", "latest_daily_basic_symbol_count", "latest_adj_factor_symbol_count", "latest_all_required_tables_symbol_count", "history_complete_symbol_count", "elder_ready_symbol_count", "latest_updated_but_history_incomplete_count"]:
+    for phrase in ["latest_price_symbol_count", "any_daily_price_symbol_count", "latest_daily_basic_symbol_count", "latest_adj_factor_symbol_count", "latest_all_required_tables_symbol_count", "history_complete_symbol_count", "elder_ready_symbol_count", "latest_updated_but_history_incomplete_count"]:
         if phrase not in diagnose_source:
             failures.append(f"diagnose_update_batch.py is missing latest/history coverage field: {phrase}.")
     streamlit_source = read_source(root / "web/streamlit_app.py")
-    for phrase in ["最新数据覆盖", "历史数据完整度", "模块可用性", "本次更新结果", "数据质量等级", "正式全市场研究结果可用", "运行数据质量诊断", "运行批量更新诊断"]:
+    for phrase in ["顶部结论卡片", "最新交易日覆盖", "任意历史行情覆盖", "历史数据完整度", "模块可用性", "本次更新结果", "数据质量等级", "正式全市场研究结果可用", "运行数据质量诊断", "运行批量更新诊断", "高级：原始自动更新状态 JSON"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing data update status section: {phrase}.")
     scheduled_source = read_source(root / "core/jobs/run_scheduled_daily_update.py")

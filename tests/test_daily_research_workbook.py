@@ -55,6 +55,12 @@ def test_daily_workbook_summary_includes_data_quality() -> None:
             "latest_daily_price_coverage_rate": 0.0135,
             "latest_daily_basic_coverage_rate": 0.0006,
             "latest_adj_factor_coverage_rate": 0.0,
+            "latest_all_required_tables_coverage_rate": 0.0,
+            "any_daily_price_coverage_rate": 0.9881,
+            "factor_ready_symbol_count": 68,
+            "elder_ready_symbol_count": 60,
+            "entry_zone_ready_symbol_count": 55,
+            "lookback_ready_symbol_count": 40,
             "formal_result_warning_reason": "当前结果仅供流程检查，不代表完整全市场筛选。",
         },
     )
@@ -63,6 +69,9 @@ def test_daily_workbook_summary_includes_data_quality() -> None:
     assert "poor" in text
     assert "正式全市场研究结果可用" in text
     assert "1.35%" in text
+    assert "任意历史行情覆盖率" in text
+    assert "98.81%" in text
+    assert "综合分可用股票数量" in text
     assert "当前结果仅供流程检查" in text
 
 

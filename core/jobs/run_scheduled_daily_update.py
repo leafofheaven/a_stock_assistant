@@ -17,6 +17,7 @@ import time as time_module
 from typing import Any, Callable, Iterator
 
 from app.config import Settings, get_settings
+from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.jobs.backup_local_data import backup_local_data
 from core.jobs.calculate_entry_zones import calculate_entry_zones
 from core.jobs.export_daily_research_workbook import export_daily_research_workbook
@@ -26,7 +27,7 @@ from core.jobs.track_watchlist import track_watchlist
 from core.notifications.email import send_email_notification
 from core.notifications.macos import send_macos_notification
 from core.runtime.data_source_preflight import run_data_source_preflight
-from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+from core.storage.duckdb_store import DuckDBStore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATUS_PATH = PROJECT_ROOT / "data" / "runtime" / "scheduled_daily_update_status.json"
@@ -954,155 +955,11 @@ def _run_data_quality_gate(
 
 def _collect_latest_data_quality(*, settings: Settings, research_trade_date: str) -> dict[str, Any]:
     """Collect latest date coverage from local DuckDB without external API access."""
-    store = DuckDBStore(getattr(settings, "duckdb_path", None))
-    try:
-        stock_basic = store.read_table("stock_basic")
-    except DuckDBStoreError:
-        stock_basic = _empty_frame()
-    try:
-        daily_price = store.read_table("daily_price")
-    except DuckDBStoreError:
-        daily_price = _empty_frame()
-    try:
-        daily_basic = store.read_table("daily_basic")
-    except DuckDBStoreError:
-        daily_basic = _empty_frame()
-    try:
-        adj_factor = store.read_table("adj_factor")
-    except DuckDBStoreError:
-        adj_factor = _empty_frame()
-    try:
-        factor_scores = store.read_table("factor_scores")
-    except DuckDBStoreError:
-        factor_scores = _empty_frame()
-    try:
-        strategy_result = store.read_table("strategy_result")
-    except DuckDBStoreError:
-        strategy_result = _empty_frame()
-    try:
-        entry_zones = store.read_table("entry_zone_snapshots")
-    except DuckDBStoreError:
-        entry_zones = _empty_frame()
-    try:
-        watchlist_snapshots = store.read_table("watchlist_daily_snapshots")
-    except DuckDBStoreError:
-        watchlist_snapshots = _empty_frame()
-
-    configured_symbols = _symbols_from_table(stock_basic)
-    if not configured_symbols:
-        configured_symbols = sorted(
-            _symbols_from_table(daily_price)
-            | _symbols_from_table(daily_basic)
-            | _symbols_from_table(adj_factor)
-        )
-    return _build_latest_quality_metrics(
-        configured_symbols=list(configured_symbols),
-        daily_price=daily_price,
-        daily_basic=daily_basic,
-        adj_factor=adj_factor,
-        factor_scores=factor_scores,
-        strategy_result=strategy_result,
-        entry_zones=entry_zones,
-        watchlist_snapshots=watchlist_snapshots,
+    return build_data_quality_snapshot(
+        db_path=getattr(settings, "duckdb_path", None),
         research_trade_date=research_trade_date,
+        latest_completed_trade_date=research_trade_date,
     )
-
-
-def _empty_frame() -> Any:
-    try:
-        import pandas as pd
-
-        return pd.DataFrame()
-    except Exception:
-        return []
-
-
-def _symbols_from_table(frame: Any) -> set[str]:
-    if not hasattr(frame, "empty") or frame.empty or "ts_code" not in frame.columns:
-        return set()
-    return set(frame["ts_code"].dropna().astype(str).tolist())
-
-
-def _symbols_at_date(frame: Any, trade_date: str) -> set[str]:
-    if not hasattr(frame, "empty") or frame.empty or "ts_code" not in frame.columns or "trade_date" not in frame.columns:
-        return set()
-    rows = frame[frame["trade_date"].astype(str) == str(trade_date)]
-    return _symbols_from_table(rows)
-
-
-def _build_latest_quality_metrics(
-    *,
-    configured_symbols: list[str],
-    daily_price: Any,
-    daily_basic: Any,
-    adj_factor: Any,
-    factor_scores: Any | None = None,
-    strategy_result: Any | None = None,
-    entry_zones: Any | None = None,
-    watchlist_snapshots: Any | None = None,
-    research_trade_date: str,
-) -> dict[str, Any]:
-    configured_set = set(configured_symbols)
-    configured_count = len(configured_set)
-    price_symbols = _symbols_at_date(daily_price, research_trade_date).intersection(configured_set) if configured_set else _symbols_at_date(daily_price, research_trade_date)
-    basic_symbols = _symbols_at_date(daily_basic, research_trade_date).intersection(configured_set) if configured_set else _symbols_at_date(daily_basic, research_trade_date)
-    adj_symbols = _symbols_at_date(adj_factor, research_trade_date).intersection(configured_set) if configured_set else _symbols_at_date(adj_factor, research_trade_date)
-    all_symbols = price_symbols.intersection(basic_symbols).intersection(adj_symbols)
-    denominator = configured_count or max(len(price_symbols | basic_symbols | adj_symbols), 1)
-    row_counts = _daily_price_row_counts(daily_price)
-    history_complete = [symbol for symbol in configured_set if row_counts.get(symbol, 0) >= 252]
-    history_incomplete = [symbol for symbol in configured_set if 0 < row_counts.get(symbol, 0) < 252]
-    history_missing = [symbol for symbol in configured_set if row_counts.get(symbol, 0) <= 0]
-    factor_symbols = _symbols_at_date(factor_scores, research_trade_date).intersection(configured_set) if factor_scores is not None else set()
-    elder_symbols = _symbols_at_date(watchlist_snapshots, research_trade_date).intersection(configured_set) if watchlist_snapshots is not None else set()
-    entry_zone_symbols = _symbols_at_date(entry_zones, research_trade_date).intersection(configured_set) if entry_zones is not None else set()
-    strategy_symbols = _symbols_at_date(strategy_result, research_trade_date).intersection(configured_set) if strategy_result is not None else set()
-    lookback_symbols = {symbol for symbol in strategy_symbols if row_counts.get(symbol, 0) >= 80}
-    latest_updated_but_history_incomplete = sorted(symbol for symbol in price_symbols if row_counts.get(symbol, 0) < 252)
-    history_complete_but_latest_missing = sorted(symbol for symbol in history_complete if symbol not in price_symbols)
-    metrics = {
-        "latest_completed_trade_date": research_trade_date,
-        "configured_symbol_count": configured_count,
-        "latest_daily_price_symbol_count": len(price_symbols),
-        "missing_latest_daily_price_symbol_count": max(denominator - len(price_symbols), 0),
-        "missing_latest_daily_price_examples": sorted((configured_set or price_symbols) - price_symbols)[:30],
-        "latest_daily_price_coverage_rate": len(price_symbols) / denominator if denominator else 0.0,
-        "latest_daily_basic_symbol_count": len(basic_symbols),
-        "missing_latest_daily_basic_symbol_count": max(denominator - len(basic_symbols), 0),
-        "missing_latest_daily_basic_examples": sorted((configured_set or basic_symbols) - basic_symbols)[:30],
-        "latest_daily_basic_coverage_rate": len(basic_symbols) / denominator if denominator else 0.0,
-        "latest_adj_factor_symbol_count": len(adj_symbols),
-        "missing_latest_adj_factor_symbol_count": max(denominator - len(adj_symbols), 0),
-        "missing_latest_adj_factor_examples": sorted((configured_set or adj_symbols) - adj_symbols)[:30],
-        "latest_adj_factor_coverage_rate": len(adj_symbols) / denominator if denominator else 0.0,
-        "latest_all_required_tables_symbol_count": len(all_symbols),
-        "missing_latest_all_required_tables_symbol_count": max(denominator - len(all_symbols), 0),
-        "latest_all_required_tables_coverage_rate": len(all_symbols) / denominator if denominator else 0.0,
-        "history_complete_symbol_count": len(history_complete),
-        "history_incomplete_symbol_count": len(history_incomplete),
-        "history_missing_symbol_count": len(history_missing),
-        "history_missing_examples": sorted(history_missing)[:30],
-        "available_days_20d_count": sum(1 for symbol in configured_set if row_counts.get(symbol, 0) >= 20),
-        "available_days_60d_count": sum(1 for symbol in configured_set if row_counts.get(symbol, 0) >= 60),
-        "available_days_120d_count": sum(1 for symbol in configured_set if row_counts.get(symbol, 0) >= 120),
-        "available_days_252d_count": sum(1 for symbol in configured_set if row_counts.get(symbol, 0) >= 252),
-        "factor_ready_symbol_count": len(factor_symbols),
-        "elder_ready_symbol_count": len(elder_symbols),
-        "entry_zone_ready_symbol_count": len(entry_zone_symbols),
-        "lookback_ready_symbol_count": len(lookback_symbols),
-        "latest_updated_but_history_incomplete_examples": latest_updated_but_history_incomplete[:30],
-        "history_complete_but_latest_missing_examples": history_complete_but_latest_missing[:30],
-        "latest_updated_but_history_incomplete_count": len(latest_updated_but_history_incomplete),
-        "history_complete_but_latest_missing_count": len(history_complete_but_latest_missing),
-    }
-    return _normalize_data_quality_gate(metrics, research_trade_date)
-
-
-def _daily_price_row_counts(frame: Any) -> dict[str, int]:
-    if not hasattr(frame, "empty") or frame.empty or "ts_code" not in frame.columns:
-        return {}
-    counts = frame.groupby(frame["ts_code"].astype(str)).size()
-    return {str(symbol): int(count) for symbol, count in counts.items()}
 
 
 def _normalize_data_quality_gate(payload: dict[str, Any], research_trade_date: str) -> dict[str, Any]:
@@ -1118,6 +975,19 @@ def _normalize_data_quality_gate(payload: dict[str, Any], research_trade_date: s
         "missing_latest_adj_factor_symbol_count",
         "latest_all_required_tables_symbol_count",
         "missing_latest_all_required_tables_symbol_count",
+        "any_daily_price_symbol_count",
+        "missing_any_daily_price_symbol_count",
+        "history_complete_symbol_count",
+        "history_incomplete_symbol_count",
+        "history_missing_symbol_count",
+        "available_days_20d_count",
+        "available_days_60d_count",
+        "available_days_120d_count",
+        "available_days_252d_count",
+        "factor_ready_symbol_count",
+        "elder_ready_symbol_count",
+        "entry_zone_ready_symbol_count",
+        "lookback_ready_symbol_count",
     ]:
         result[key] = _positive_int(result.get(key))
     for key in [
@@ -1125,6 +995,7 @@ def _normalize_data_quality_gate(payload: dict[str, Any], research_trade_date: s
         "latest_daily_basic_coverage_rate",
         "latest_adj_factor_coverage_rate",
         "latest_all_required_tables_coverage_rate",
+        "any_daily_price_coverage_rate",
     ]:
         try:
             result[key] = float(result.get(key) or 0.0)
@@ -1290,7 +1161,28 @@ def _base_status(
         "missing_latest_adj_factor_symbol_count": 0,
         "latest_adj_factor_coverage_rate": 0.0,
         "latest_all_required_tables_symbol_count": 0,
+        "missing_latest_all_required_tables_symbol_count": 0,
         "latest_all_required_tables_coverage_rate": 0.0,
+        "any_daily_price_symbol_count": 0,
+        "missing_any_daily_price_symbol_count": 0,
+        "any_daily_price_coverage_rate": 0.0,
+        "history_complete_symbol_count": 0,
+        "history_incomplete_symbol_count": 0,
+        "history_missing_symbol_count": 0,
+        "available_days_20d_count": 0,
+        "available_days_60d_count": 0,
+        "available_days_120d_count": 0,
+        "available_days_252d_count": 0,
+        "factor_ready_symbol_count": 0,
+        "elder_ready_symbol_count": 0,
+        "entry_zone_ready_symbol_count": 0,
+        "lookback_ready_symbol_count": 0,
+        "missing_latest_daily_price_examples": [],
+        "missing_latest_daily_basic_examples": [],
+        "missing_latest_adj_factor_examples": [],
+        "history_missing_examples": [],
+        "latest_updated_but_history_incomplete_examples": [],
+        "history_complete_but_latest_missing_examples": [],
         "processed_symbol_count": 0,
         "total_symbol_count": 0,
         "notification": {"macos_notification": "skipped", "email_enabled": False, "email_status": "disabled", "email_error": ""},

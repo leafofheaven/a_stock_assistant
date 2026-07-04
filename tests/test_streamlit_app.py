@@ -466,6 +466,9 @@ def test_data_update_status_page_shows_data_quality_section() -> None:
         "latest_daily_price_coverage_rate",
         "latest_daily_basic_coverage_rate",
         "latest_adj_factor_coverage_rate",
+        "任意历史行情覆盖",
+        "顶部结论卡片",
+        "高级：原始自动更新状态 JSON",
     ]:
         assert phrase in source
 
@@ -501,6 +504,62 @@ def test_data_update_status_page_marks_poor_coverage() -> None:
     assert merged["formal_result_usable"] is False
     assert merged["latest_completed_trade_date"] == "20260703"
     assert "仅供流程检查" in merged["formal_result_warning_reason"]
+
+
+def test_missing_data_quality_fields_do_not_default_to_ok() -> None:
+    """Missing quality fields should not be treated as ok."""
+    merged = _merge_scheduled_quality_fallback(
+        {"status": "warning", "stage": "done", "research_trade_date": "20260703"},
+        {},
+    )
+
+    assert merged["data_quality_status"] == "unknown"
+    assert merged["formal_result_usable"] is False
+
+
+def test_missing_formal_result_usable_does_not_default_to_true() -> None:
+    """Missing usability should not become true implicitly."""
+    merged = _merge_scheduled_quality_fallback(
+        {"status": "warning", "stage": "done", "research_trade_date": "20260703", "latest_daily_price_coverage_rate": 0.0},
+        {},
+    )
+
+    assert merged["formal_result_usable"] is False
+
+
+def test_data_update_page_uses_current_snapshot_for_poor_quality() -> None:
+    """Current read-only snapshot should override stale scheduled ok quality."""
+    merged = _merge_scheduled_quality_fallback(
+        {
+            "status": "warning",
+            "stage": "done",
+            "research_trade_date": "20260703",
+            "data_quality_status": "ok",
+            "formal_result_usable": True,
+        },
+        {
+            "configured_symbol_count": 5055,
+            "latest_completed_trade_date": "20260703",
+            "latest_daily_price_symbol_count": 68,
+            "missing_latest_daily_price_symbol_count": 4987,
+            "latest_daily_price_coverage_rate": 0.0135,
+            "data_quality_status": "poor",
+            "formal_result_usable": False,
+            "formal_result_warning_reason": "最新交易日数据覆盖严重不足",
+        },
+    )
+
+    assert merged["data_quality_status"] == "poor"
+    assert merged["formal_result_usable"] is False
+    assert merged["latest_daily_price_symbol_count"] == 68
+
+
+def test_data_update_page_raw_json_is_collapsed_by_default() -> None:
+    """Raw scheduled JSON should be hidden behind an expander."""
+    source = (Path(__file__).resolve().parents[1] / "web" / "streamlit_app.py").read_text(encoding="utf-8")
+    assert "高级：原始自动更新状态 JSON" in source
+    assert "expanded=False" in source
+    assert "顶部结论卡片" in source
 
 
 def test_render_dashboard_shows_database_locked_status(monkeypatch) -> None:

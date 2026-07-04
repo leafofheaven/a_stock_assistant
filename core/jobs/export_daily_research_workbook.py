@@ -15,6 +15,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.config import Settings, get_settings
+from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 SHEET_NAMES = [
@@ -229,7 +230,14 @@ def export_daily_research_workbook(
     watchlist_sheet = _with_display_order(_preferred_columns(watchlist_sheet, _watchlist_columns()))
     external_sheet = _latest_external_positions(external_positions)
     risk_sheet = _build_risk_sheet(entry_sheet, watchlist_sheet, external_sheet)
-    scheduled_status = _read_scheduled_update_status()
+    scheduled_status = _merge_scheduled_with_snapshot(
+        _read_scheduled_update_status(),
+        build_data_quality_snapshot(
+            store=resolved_store,
+            research_trade_date=selected_trade_date,
+            latest_completed_trade_date=selected_trade_date,
+        ),
+    )
     quality_sheet = (
         _build_data_quality_sheet(resolved_store, selected_trade_date)
         if include_data_quality
@@ -736,6 +744,12 @@ def _build_summary_sheet(
                 {"metric": "最新交易日 daily_price 覆盖率", "value": _format_rate_value(scheduled_status.get("latest_daily_price_coverage_rate"))},
                 {"metric": "最新交易日 daily_basic 覆盖率", "value": _format_rate_value(scheduled_status.get("latest_daily_basic_coverage_rate"))},
                 {"metric": "最新交易日 adj_factor 覆盖率", "value": _format_rate_value(scheduled_status.get("latest_adj_factor_coverage_rate"))},
+                {"metric": "最新交易日全部必需表覆盖率", "value": _format_rate_value(scheduled_status.get("latest_all_required_tables_coverage_rate"))},
+                {"metric": "任意历史行情覆盖率", "value": _format_rate_value(scheduled_status.get("any_daily_price_coverage_rate"))},
+                {"metric": "综合分可用股票数量", "value": scheduled_status.get("factor_ready_symbol_count", 0)},
+                {"metric": "埃尔德复核可用股票数量", "value": scheduled_status.get("elder_ready_symbol_count", 0)},
+                {"metric": "买入区间可用股票数量", "value": scheduled_status.get("entry_zone_ready_symbol_count", 0)},
+                {"metric": "自动回看可用股票数量", "value": scheduled_status.get("lookback_ready_symbol_count", 0)},
                 {"metric": "正式全市场研究结果可用", "value": "是" if scheduled_status.get("formal_result_usable") else "否"},
                 {"metric": "正式结果提示", "value": scheduled_status.get("formal_result_warning_reason") or "暂无"},
             ]
@@ -759,6 +773,20 @@ def _read_scheduled_update_status(status_path: str | Path | None = None) -> dict
     except Exception:
         return {"status": "failed", "summary": "自动更新状态文件不可读。"}
     return payload if isinstance(payload, dict) else None
+
+
+def _merge_scheduled_with_snapshot(
+    scheduled_status: dict[str, Any] | None,
+    snapshot: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Merge scheduled metadata with the current read-only quality snapshot."""
+    if not scheduled_status and not snapshot:
+        return None
+    merged = dict(scheduled_status or {})
+    for key, value in (snapshot or {}).items():
+        if value not in (None, ""):
+            merged[key] = value
+    return merged
 
 
 def _append_scheduled_quality_rows(frame: pd.DataFrame, scheduled_status: dict[str, Any] | None) -> pd.DataFrame:
@@ -793,6 +821,20 @@ def _append_scheduled_quality_rows(frame: pd.DataFrame, scheduled_status: dict[s
             "distinct_symbols": scheduled_status.get("latest_adj_factor_symbol_count", ""),
             "latest_date": scheduled_status.get("latest_completed_trade_date") or "",
             "note": f"最新交易日 adj_factor 覆盖率：{_format_rate_value(scheduled_status.get('latest_adj_factor_coverage_rate'))}",
+        },
+        {
+            "table_name": "scheduled_daily_update",
+            "row_count": "",
+            "distinct_symbols": scheduled_status.get("latest_all_required_tables_symbol_count", ""),
+            "latest_date": scheduled_status.get("latest_completed_trade_date") or "",
+            "note": f"最新交易日全部必需表覆盖率：{_format_rate_value(scheduled_status.get('latest_all_required_tables_coverage_rate'))}",
+        },
+        {
+            "table_name": "scheduled_daily_update",
+            "row_count": "",
+            "distinct_symbols": scheduled_status.get("any_daily_price_symbol_count", ""),
+            "latest_date": scheduled_status.get("latest_completed_trade_date") or "",
+            "note": f"任意历史行情覆盖率：{_format_rate_value(scheduled_status.get('any_daily_price_coverage_rate'))}。这不等于最新交易日覆盖。",
         },
     ]
     if scheduled_status.get("formal_result_warning_reason"):

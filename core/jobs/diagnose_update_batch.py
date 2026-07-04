@@ -107,6 +107,10 @@ def main() -> None:
     print(f"- 配置股票数量: {result['configured_symbol_count']}")
     print(f"- 数据库中实际有行情的股票数量: {result['priced_symbol_count']}")
     print(f"- 覆盖率: {result['coverage_rate']:.2%}")
+    print("- 任意历史行情覆盖:")
+    print(f"  any_daily_price_symbol_count: {result.get('any_daily_price_symbol_count', result['priced_symbol_count'])}")
+    print(f"  missing_any_daily_price_symbol_count: {result.get('missing_any_daily_price_symbol_count', len(result.get('missing_symbols', [])))}")
+    print(f"  any_daily_price_coverage_rate: {result.get('any_daily_price_coverage_rate', result['coverage_rate']):.2%}")
     print("- 最新数据覆盖:")
     print(f"  latest_trade_date: {result.get('latest_trade_date') or '暂无'}")
     print(f"  latest_daily_price_symbol_count: {result.get('latest_daily_price_symbol_count', result.get('latest_price_symbol_count', 0))}")
@@ -252,6 +256,7 @@ def _data_quality_breakdown(
     max_date_by_symbol = {str(item["ts_code"]): str(item.get("max_trade_date") or "") for item in coverage}
     latest_symbols = [symbol for symbol in configured_symbols if latest_trade_date and max_date_by_symbol.get(symbol) == latest_trade_date]
     configured_set = set(configured_symbols)
+    any_daily_price_symbols = {symbol for symbol, row_count in rows_by_symbol.items() if row_count > 0}
     latest_daily_price_symbols = set(latest_symbols)
     latest_daily_basic_symbols = _table_symbols_at_date(tables.get("daily_basic", pd.DataFrame()), "trade_date", latest_trade_date).intersection(configured_set)
     latest_adj_factor_symbols = _table_symbols_at_date(tables.get("adj_factor", pd.DataFrame()), "trade_date", latest_trade_date).intersection(configured_set)
@@ -276,6 +281,9 @@ def _data_quality_breakdown(
         "latest_price_symbol_count": len(latest_symbols),
         "missing_latest_price_symbol_count": max(len(configured_symbols) - len(latest_symbols), 0),
         "latest_price_coverage_rate": (len(latest_symbols) / len(configured_symbols)) if configured_symbols else 0.0,
+        "any_daily_price_symbol_count": len(any_daily_price_symbols),
+        "missing_any_daily_price_symbol_count": max(len(configured_symbols) - len(any_daily_price_symbols), 0),
+        "any_daily_price_coverage_rate": (len(any_daily_price_symbols) / len(configured_symbols)) if configured_symbols else 0.0,
         "latest_daily_price_symbol_count": len(latest_daily_price_symbols),
         "missing_latest_daily_price_symbol_count": max(len(configured_symbols) - len(latest_daily_price_symbols), 0),
         "latest_daily_price_coverage_rate": (len(latest_daily_price_symbols) / len(configured_symbols)) if configured_symbols else 0.0,
