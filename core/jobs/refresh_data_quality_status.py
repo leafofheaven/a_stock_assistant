@@ -34,6 +34,8 @@ def refresh_data_quality_status(
     if path.exists() or status:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(refreshed, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    if output_format == "silent":
+        return refreshed
     if output_format == "json":
         print(json.dumps(refreshed, ensure_ascii=False, indent=2, default=str))
     else:

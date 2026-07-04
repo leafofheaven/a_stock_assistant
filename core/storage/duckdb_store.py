@@ -151,6 +151,14 @@ class DuckDBStore:
                 "updated_at": "TIMESTAMP",
             },
         )
+        self._add_columns_if_missing(
+            connection,
+            "adj_factor",
+            {
+                "derived_adj_factor": "BOOLEAN",
+                "source_provider": "VARCHAR",
+            },
+        )
 
     def _add_columns_if_missing(
         self,

@@ -34,8 +34,12 @@ def test_task51_update_commands_are_whitelisted() -> None:
     """Task 51 Streamlit buttons should call registered safe commands."""
     assert "preflight_data_source" in ALLOWED_COMMANDS
     assert "run_full_batch_update" in ALLOWED_COMMANDS
+    assert "update_market_data" in ALLOWED_COMMANDS
+    assert "import_market_data" in ALLOWED_COMMANDS
     assert ALLOWED_COMMANDS["preflight_data_source"][1:4] == ["-m", "core.jobs.preflight_data_source"]
     assert ALLOWED_COMMANDS["run_full_batch_update"][1:4] == ["-m", "core.jobs.run_full_batch_update"]
+    assert ALLOWED_COMMANDS["update_market_data"][1:4] == ["-m", "core.jobs.update_market_data"]
+    assert ALLOWED_COMMANDS["import_market_data"][1:4] == ["-m", "core.jobs.import_market_data"]
 
 
 def test_command_runner_rejects_unlisted_command() -> None:

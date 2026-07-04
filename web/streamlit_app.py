@@ -6,6 +6,7 @@ import sys
 import json
 from io import StringIO
 from pathlib import Path
+import tempfile
 from typing import Any
 
 import pandas as pd
@@ -42,6 +43,8 @@ ALLOWED_COMMANDS.setdefault("run_full_batch_update", [sys.executable, "-m", "cor
 ALLOWED_COMMANDS.setdefault("preflight_data_source", [sys.executable, "-m", "core.jobs.preflight_data_source"])
 ALLOWED_COMMANDS.setdefault("diagnose_data_source_network", [sys.executable, "-m", "core.jobs.diagnose_data_source_network"])
 ALLOWED_COMMANDS.setdefault("refresh_data_quality_status", [sys.executable, "-m", "core.jobs.refresh_data_quality_status"])
+ALLOWED_COMMANDS.setdefault("update_market_data", [sys.executable, "-m", "core.jobs.update_market_data"])
+ALLOWED_COMMANDS.setdefault("import_market_data", [sys.executable, "-m", "core.jobs.import_market_data"])
 ALLOWED_COMMANDS.setdefault("run_scheduled_daily_update", [sys.executable, "-m", "core.jobs.run_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("install_scheduled_daily_update", [sys.executable, "-m", "core.jobs.install_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("uninstall_scheduled_daily_update", [sys.executable, "-m", "core.jobs.uninstall_scheduled_daily_update"])
@@ -1562,8 +1565,7 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     status = {**legacy_status, **snapshot}
 
     _render_status_quality_main(st, scheduled, status)
-    _render_status_buttons(st)
-    _render_full_batch_update_section(st, status)
+    _render_user_level_data_update_actions(st, scheduled, status)
     _render_status_advanced_sections(st, tables, scheduled, legacy_status)
 
 
@@ -1677,15 +1679,15 @@ def _status_module_frame(status: dict[str, Any]) -> pd.DataFrame:
 
 def _status_run_result_row(scheduled: dict[str, Any]) -> dict[str, Any]:
     return {
-        "update_mode": scheduled.get("update_mode") or "暂无",
-        "started_at": scheduled.get("started_at") or "暂无",
-        "finished_at": scheduled.get("finished_at") or "暂无",
-        "processed_symbol_count": scheduled.get("processed_symbol_count", 0),
-        "total_symbol_count": scheduled.get("total_symbol_count", 0),
-        "update_failed_symbol_count": scheduled.get("update_failed_symbol_count", 0),
-        "empty_data_symbol_count": scheduled.get("empty_data_symbol_count", 0),
-        "network_timeout_count": scheduled.get("network_timeout_count", 0),
-        "workbook_path": scheduled.get("workbook_path") or "暂无",
+        "更新类型": scheduled.get("update_mode") or "暂无",
+        "开始时间": scheduled.get("started_at") or "暂无",
+        "结束时间": scheduled.get("finished_at") or "暂无",
+        "已处理数量": scheduled.get("processed_symbol_count", 0),
+        "计划处理数量": scheduled.get("total_symbol_count", 0),
+        "失败数量": scheduled.get("update_failed_symbol_count", 0),
+        "空数据数量": scheduled.get("empty_data_symbol_count", 0),
+        "网络超时数量": scheduled.get("network_timeout_count", 0),
+        "每日研究工作簿": scheduled.get("workbook_path") or "暂无",
     }
 
 
@@ -1693,7 +1695,7 @@ def _render_status_buttons(st: Any) -> None:
     st.write("按钮区")
     st.markdown("**1. 只读状态 / 诊断**")
     st.caption("不联网；不写 DuckDB；不生成 Excel；不改变今日研究结果。")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     if col1.button("刷新页面数据质量", key="refresh_data_quality_status_button"):
         _run_streaming_console_action(st, "刷新页面数据质量", "refresh_data_quality_status", ["--format", "text"], success_message="数据质量状态刷新完成。请刷新页面查看最新结果。")
     if col2.button("运行数据质量诊断", key="run_real_data_diagnostic"):
@@ -1706,7 +1708,102 @@ def _render_status_buttons(st: Any) -> None:
         _run_streaming_console_action(st, "手动补跑 18:00 自动更新", "run_scheduled_daily_update", ["--force", "--format", "text"], success_message="自动更新补跑命令执行完成。请刷新页面查看最新状态。")
 
 
+def _render_user_level_data_update_actions(st: Any, scheduled: dict[str, Any], status: dict[str, Any]) -> None:
+    """Render only user-level actions; provider choice stays automatic."""
+    st.write("数据更新操作")
+    st.info("系统会在后台自动判断可用免费数据源；你不需要选择具体接口。")
+    display_dataframe(st, pd.DataFrame([_automatic_source_summary_row(scheduled, status)]))
+    col1, col2, col3 = st.columns(3)
+    if col1.button("一键更新最新交易日数据", key="auto_update_latest_trade_date"):
+        _run_streaming_console_action(
+            st,
+            "一键更新最新交易日数据",
+            "update_market_data",
+            ["--mode", "daily_incremental", "--provider", "auto", "--format", "text"],
+            success_message="最新交易日数据更新完成。请刷新页面查看数据质量。",
+        )
+    if col2.button("补历史行情缺口", key="auto_repair_history_gap"):
+        _run_streaming_console_action(
+            st,
+            "补历史行情缺口",
+            "update_market_data",
+            ["--mode", "full_backfill", "--provider", "auto", "--format", "text"],
+            success_message="历史行情缺口补齐命令执行完成。请刷新页面查看数据质量。",
+        )
+    if col3.button("运行数据源诊断", key="run_user_level_data_source_diagnosis"):
+        _run_streaming_console_action(
+            st,
+            "运行数据源诊断",
+            "diagnose_data_source_network",
+            ["--format", "text"],
+            success_message="数据源诊断完成。",
+        )
+    if col4.button("上传 CSV / Excel 导入行情", key="show_market_data_upload"):
+        st.session_state["show_market_data_upload"] = True
+    if st.session_state.get("show_market_data_upload"):
+        st.caption("本地文件；会写 DuckDB；不联网；不生成 Excel；导入后刷新数据质量。")
+        table_name = st.selectbox("导入目标", ["daily_price", "daily_basic", "adj_factor"], format_func=_market_table_label, index=0)
+        uploaded = st.file_uploader("选择本地行情文件", type=["csv", "xlsx", "xls"], key="market_data_manual_upload")
+        if uploaded is not None and st.button("确认导入本地行情文件", key="import_uploaded_market_data"):
+            suffix = Path(uploaded.name).suffix or ".csv"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
+                handle.write(uploaded.getvalue())
+                temp_path = handle.name
+            _run_streaming_console_action(
+                st,
+                "导入本地行情文件",
+                "import_market_data",
+                ["--file", temp_path, "--table", table_name, "--format", "text"],
+                success_message="本地行情文件导入完成。请刷新页面查看数据质量。",
+            )
+
+
+def _automatic_source_summary_row(scheduled: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
+    latest_success = _friendly_provider_name(str(scheduled.get("latest_success_provider") or ""))
+    failure = scheduled.get("latest_provider_failure_reason") or ""
+    if latest_success != "暂无":
+        result = f"本次使用：{latest_success}。"
+    elif failure:
+        result = "所有自动数据源均失败，请尝试导入本地行情文件。"
+    else:
+        result = "尚无自动数据源更新记录。"
+    usable = status.get("formal_result_usable") is True
+    return {
+        "当前数据质量": status.get("data_quality_status") or "unknown",
+        "正式全市场研究结果可用": "是" if usable else "否",
+        "最新交易日覆盖率": f"{float(status.get('latest_daily_price_coverage_rate', 0.0) or 0.0):.2%}",
+        "历史行情覆盖率": f"{float(status.get('any_daily_price_coverage_rate', 0.0) or 0.0):.2%}",
+        "后台自动选择结果": result,
+        "提示": "本次仅完成部分更新，尚不能作为正式全市场研究结果。" if not usable else "数据覆盖满足正式研究口径。",
+    }
+
+
+def _friendly_provider_name(provider: str) -> str:
+    return {
+        "akshare_kline": "历史行情接口",
+        "akshare_spot_snapshot": "实时行情快照兜底",
+        "baostock": "历史行情免费兜底",
+        "csv_manual_import": "本地 CSV 导入",
+        "excel_manual_import": "本地 Excel 导入",
+        "auto": "后台自动判断",
+    }.get(provider, "暂无")
+
+
+def _market_table_label(table_name: str) -> str:
+    return {
+        "daily_price": "日行情",
+        "daily_basic": "估值 / 基础行情",
+        "adj_factor": "复权因子",
+    }.get(table_name, table_name)
+
+
 def _render_status_advanced_sections(st: Any, tables: dict[str, pd.DataFrame], scheduled: dict[str, Any], status: dict[str, Any]) -> None:
+    with st.expander("高级：自动数据源技术诊断", expanded=False):
+        _render_free_provider_fallback_section(st, scheduled, status)
+    with st.expander("高级：只读诊断和自动更新补跑", expanded=False):
+        _render_status_buttons(st)
+    with st.expander("高级：全市场批量补数据参数", expanded=False):
+        _render_full_batch_update_section(st, status)
     with st.expander("高级：原始自动更新状态 JSON", expanded=False):
         if scheduled:
             st.json(scheduled)
@@ -1733,6 +1830,28 @@ def _render_status_advanced_sections(st: Any, tables: dict[str, pd.DataFrame], s
     with st.expander("高级：本地数据库和备份", expanded=False):
         local_state = status.get("local_state")
         st.write(local_state if isinstance(local_state, dict) and local_state else "暂无本地状态 / 备份信息。")
+
+
+def _render_free_provider_fallback_section(st: Any, scheduled: dict[str, Any], status: dict[str, Any]) -> None:
+    """Render free-provider fallback controls for Task 57D."""
+    st.subheader("自动数据源技术诊断")
+    st.caption("以下是技术诊断信息，默认折叠。普通使用只需点击主页面的一键更新或补历史缺口。")
+    attempts = list(scheduled.get("provider_attempts") or [])
+    latest_attempt = attempts[-1] if attempts else {}
+    st.write(
+        {
+            "自动兜底顺序": "AKShare K 线 -> AKShare 实时行情快照 -> BaoStock daily_price -> CSV / Excel 手动导入提示",
+            "Tushare": "可选，不推荐作为默认方案；未配置 token 不报错",
+            "最近成功 provider": scheduled.get("latest_success_provider") or "暂无",
+            "最近失败 provider": latest_attempt.get("provider") if latest_attempt and not latest_attempt.get("success") else "暂无",
+            "最近失败原因": scheduled.get("latest_provider_failure_reason") or "暂无",
+            "最新数据质量": status.get("data_quality_status") or "unknown",
+        }
+    )
+    if attempts:
+        st.json({"provider_attempts": attempts[-10:]})
+    else:
+        st.info("暂无 provider_attempts。")
 
 
 def _render_scheduled_update_section(st: Any) -> None:

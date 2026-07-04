@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS adj_factor (
     ts_code VARCHAR,
     trade_date VARCHAR,
     adj_factor DOUBLE,
+    derived_adj_factor BOOLEAN,
+    source_provider VARCHAR,
     PRIMARY KEY (ts_code, trade_date)
 );
 
