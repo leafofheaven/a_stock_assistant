@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,7 +27,9 @@ from web.streamlit_app import (
     _extract_workbook_output_path,
     _merge_scheduled_quality_fallback,
     _render_section,
+    _render_status_tab,
     _lightweight_database_metrics,
+    _status_data_quality_snapshot,
     summarize_update_status,
 )
 from core.storage.duckdb_store import DuckDBStore
@@ -560,6 +563,114 @@ def test_data_update_page_raw_json_is_collapsed_by_default() -> None:
     assert "高级：原始自动更新状态 JSON" in source
     assert "expanded=False" in source
     assert "顶部结论卡片" in source
+
+
+def test_status_tab_does_not_render_lookback_analysis_section() -> None:
+    """Data update tab should not render the automatic lookback action section."""
+    body = inspect.getsource(_render_status_tab)
+
+    assert "_render_lookback_analysis_section" not in body
+
+
+def test_status_tab_has_no_run_lookback_analysis_button() -> None:
+    """The run_lookback_analysis button must only live outside the status tab."""
+    body = inspect.getsource(_render_status_tab)
+
+    assert "run_lookback_analysis_button" not in body
+
+
+def test_status_tab_default_view_uses_scheduled_update_section_only() -> None:
+    """The default status tab should start with scheduled quality and batch update sections."""
+    body = inspect.getsource(_render_status_tab)
+
+    assert "_render_scheduled_update_section(st, status)" in body
+    assert "_render_full_batch_update_section(st, status)" in body
+    assert 'st.metric("最新行情日期"' not in body
+    assert 'st.write("最新数据覆盖")' not in body
+
+
+def test_old_status_sections_are_collapsed_by_default() -> None:
+    """Legacy diagnostics should be available only in collapsed advanced sections."""
+    body = inspect.getsource(_render_status_tab)
+
+    assert 'st.expander("高级：旧版诊断信息", expanded=False)' in body
+    assert 'st.expander("高级：最近报告文件", expanded=False)' in body
+    assert 'st.expander("高级：观察池明细", expanded=False)' in body
+    assert 'st.expander("高级：本地数据库和备份", expanded=False)' in body
+
+
+def test_no_duplicate_streamlit_keys_for_lookback_button() -> None:
+    """Only the strategy/backtest lookback section should define the lookback button key."""
+    source = (Path(__file__).resolve().parents[1] / "web" / "streamlit_app.py").read_text(encoding="utf-8")
+
+    assert source.count('key="run_lookback_analysis_button"') == 1
+
+
+def test_latest_coverage_counts_actual_trade_date(tmp_path: Path) -> None:
+    """Status-page snapshot should query DuckDB and count only the requested trade date."""
+    store = DuckDBStore(tmp_path / "coverage.duckdb")
+    store.initialize()
+    symbols = [f"{index:06d}.SZ" for index in range(1, 5056)]
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            {
+                "ts_code": symbols,
+                "symbol": [code[:6] for code in symbols],
+                "name": [f"股票{index}" for index in range(1, 5056)],
+                "market": ["主板"] * 5055,
+                "exchange": ["SZSE"] * 5055,
+            }
+        ),
+    )
+    priced_symbols = symbols[:4995]
+    latest_symbols = set(symbols[:68])
+    store.upsert_dataframe(
+        "daily_price",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": symbol,
+                    "trade_date": "20260703" if symbol in latest_symbols else "20260630",
+                    "open": 1.0,
+                    "high": 1.0,
+                    "low": 1.0,
+                    "close": 1.0,
+                    "pre_close": 1.0,
+                    "change": 0.0,
+                    "pct_chg": 0.0,
+                    "vol": 1.0,
+                    "amount": 1.0,
+                }
+                for symbol in priced_symbols
+            ]
+        ),
+    )
+    store.upsert_dataframe(
+        "daily_basic",
+        pd.DataFrame(
+            {
+                "ts_code": symbols[:3],
+                "trade_date": ["20260703"] * 3,
+                "turnover_rate": [1.0] * 3,
+                "pe": [10.0] * 3,
+                "pb": [1.0] * 3,
+            }
+        ),
+    )
+
+    snapshot = _status_data_quality_snapshot({"_duckdb_path": str(store.db_path)}, "20260703")
+
+    assert snapshot["configured_symbol_count"] == 5055
+    assert snapshot["latest_daily_price_symbol_count"] == 68
+    assert snapshot["latest_daily_basic_symbol_count"] == 3
+    assert snapshot["latest_adj_factor_symbol_count"] == 0
+    assert snapshot["latest_all_required_tables_symbol_count"] == 0
+    assert snapshot["any_daily_price_symbol_count"] == 4995
+    assert snapshot["latest_daily_price_coverage_rate"] == 68 / 5055
+    assert snapshot["any_daily_price_coverage_rate"] == 4995 / 5055
+    assert snapshot["data_quality_status"] == "poor"
+    assert snapshot["formal_result_usable"] is False
 
 
 def test_render_dashboard_shows_database_locked_status(monkeypatch) -> None:

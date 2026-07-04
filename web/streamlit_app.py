@@ -342,10 +342,8 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     latest_watchlist_report = tables.get("_latest_watchlist_report")
     latest_watchlist_tracking_report = tables.get("_latest_watchlist_tracking_report")
     local_state = tables.get("_local_state")
-    snapshot = build_data_quality_snapshot(
-        tables={name: value for name, value in tables.items() if isinstance(value, pd.DataFrame)},
-        latest_completed_trade_date=str(tables.get("_latest_trade_date") or tables.get("_latest_price_date") or _latest_date(daily_price, "trade_date") or ""),
-    )
+    snapshot_target_date = str(tables.get("_latest_trade_date") or tables.get("_latest_price_date") or _latest_date(daily_price, "trade_date") or "")
+    snapshot = _status_data_quality_snapshot(tables, snapshot_target_date)
     result = {
         "latest_price_date": tables.get("_latest_price_date") or _latest_date(daily_price, "trade_date"),
         "latest_factor_date": _latest_date(factor_scores, "trade_date"),
@@ -409,6 +407,25 @@ def summarize_update_status(tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
     result["coverage_rate"] = coverage_rate or float(snapshot.get("any_daily_price_coverage_rate", 0.0) or 0.0)
     result["missing_symbol_count"] = missing_count or int(snapshot.get("missing_any_daily_price_symbol_count", 0) or 0)
     return result
+
+
+def _status_data_quality_snapshot(tables: dict[str, Any], latest_completed_trade_date: str) -> dict[str, Any]:
+    """Build status-page quality snapshot, preferring read-only DuckDB over truncated UI tables."""
+    duckdb_path = str(tables.get("_duckdb_path") or "")
+    if duckdb_path:
+        try:
+            return build_data_quality_snapshot(
+                db_path=duckdb_path,
+                latest_completed_trade_date=latest_completed_trade_date,
+                research_trade_date=latest_completed_trade_date,
+            )
+        except Exception:
+            pass
+    return build_data_quality_snapshot(
+        tables={name: value for name, value in tables.items() if isinstance(value, pd.DataFrame)},
+        latest_completed_trade_date=latest_completed_trade_date,
+        research_trade_date=latest_completed_trade_date,
+    )
 
 
 def summarize_factor_missing(factor_df: pd.DataFrame) -> dict[str, dict[str, float | int]]:
@@ -1565,90 +1582,28 @@ def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:
 
 
 def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
+    """Render the data-update page with scheduled quality as the primary view."""
     st.subheader("数据更新状态")
-    st.info("本页用于补充 / 更新 full 股票池行情数据。会执行数据源预检、DuckDB 锁检测、代理检测，通过后才批量更新。")
+    st.info("本页用于补充 / 更新 full 股票池行情数据，并查看自动更新状态。页面启动不会自动执行重型更新。")
     status = summarize_update_status(tables)
-    st.metric("最新行情日期", status["latest_price_date"] or "暂无")
-    st.metric("最新因子日期", status["latest_factor_date"] or "暂无")
-    st.metric("最新选股日期", status["latest_selection_date"] or "暂无")
-    st.write("最新数据覆盖")
-    st.write(
-        {
-            "latest_trade_date": status.get("latest_trade_date") or status["latest_price_date"] or "暂无",
-            "configured_symbol_count": status["configured_symbol_count"],
-            "latest_daily_price_symbol_count": status.get("latest_daily_price_symbol_count", status.get("latest_price_symbol_count", 0)),
-            "missing_latest_daily_price_symbol_count": status.get("missing_latest_daily_price_symbol_count", status.get("missing_latest_price_symbol_count", 0)),
-            "latest_daily_price_coverage_rate": f"{status.get('latest_daily_price_coverage_rate', status.get('latest_price_coverage_rate', 0.0)):.2%}",
-            "latest_daily_basic_symbol_count": status.get("latest_daily_basic_symbol_count", 0),
-            "latest_daily_basic_coverage_rate": f"{status.get('latest_daily_basic_coverage_rate', 0.0):.2%}",
-            "latest_adj_factor_symbol_count": status.get("latest_adj_factor_symbol_count", 0),
-            "latest_adj_factor_coverage_rate": f"{status.get('latest_adj_factor_coverage_rate', 0.0):.2%}",
-            "latest_all_required_tables_symbol_count": status.get("latest_all_required_tables_symbol_count", 0),
-            "latest_all_required_tables_coverage_rate": f"{status.get('latest_all_required_tables_coverage_rate', 0.0):.2%}",
-        }
-    )
-    st.write("历史数据完整度")
-    st.write(
-        {
-            "history_complete_symbol_count": status.get("history_complete_symbol_count", 0),
-            "history_incomplete_symbol_count": status.get("history_incomplete_symbol_count", 0),
-            "history_missing_symbol_count": status.get("history_missing_symbol_count", 0),
-            "available_days_20d_count": status.get("available_days_20d_count", 0),
-            "available_days_60d_count": status.get("available_days_60d_count", 0),
-            "available_days_120d_count": status.get("available_days_120d_count", 0),
-            "available_days_252d_count": status.get("available_days_252d_count", 0),
-        }
-    )
-    st.write("模块可用性")
-    st.write(
-        {
-            "factor_ready_symbol_count": status.get("factor_ready_symbol_count", status.get("selection_ready_count", 0)),
-            "elder_ready_symbol_count": status.get("elder_ready_symbol_count", 0),
-            "entry_zone_ready_symbol_count": status.get("entry_zone_ready_symbol_count", 0),
-            "lookback_ready_symbol_count": status.get("lookback_ready_symbol_count", 0),
-            "可运行选股股票数量": status.get("selection_ready_count", 0),
-            "可运行回测股票数量": status.get("backtest_ready_count", 0),
-        }
-    )
-    st.write("本次更新结果 / 历史补库状态")
-    st.write(
-        {
-            "已有任意行情股票数量": status["priced_symbol_count"],
-            "完全缺行情股票数量": status.get("completely_missing_price_count", status["missing_symbol_count"]),
-            "最新行情不足数量": status["stale_symbol_count"],
-            "更新失败数量": status.get("update_failed_count", 0),
-            "空数据 / 暂不可用股票数量": status.get("empty_data_count", 0),
-            "网络失败股票数量": status.get("network_failed_count", 0),
-            "任意行情覆盖率": f"{status['coverage_rate']:.2%}",
-            "全市场状态": status.get("batch_status") or "暂无",
-        }
-    )
-    if status.get("latest_updated_but_history_incomplete_count"):
-        st.info(
-            "部分股票已有最新交易日行情但历史区间不足；daily_incremental 不会因此失败，可用 full_backfill 或页面补数据修复历史缺口。"
-        )
+
+    _render_scheduled_update_section(st, status)
+    _render_full_batch_update_section(st, status)
+
+    with st.expander("高级：旧版诊断信息", expanded=False):
         st.write(
             {
-                "latest_updated_but_history_incomplete_count": status.get("latest_updated_but_history_incomplete_count", 0),
-                "examples": status.get("latest_updated_but_history_incomplete_examples", []),
+                "最新行情日期": status.get("latest_price_date") or "暂无",
+                "最新因子日期": status.get("latest_factor_date") or "暂无",
+                "最新选股日期": status.get("latest_selection_date") or "暂无",
+                "是否 sample 数据": status.get("is_sample_data"),
+                "是否真实数据": status.get("is_real_data"),
+                "字段缺失": status.get("field_missing", {}),
+                "本地任务状态": status.get("last_job_status") or "暂无",
             }
         )
-    if status.get("history_complete_but_latest_missing_count"):
-        st.warning("部分股票历史数据较完整，但最新交易日行情未更新。")
-        st.write(
-            {
-                "history_complete_but_latest_missing_count": status.get("history_complete_but_latest_missing_count", 0),
-                "examples": status.get("history_complete_but_latest_missing_examples", []),
-            }
-        )
-    if status.get("bse_filter_note"):
-        st.caption(status["bse_filter_note"])
-    if status.get("batch_status") == "全市场数据未完成":
-        st.warning("全市场数据未完成：当前结果只基于本地已有行情股票。请在本页下方“全市场批量补数据”区域继续补齐缺行情或最新不足的股票。")
-    st.write({"是否 sample 数据": status["is_sample_data"], "是否真实数据": status["is_real_data"]})
-    basic_quality = status.get("basic_quality", {})
-    if basic_quality:
         st.write("基础信息 / 估值字段完整率")
+        basic_quality = status.get("basic_quality", {})
         quality_rows = []
         for group_name, group in basic_quality.items():
             for field, stats in group.items():
@@ -1660,29 +1615,23 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
                         "missing_count": stats["missing_count"],
                     }
                 )
-        display_dataframe(st, pd.DataFrame(quality_rows))
-    local_state = status.get("local_state")
-    if isinstance(local_state, dict) and local_state:
-        st.write("本地状态 / 备份")
-        st.write(
-            {
-                "DuckDB 路径": local_state.get("duckdb_path"),
-                "DuckDB 文件大小": local_state.get("duckdb_size"),
-                "核心表行数": local_state.get("table_counts"),
-                "观察池记录数": local_state.get("review_decisions_rows"),
-                "复核历史记录数": local_state.get("review_decision_history_rows"),
-                "watchlist snapshots": local_state.get("watchlist_snapshots_rows"),
-                "reports 文件数量": local_state.get("reports_count"),
-                "backups 数量": local_state.get("backups_count"),
-                "最近备份时间": local_state.get("latest_backup_time") or "暂无",
-                "最近备份路径": local_state.get("latest_backup_path") or "暂无",
-            }
-        )
-        st.caption("个人本地工具，建议定期备份。")
-    if status["field_missing"]:
-        st.warning(f"存在字段缺失：{status['field_missing']}")
-    st.write("核心数据表状态")
-    display_dataframe(st, pd.DataFrame(status["table_rows"].items(), columns=["table", "rows"]))
+        if quality_rows:
+            display_dataframe(st, pd.DataFrame(quality_rows))
+        st.write("核心数据表状态")
+        display_dataframe(st, pd.DataFrame(status.get("table_rows", {}).items(), columns=["table", "rows"]))
+
+    with st.expander("高级：最近报告文件", expanded=False):
+        _render_recent_report_summary(st, status)
+
+    with st.expander("高级：观察池明细", expanded=False):
+        _render_watchlist_debug_section(st, tables, status)
+
+    with st.expander("高级：本地数据库和备份", expanded=False):
+        _render_local_state_debug_section(st, status)
+
+
+def _render_recent_report_summary(st: Any, status: dict[str, Any]) -> None:
+    """Render recent report metadata in a collapsed advanced section."""
     report = status.get("latest_workflow_report")
     if report:
         st.write("最近 workflow 报告")
@@ -1739,6 +1688,14 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     if watchlist_report:
         st.write("最近 watchlist 报告")
         st.write(watchlist_report)
+    tracking_report = status.get("latest_watchlist_tracking_report")
+    if tracking_report:
+        st.write("最近 watchlist_tracking 报告")
+        st.write(tracking_report)
+
+
+def _render_watchlist_debug_section(st: Any, tables: dict[str, pd.DataFrame], status: dict[str, Any]) -> None:
+    """Render watchlist details in a collapsed advanced section."""
     watchlist_df = _watchlist_from_tables(tables)
     if not watchlist_df.empty:
         st.write("观察池当前状态")
@@ -1772,10 +1729,6 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             "reason",
         ]
         display_dataframe(st, history_display, columns=history_columns)
-    tracking_report = status.get("latest_watchlist_tracking_report")
-    if tracking_report:
-        st.write("最近 watchlist_tracking 报告")
-        st.write(tracking_report)
     snapshot_df = tables.get("_watchlist_snapshot", pd.DataFrame())
     if isinstance(snapshot_df, pd.DataFrame) and not snapshot_df.empty:
         st.write("观察池最新 snapshot")
@@ -1793,10 +1746,32 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
             "data_quality_note",
         ]
         display_dataframe(st, snapshot_df, columns=display_columns)
-    st.info(status["last_job_status"])
-    _render_scheduled_update_section(st, status)
-    _render_lookback_analysis_section(st)
-    _render_full_batch_update_section(st, status)
+    if not status.get("latest_watchlist_report") and watchlist_df.empty:
+        st.info("暂无观察池明细。")
+
+
+def _render_local_state_debug_section(st: Any, status: dict[str, Any]) -> None:
+    """Render local database and backup status in a collapsed advanced section."""
+    local_state = status.get("local_state")
+    if isinstance(local_state, dict) and local_state:
+        st.write("本地状态 / 备份")
+        st.write(
+            {
+                "DuckDB 路径": local_state.get("duckdb_path"),
+                "DuckDB 文件大小": local_state.get("duckdb_size"),
+                "核心表行数": local_state.get("table_counts"),
+                "观察池记录数": local_state.get("review_decisions_rows"),
+                "复核历史记录数": local_state.get("review_decision_history_rows"),
+                "watchlist snapshots": local_state.get("watchlist_snapshots_rows"),
+                "reports 文件数量": local_state.get("reports_count"),
+                "backups 数量": local_state.get("backups_count"),
+                "最近备份时间": local_state.get("latest_backup_time") or "暂无",
+                "最近备份路径": local_state.get("latest_backup_path") or "暂无",
+            }
+        )
+        st.caption("个人本地工具，建议定期备份。")
+    else:
+        st.info("暂无本地状态 / 备份信息。")
 
 
 def _render_scheduled_update_section(st: Any, update_status: dict[str, Any] | None = None) -> None:
@@ -1827,7 +1802,7 @@ def _render_scheduled_update_section(st: Any, update_status: dict[str, Any] | No
         st.write("模块可用性")
         display_dataframe(st, _module_readiness_frame(merged_status))
         st.caption("20 日数据主要影响短期因子；60 日数据主要影响买入区间 / 埃尔德复核；120 / 252 日数据影响中长期观察和回看。历史不足不等于最新日未更新。")
-        st.write("本次更新执行结果")
+        st.write("本次更新结果")
         display_dataframe(st, pd.DataFrame([_run_result_row(scheduled)]))
         with st.expander("高级：样例列表", expanded=False):
             st.write(_examples_payload(scheduled, merged_status))
