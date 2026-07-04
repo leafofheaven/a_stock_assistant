@@ -172,7 +172,7 @@ def test_preflight_warning_when_curl_fallback_is_available(monkeypatch: pytest.M
 def test_streamlit_has_network_diagnosis_button() -> None:
     """Streamlit should expose a safe network diagnosis command without auto-running updates."""
     source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
-    assert "运行数据源网络诊断" in source
+    assert "运行数据源预检" in source
     assert "diagnose_data_source_network" in ALLOWED_COMMANDS
     assert "core.jobs.diagnose_data_source_network" in " ".join(ALLOWED_COMMANDS["diagnose_data_source_network"])
     assert "run_command_streaming" in source

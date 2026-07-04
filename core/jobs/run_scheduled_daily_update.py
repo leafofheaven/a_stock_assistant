@@ -17,6 +17,7 @@ import time as time_module
 from typing import Any, Callable, Iterator
 
 from app.config import Settings, get_settings
+from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.jobs.backup_local_data import backup_local_data
 from core.jobs.calculate_entry_zones import calculate_entry_zones
 from core.jobs.export_daily_research_workbook import export_daily_research_workbook
@@ -478,6 +479,7 @@ def _run_heavy_steps(
             "logs": logs,
         }
     )
+    status = _merge_data_quality_snapshot(status, settings)
     if _status_counts_as_formal_success(status):
         status["formal_success_date"] = research_trade_date
     return status
@@ -1109,7 +1111,37 @@ def _is_formal_run(
 
 
 def _status_counts_as_formal_success(status: dict[str, Any]) -> bool:
+    if status.get("formal_result_usable") is False:
+        return False
     return _is_formal_success_for_date(status, str(status.get("research_trade_date") or status.get("trade_date") or ""))
+
+
+def _merge_data_quality_snapshot(status: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Merge authoritative read-only data-quality snapshot into scheduled status."""
+    if not Path(settings.duckdb_path).exists():
+        return status
+    try:
+        snapshot = build_data_quality_snapshot(
+            db_path=settings.duckdb_path,
+            research_trade_date=status.get("research_trade_date") or status.get("trade_date") or "",
+            latest_completed_trade_date=status.get("latest_completed_trade_date") or status.get("research_trade_date") or status.get("trade_date") or "",
+        )
+    except Exception as exc:
+        merged = dict(status)
+        merged.update(
+            {
+                "data_quality_status": "failed",
+                "formal_result_usable": False,
+                "formal_result_warning_reason": f"数据质量快照生成失败：{exc}",
+            }
+        )
+        return merged
+    merged = {**status, **snapshot}
+    if snapshot.get("data_quality_status") == "poor":
+        merged["status"] = "warning" if merged.get("status") in {"success", "warning"} else merged.get("status", "warning")
+        merged["summary"] = "流程完成，但最新交易日数据覆盖严重不足，当前结果仅供流程检查，不代表完整全市场筛选结果。"
+        merged["formal_success_date"] = status.get("formal_success_date", "")
+    return merged
 
 
 def _positive_int(value: Any) -> int:
