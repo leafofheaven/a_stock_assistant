@@ -28,6 +28,7 @@ from web.streamlit_app import (
     _merge_scheduled_quality_fallback,
     _render_section,
     _render_status_tab,
+    _scheduled_quality_snapshot_for_status,
     _lightweight_database_metrics,
     _full_batch_summary_row,
     _status_data_quality_snapshot,
@@ -721,6 +722,65 @@ def test_update_status_page_uses_snapshot_counts_not_zero_defaults(tmp_path: Pat
     assert status["any_daily_price_symbol_count"] == 90
     assert status["data_quality_status"] == "poor"
     assert status["formal_result_usable"] is False
+
+
+def test_update_status_page_uses_refreshed_snapshot_counts(monkeypatch) -> None:
+    """Scheduled update card should query snapshot by scheduled research date."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_snapshot(**kwargs):
+        calls.append((str(kwargs["db_path"]), str(kwargs["latest_completed_trade_date"])))
+        return {
+            "data_quality_snapshot_source": "readonly_duckdb_sql",
+            "configured_symbol_count": 5055,
+            "latest_completed_trade_date": "20260703",
+            "latest_daily_price_symbol_count": 68,
+            "latest_daily_basic_symbol_count": 3,
+            "latest_adj_factor_symbol_count": 0,
+            "any_daily_price_symbol_count": 4995,
+            "data_quality_status": "poor",
+            "formal_result_usable": False,
+        }
+
+    monkeypatch.setattr("web.streamlit_app.build_data_quality_snapshot", fake_snapshot)
+
+    snapshot = _scheduled_quality_snapshot_for_status(
+        {"research_trade_date": "20260703", "latest_completed_trade_date": "20260703"},
+        {"duckdb_path": "data/a_stock_assistant.duckdb", "latest_trade_date": "20260704", "latest_daily_price_symbol_count": 0},
+    )
+
+    assert calls == [("data/a_stock_assistant.duckdb", "20260703")]
+    assert snapshot["latest_daily_price_symbol_count"] == 68
+    assert snapshot["latest_daily_basic_symbol_count"] == 3
+
+
+def test_zero_is_not_used_when_snapshot_query_fails(monkeypatch) -> None:
+    """A failed fresh snapshot must not replace existing scheduled counts with zero defaults."""
+
+    def fail_snapshot(**kwargs):
+        raise RuntimeError("duckdb locked")
+
+    monkeypatch.setattr("web.streamlit_app.build_data_quality_snapshot", fail_snapshot)
+
+    quality_update = _scheduled_quality_snapshot_for_status(
+        {"research_trade_date": "20260703", "latest_daily_price_symbol_count": 68},
+        {"duckdb_path": "data/a_stock_assistant.duckdb", "latest_trade_date": "20260704", "latest_daily_price_symbol_count": 0},
+    )
+    merged = _merge_scheduled_quality_fallback(
+        {
+            "status": "warning",
+            "stage": "done",
+            "research_trade_date": "20260703",
+            "latest_daily_price_symbol_count": 68,
+            "latest_daily_basic_symbol_count": 3,
+            "latest_adj_factor_symbol_count": 0,
+        },
+        quality_update,
+    )
+
+    assert quality_update == {}
+    assert merged["latest_daily_price_symbol_count"] == 68
+    assert merged["latest_daily_basic_symbol_count"] == 3
 
 
 def test_full_batch_section_raw_json_collapsed_by_default() -> None:

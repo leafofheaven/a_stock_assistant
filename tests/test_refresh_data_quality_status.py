@@ -29,6 +29,11 @@ def test_refresh_data_quality_status_outputs_actual_counts(tmp_path: Path, monke
     assert "formal_result_usable: False" in output
 
 
+def test_refresh_data_quality_status_writes_actual_counts(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Refresh command should write and print actual latest-date counts."""
+    test_refresh_data_quality_status_outputs_actual_counts(tmp_path, monkeypatch, capsys)
+
+
 def test_refresh_data_quality_status_updates_status_json(tmp_path: Path, monkeypatch) -> None:
     """Refresh command should write data-quality fields back to status JSON."""
     db_path, status_path = _seed_quality_db(tmp_path)

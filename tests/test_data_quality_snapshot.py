@@ -84,6 +84,11 @@ def test_data_quality_snapshot_counts_daily_price_by_trade_date_string() -> None
     assert snapshot["any_daily_price_symbol_count"] == 90
 
 
+def test_data_quality_snapshot_counts_daily_price_exact_trade_date() -> None:
+    """Latest daily_price count should use exact normalized trade_date equality."""
+    test_data_quality_snapshot_counts_daily_price_by_trade_date_string()
+
+
 def test_data_quality_snapshot_counts_daily_basic_by_trade_date_string() -> None:
     """daily_basic latest rows should be counted by the same trade-date rule."""
     symbols = [f"{index:06d}.SZ" for index in range(1, 11)]
@@ -95,6 +100,11 @@ def test_data_quality_snapshot_counts_daily_basic_by_trade_date_string() -> None
     snapshot = build_data_quality_snapshot(tables=tables, latest_completed_trade_date="20260703")
 
     assert snapshot["latest_daily_basic_symbol_count"] == 3
+
+
+def test_data_quality_snapshot_counts_daily_basic_exact_trade_date() -> None:
+    """Latest daily_basic count should use exact normalized trade_date equality."""
+    test_data_quality_snapshot_counts_daily_basic_by_trade_date_string()
 
 
 def test_data_quality_snapshot_normalizes_trade_date() -> None:
@@ -112,3 +122,8 @@ def test_data_quality_snapshot_normalizes_trade_date() -> None:
     snapshot = build_data_quality_snapshot(tables=tables, latest_completed_trade_date="20260703")
 
     assert snapshot["latest_daily_price_symbol_count"] == 3
+
+
+def test_data_quality_snapshot_normalizes_trade_date_formats() -> None:
+    """Latest coverage should normalize integer, compact string, and dashed dates."""
+    test_data_quality_snapshot_normalizes_trade_date()

@@ -1781,7 +1781,8 @@ def _render_scheduled_update_section(st: Any, update_status: dict[str, Any] | No
     if not scheduled:
         st.info("尚无自动更新记录。")
     else:
-        merged_status = _merge_scheduled_quality_fallback(scheduled, update_status or {})
+        quality_update_status = _scheduled_quality_snapshot_for_status(scheduled, update_status or {})
+        merged_status = _merge_scheduled_quality_fallback(scheduled, quality_update_status)
         quality_status = str(merged_status.get("data_quality_status") or "暂无")
         usable_text = "是" if merged_status.get("formal_result_usable") else "否"
         if quality_status in {"poor", "failed"} or scheduled.get("formal_result_usable") is False:
@@ -1852,6 +1853,35 @@ def _render_scheduled_update_section(st: Any, update_status: dict[str, Any] | No
         )
 
 
+def _scheduled_quality_snapshot_for_status(scheduled: dict[str, Any], update_status: dict[str, Any]) -> dict[str, Any]:
+    """Build a fresh quality snapshot using the scheduled run's research date.
+
+    The status page may have a general update-status snapshot for a different
+    latest date. Scheduled-update conclusions must use the scheduled
+    research/latest-completed trade date, otherwise stale zero defaults can
+    hide the real latest-date coverage.
+    """
+    target_date = str(
+        scheduled.get("latest_completed_trade_date")
+        or scheduled.get("research_trade_date")
+        or scheduled.get("trade_date")
+        or update_status.get("latest_completed_trade_date")
+        or update_status.get("latest_trade_date")
+        or ""
+    )
+    duckdb_path = str(update_status.get("duckdb_path") or "")
+    if duckdb_path and target_date:
+        try:
+            return build_data_quality_snapshot(
+                db_path=duckdb_path,
+                latest_completed_trade_date=target_date,
+                research_trade_date=target_date,
+            )
+        except Exception:
+            return {}
+    return update_status
+
+
 def _merge_scheduled_quality_fallback(scheduled: dict[str, Any], update_status: dict[str, Any]) -> dict[str, Any]:
     """Merge scheduled status with read-only quality snapshot.
 
@@ -1859,6 +1889,7 @@ def _merge_scheduled_quality_fallback(scheduled: dict[str, Any], update_status: 
     Missing fields never default to ok/usable.
     """
     merged = dict(scheduled)
+    update_is_snapshot = not _is_missing(update_status.get("data_quality_snapshot_source"))
     fallback_keys = [
         "configured_symbol_count",
         "latest_trade_date",
@@ -1902,6 +1933,14 @@ def _merge_scheduled_quality_fallback(scheduled: dict[str, Any], update_status: 
     ]
     for key in fallback_keys:
         if key in update_status and not _is_missing(update_status.get(key)):
+            if (
+                not update_is_snapshot
+                and key.startswith("latest_")
+                and key.endswith("_symbol_count")
+                and update_status.get(key) == 0
+                and not _is_missing(merged.get(key))
+            ):
+                continue
             merged[key] = update_status.get(key)
     if _is_missing(merged.get("latest_completed_trade_date")):
         merged["latest_completed_trade_date"] = update_status.get("latest_trade_date") or scheduled.get("research_trade_date")
