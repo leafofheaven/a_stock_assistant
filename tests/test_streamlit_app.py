@@ -24,6 +24,7 @@ from web.streamlit_app import (
     prepare_display_table,
     render_dashboard,
     _extract_workbook_output_path,
+    _merge_scheduled_quality_fallback,
     _render_section,
     _lightweight_database_metrics,
     summarize_update_status,
@@ -452,6 +453,54 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
         "本地控制台",
     ]
     assert fake_streamlit.info_messages
+
+
+def test_data_update_status_page_shows_data_quality_section() -> None:
+    """Data update status page should expose formal-result data quality fields."""
+    source = (Path(__file__).resolve().parents[1] / "web" / "streamlit_app.py").read_text(encoding="utf-8")
+    for phrase in [
+        "数据质量等级",
+        "正式全市场研究结果可用",
+        "流程完成不等于数据完整",
+        "最新交易日行情覆盖严重不足",
+        "latest_daily_price_coverage_rate",
+        "latest_daily_basic_coverage_rate",
+        "latest_adj_factor_coverage_rate",
+    ]:
+        assert phrase in source
+
+
+def test_data_update_status_page_has_diagnosis_buttons() -> None:
+    """Diagnostics should be user-triggered buttons, not automatic page-start jobs."""
+    source = (Path(__file__).resolve().parents[1] / "web" / "streamlit_app.py").read_text(encoding="utf-8")
+    assert "运行数据质量诊断" in source
+    assert "运行批量更新诊断" in source
+    assert '"diagnose_real_data"' in source
+    assert '"diagnose_update_batch"' in source
+    assert "ALLOWED_COMMANDS.setdefault(\"diagnose_real_data\"" in source
+    assert "ALLOWED_COMMANDS.setdefault(\"diagnose_update_batch\"" in source
+
+
+def test_data_update_status_page_marks_poor_coverage() -> None:
+    """Old scheduled status should be enriched from read-only update diagnostics."""
+    merged = _merge_scheduled_quality_fallback(
+        {"status": "warning", "stage": "done", "research_trade_date": "20260703"},
+        {
+            "configured_symbol_count": 5055,
+            "latest_trade_date": "20260703",
+            "latest_daily_price_symbol_count": 68,
+            "missing_latest_daily_price_symbol_count": 4987,
+            "latest_daily_price_coverage_rate": 0.0135,
+            "latest_daily_basic_symbol_count": 3,
+            "latest_daily_basic_coverage_rate": 0.0006,
+            "latest_adj_factor_symbol_count": 0,
+            "latest_adj_factor_coverage_rate": 0.0,
+        },
+    )
+    assert merged["data_quality_status"] == "poor"
+    assert merged["formal_result_usable"] is False
+    assert merged["latest_completed_trade_date"] == "20260703"
+    assert "仅供流程检查" in merged["formal_result_warning_reason"]
 
 
 def test_render_dashboard_shows_database_locked_status(monkeypatch) -> None:

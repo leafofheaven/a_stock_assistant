@@ -868,6 +868,96 @@ def test_daily_incremental_partial_symbol_failures_continue_workflow(tmp_path: P
     assert result["update_continued_after_partial_failure"] is True
 
 
+def test_formal_success_not_written_when_latest_coverage_poor(tmp_path: Path) -> None:
+    """A completed workflow with poor latest coverage must not become a formal success."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 18, 30),
+        update_limit=0,
+        data_quality_gate=lambda: {
+            "data_quality_status": "poor",
+            "formal_result_usable": False,
+            "latest_completed_trade_date": "20260702",
+            "configured_symbol_count": 5000,
+            "latest_daily_price_symbol_count": 68,
+            "missing_latest_daily_price_symbol_count": 4932,
+            "latest_daily_price_coverage_rate": 0.0136,
+            "latest_daily_basic_symbol_count": 3,
+            "missing_latest_daily_basic_symbol_count": 4997,
+            "latest_daily_basic_coverage_rate": 0.0006,
+            "latest_adj_factor_symbol_count": 0,
+            "missing_latest_adj_factor_symbol_count": 5000,
+            "latest_adj_factor_coverage_rate": 0.0,
+            "latest_all_required_tables_symbol_count": 0,
+            "latest_all_required_tables_coverage_rate": 0.0,
+        },
+    )
+    assert result["stage"] == "done"
+    assert result["workbook_exists"] is True
+    assert result["data_quality_status"] == "poor"
+    assert result["formal_result_usable"] is False
+    assert result["formal_success_date"] == ""
+    assert "最新交易日数据覆盖严重不足" in result["summary"]
+
+
+def test_data_quality_poor_when_latest_daily_price_coverage_low() -> None:
+    """The quality gate should classify very low latest daily_price coverage as poor."""
+    from core.jobs.run_scheduled_daily_update import _normalize_data_quality_gate
+
+    result = _normalize_data_quality_gate(
+        {
+            "latest_daily_price_coverage_rate": 0.10,
+            "latest_daily_price_symbol_count": 50,
+            "missing_latest_daily_price_symbol_count": 450,
+        },
+        "20260703",
+    )
+    assert result["data_quality_status"] == "poor"
+    assert result["formal_result_usable"] is False
+    assert "最新交易日数据覆盖严重不足" in result["formal_result_warning_reason"]
+
+
+def test_status_json_records_latest_table_coverages(tmp_path: Path) -> None:
+    """Scheduled status should expose separate latest coverage fields for required tables."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 2, 18, 30),
+        update_limit=0,
+        data_quality_gate=lambda: {
+            "latest_daily_price_symbol_count": 4800,
+            "missing_latest_daily_price_symbol_count": 200,
+            "latest_daily_price_coverage_rate": 0.96,
+            "latest_daily_basic_symbol_count": 4700,
+            "missing_latest_daily_basic_symbol_count": 300,
+            "latest_daily_basic_coverage_rate": 0.94,
+            "latest_adj_factor_symbol_count": 4600,
+            "missing_latest_adj_factor_symbol_count": 400,
+            "latest_adj_factor_coverage_rate": 0.92,
+            "latest_all_required_tables_symbol_count": 4500,
+            "latest_all_required_tables_coverage_rate": 0.90,
+            "history_complete_symbol_count": 4300,
+            "history_incomplete_symbol_count": 600,
+            "history_missing_symbol_count": 100,
+            "factor_ready_symbol_count": 4200,
+            "elder_ready_symbol_count": 4100,
+            "entry_zone_ready_symbol_count": 4000,
+            "lookback_ready_symbol_count": 3900,
+        },
+    )
+    saved = read_scheduled_status(status_path)
+    assert result["latest_daily_price_symbol_count"] == 4800
+    assert saved["latest_daily_basic_coverage_rate"] == 0.94
+    assert saved["latest_adj_factor_coverage_rate"] == 0.92
+    assert saved["latest_all_required_tables_coverage_rate"] == 0.90
+    assert saved["factor_ready_symbol_count"] == 4200
+
+
 def test_empty_data_examples_are_clean_symbol_codes() -> None:
     """Example arrays should contain clean stock codes only."""
     from core.jobs.run_scheduled_daily_update import _parse_update_output
@@ -920,6 +1010,22 @@ def test_force_before_scheduled_time_uses_previous_completed_trade_date_by_defau
     assert result["formal_run"] is False
     assert result["formal_success_date"] == ""
     assert "不会阻止 18:00" in result["formal_run_note"]
+
+
+def test_non_trade_day_force_uses_latest_completed_trade_date(tmp_path: Path) -> None:
+    """Weekend force runs should use the previous completed trade date, not the run date."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 4, 13, 47),
+        update_limit=0,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260704"),
+    )
+    assert result["run_date"] == "20260704"
+    assert result["research_trade_date"] == "20260703"
+    assert result["latest_completed_trade_date"] == "20260703"
 
 
 def test_intraday_daily_incremental_does_not_set_formal_success_date(tmp_path: Path) -> None:
@@ -1164,6 +1270,7 @@ def _successful_scheduled_run(
     update_data=None,
     workflow=None,
     workbook=None,
+    data_quality_gate=None,
 ) -> dict:
     return run_scheduled_daily_update(
         now=now or datetime(2026, 7, 2, 1, 5),
@@ -1180,6 +1287,7 @@ def _successful_scheduled_run(
             "preflight": _ok_preflight,
             "backup": lambda: {"status": "success"},
             "update_data": update_data or (lambda: {"status": "success", "update_skipped_symbol_count": 0}),
+            "data_quality_gate": data_quality_gate or (lambda: {"data_quality_status": "ok", "formal_result_usable": True, "latest_daily_price_coverage_rate": 1.0}),
             "workflow": workflow or (lambda: {"status": "success", "candidate_count": 2}),
             "elder_review": lambda: {"status": "success", "review_count": 2},
             "entry_zone": lambda: {"status": "success", "calculated_count": 2},

@@ -13,6 +13,7 @@ from core.factors.scoring import DEFAULT_WEIGHTS
 from core.jobs.export_daily_research_workbook import (
     SHEET_NAMES,
     export_daily_research_workbook,
+    _build_summary_sheet,
     _resolve_output_path,
 )
 from core.storage.duckdb_store import DuckDBStore
@@ -35,6 +36,34 @@ def test_export_daily_research_workbook_writes_required_sheets(tmp_path: Path) -
     assert result.entry_zone_rows == 2
     assert result.watchlist_rows == 1
     assert result.external_position_rows == 1
+
+
+def test_daily_workbook_summary_includes_data_quality() -> None:
+    """Workbook summary should include scheduled update data quality status."""
+    summary = _build_summary_sheet(
+        selected_trade_date="20260703",
+        output_path="reports/daily_research.xlsx",
+        strategy_rows=10,
+        elder_rows=10,
+        entry_zone_rows=10,
+        watchlist_rows=5,
+        external_position_rows=0,
+        lookback_status=None,
+        scheduled_status={
+            "data_quality_status": "poor",
+            "formal_result_usable": False,
+            "latest_daily_price_coverage_rate": 0.0135,
+            "latest_daily_basic_coverage_rate": 0.0006,
+            "latest_adj_factor_coverage_rate": 0.0,
+            "formal_result_warning_reason": "当前结果仅供流程检查，不代表完整全市场筛选。",
+        },
+    )
+    text = "\n".join(summary.astype(str).agg(" ".join, axis=1).tolist())
+    assert "自动更新数据质量等级" in text
+    assert "poor" in text
+    assert "正式全市场研究结果可用" in text
+    assert "1.35%" in text
+    assert "当前结果仅供流程检查" in text
 
 
 FORBIDDEN_RANK_HEADERS = {

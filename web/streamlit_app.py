@@ -40,6 +40,8 @@ from core.external_positions.importer import position_template_frame, trade_temp
 ALLOWED_COMMANDS.setdefault("run_full_batch_update", [sys.executable, "-m", "core.jobs.run_full_batch_update"])
 ALLOWED_COMMANDS.setdefault("preflight_data_source", [sys.executable, "-m", "core.jobs.preflight_data_source"])
 ALLOWED_COMMANDS.setdefault("diagnose_data_source_network", [sys.executable, "-m", "core.jobs.diagnose_data_source_network"])
+ALLOWED_COMMANDS.setdefault("diagnose_real_data", [sys.executable, "-m", "core.jobs.diagnose_real_data"])
+ALLOWED_COMMANDS.setdefault("diagnose_update_batch", [sys.executable, "-m", "core.jobs.diagnose_update_batch"])
 ALLOWED_COMMANDS.setdefault("run_scheduled_daily_update", [sys.executable, "-m", "core.jobs.run_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("install_scheduled_daily_update", [sys.executable, "-m", "core.jobs.install_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("uninstall_scheduled_daily_update", [sys.executable, "-m", "core.jobs.uninstall_scheduled_daily_update"])
@@ -1563,9 +1565,15 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         {
             "latest_trade_date": status.get("latest_trade_date") or status["latest_price_date"] or "暂无",
             "configured_symbol_count": status["configured_symbol_count"],
-            "latest_price_symbol_count": status.get("latest_price_symbol_count", 0),
-            "missing_latest_price_symbol_count": status.get("missing_latest_price_symbol_count", 0),
-            "latest_price_coverage_rate": f"{status.get('latest_price_coverage_rate', 0.0):.2%}",
+            "latest_daily_price_symbol_count": status.get("latest_daily_price_symbol_count", status.get("latest_price_symbol_count", 0)),
+            "missing_latest_daily_price_symbol_count": status.get("missing_latest_daily_price_symbol_count", status.get("missing_latest_price_symbol_count", 0)),
+            "latest_daily_price_coverage_rate": f"{status.get('latest_daily_price_coverage_rate', status.get('latest_price_coverage_rate', 0.0)):.2%}",
+            "latest_daily_basic_symbol_count": status.get("latest_daily_basic_symbol_count", 0),
+            "latest_daily_basic_coverage_rate": f"{status.get('latest_daily_basic_coverage_rate', 0.0):.2%}",
+            "latest_adj_factor_symbol_count": status.get("latest_adj_factor_symbol_count", 0),
+            "latest_adj_factor_coverage_rate": f"{status.get('latest_adj_factor_coverage_rate', 0.0):.2%}",
+            "latest_all_required_tables_symbol_count": status.get("latest_all_required_tables_symbol_count", 0),
+            "latest_all_required_tables_coverage_rate": f"{status.get('latest_all_required_tables_coverage_rate', 0.0):.2%}",
         }
     )
     st.write("历史数据完整度")
@@ -1775,26 +1783,45 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
         ]
         display_dataframe(st, snapshot_df, columns=display_columns)
     st.info(status["last_job_status"])
-    _render_scheduled_update_section(st)
+    _render_scheduled_update_section(st, status)
     _render_lookback_analysis_section(st)
     _render_full_batch_update_section(st, status)
 
 
-def _render_scheduled_update_section(st: Any) -> None:
+def _render_scheduled_update_section(st: Any, update_status: dict[str, Any] | None = None) -> None:
     """Render scheduled daily update status and download controls."""
     st.subheader("自动更新状态")
     scheduled = read_scheduled_status(DEFAULT_STATUS_PATH)
     if not scheduled:
         st.info("尚无自动更新记录。")
     else:
+        merged_status = _merge_scheduled_quality_fallback(scheduled, update_status or {})
+        quality_status = str(merged_status.get("data_quality_status") or "暂无")
+        usable_text = "是" if merged_status.get("formal_result_usable") else "否"
+        if quality_status in {"poor", "failed"} or scheduled.get("formal_result_usable") is False:
+            st.error("流程完成不等于数据完整；当前结果不可作为正式全市场研究结果。")
+        elif quality_status == "warning":
+            st.warning("数据基本可用但仍有缺口，请结合覆盖率和样例列表人工复核。")
+        elif quality_status == "ok":
+            st.success("最新交易日数据覆盖满足正式研究使用口径。")
         st.write(
             {
                 "最近一次状态": scheduled.get("status"),
+                "当前阶段": scheduled.get("stage"),
                 "计划时间": scheduled.get("scheduled_time"),
+                "运行日期": scheduled.get("run_date"),
+                "研究交易日": scheduled.get("research_trade_date") or scheduled.get("trade_date"),
+                "更新模式": scheduled.get("update_mode") or "暂无",
+                "是否正式运行": scheduled.get("formal_run"),
+                "是否小批量验收": scheduled.get("acceptance_mode"),
+                "是否盘中运行": scheduled.get("allow_intraday"),
                 "实际开始时间": scheduled.get("started_at"),
                 "完成时间": scheduled.get("finished_at") or "暂无",
                 "是否补跑": scheduled.get("catch_up"),
                 "交易日期": scheduled.get("trade_date"),
+                "数据质量等级": quality_status,
+                "正式全市场研究结果可用": usable_text,
+                "数据质量提示": merged_status.get("formal_result_warning_reason") or "暂无",
                 "数据源诊断状态": scheduled.get("diagnosis_status") or "暂无",
                 "今日候选数量": scheduled.get("candidate_count", 0),
                 "埃尔德复核数量": scheduled.get("elder_review_count", 0),
@@ -1804,6 +1831,70 @@ def _render_scheduled_update_section(st: Any) -> None:
                 "邮件通知状态": (scheduled.get("notification") or {}).get("email_status", "disabled"),
                 "失败原因": scheduled.get("failure_reason") or "暂无",
                 "建议操作": scheduled.get("suggested_action") or "暂无",
+            }
+        )
+        st.write("自动更新最新交易日覆盖")
+        st.write(
+            {
+                "latest_completed_trade_date": merged_status.get("latest_completed_trade_date") or scheduled.get("research_trade_date") or "暂无",
+                "configured_symbol_count": merged_status.get("configured_symbol_count", 0),
+                "latest_daily_price_symbol_count": merged_status.get("latest_daily_price_symbol_count", 0),
+                "missing_latest_daily_price_symbol_count": merged_status.get("missing_latest_daily_price_symbol_count", 0),
+                "latest_daily_price_coverage_rate": f"{float(merged_status.get('latest_daily_price_coverage_rate', 0.0) or 0.0):.2%}",
+                "latest_daily_basic_symbol_count": merged_status.get("latest_daily_basic_symbol_count", 0),
+                "missing_latest_daily_basic_symbol_count": merged_status.get("missing_latest_daily_basic_symbol_count", 0),
+                "latest_daily_basic_coverage_rate": f"{float(merged_status.get('latest_daily_basic_coverage_rate', 0.0) or 0.0):.2%}",
+                "latest_adj_factor_symbol_count": merged_status.get("latest_adj_factor_symbol_count", 0),
+                "missing_latest_adj_factor_symbol_count": merged_status.get("missing_latest_adj_factor_symbol_count", 0),
+                "latest_adj_factor_coverage_rate": f"{float(merged_status.get('latest_adj_factor_coverage_rate', 0.0) or 0.0):.2%}",
+                "latest_all_required_tables_symbol_count": merged_status.get("latest_all_required_tables_symbol_count", 0),
+                "latest_all_required_tables_coverage_rate": f"{float(merged_status.get('latest_all_required_tables_coverage_rate', 0.0) or 0.0):.2%}",
+            }
+        )
+        if float(merged_status.get("latest_daily_price_coverage_rate", 0.0) or 0.0) < 0.20:
+            st.error("最新交易日行情覆盖严重不足，当前结果仅供流程检查，不代表完整全市场筛选。")
+        st.write("自动更新历史完整度 / 模块可用性")
+        st.write(
+            {
+                "history_complete_symbol_count": merged_status.get("history_complete_symbol_count", 0),
+                "history_incomplete_symbol_count": merged_status.get("history_incomplete_symbol_count", 0),
+                "history_missing_symbol_count": merged_status.get("history_missing_symbol_count", 0),
+                "available_days_20d_count": merged_status.get("available_days_20d_count", 0),
+                "available_days_60d_count": merged_status.get("available_days_60d_count", 0),
+                "available_days_120d_count": merged_status.get("available_days_120d_count", 0),
+                "available_days_252d_count": merged_status.get("available_days_252d_count", 0),
+                "factor_ready_symbol_count": merged_status.get("factor_ready_symbol_count", 0),
+                "elder_ready_symbol_count": merged_status.get("elder_ready_symbol_count", 0),
+                "entry_zone_ready_symbol_count": merged_status.get("entry_zone_ready_symbol_count", 0),
+                "lookback_ready_symbol_count": merged_status.get("lookback_ready_symbol_count", 0),
+            }
+        )
+        st.caption("20 日数据主要影响短期因子；60 日数据主要影响买入区间 / 埃尔德复核；120 / 252 日数据影响中长期观察和回看。历史不足不等于最新日未更新。")
+        st.write("本次更新执行结果")
+        st.write(
+            {
+                "planned_symbol_count": scheduled.get("planned_symbols", scheduled.get("total_symbol_count", 0)),
+                "processed_symbol_count": scheduled.get("processed_symbol_count", 0),
+                "total_symbol_count": scheduled.get("total_symbol_count", 0),
+                "update_failed_symbol_count": scheduled.get("update_failed_symbol_count", 0),
+                "empty_data_symbol_count": scheduled.get("empty_data_symbol_count", 0),
+                "network_timeout_count": scheduled.get("network_timeout_count", 0),
+                "update_skipped_symbol_count": scheduled.get("update_skipped_symbol_count", 0),
+                "failed_symbol_count": scheduled.get("failed_symbol_count", 0),
+                "update_continued_after_partial_failure": scheduled.get("update_continued_after_partial_failure", False),
+            }
+        )
+        st.write("样例列表")
+        st.write(
+            {
+                "missing_latest_daily_price_examples": merged_status.get("missing_latest_daily_price_examples", [])[:30],
+                "missing_latest_daily_basic_examples": merged_status.get("missing_latest_daily_basic_examples", [])[:30],
+                "missing_latest_adj_factor_examples": merged_status.get("missing_latest_adj_factor_examples", [])[:30],
+                "history_missing_examples": merged_status.get("history_missing_examples", [])[:30],
+                "latest_updated_but_history_incomplete_examples": merged_status.get("latest_updated_but_history_incomplete_examples", [])[:30],
+                "history_complete_but_latest_missing_examples": merged_status.get("history_complete_but_latest_missing_examples", [])[:30],
+                "update_failed_symbol_examples": scheduled.get("update_failed_symbol_examples", [])[:30],
+                "empty_data_symbol_examples": scheduled.get("empty_data_symbol_examples", [])[:30],
             }
         )
         workbook_path = Path(str(scheduled.get("workbook_path") or ""))
@@ -1817,9 +1908,29 @@ def _render_scheduled_update_section(st: Any) -> None:
                     key="download_scheduled_daily_workbook",
                     width="stretch",
                 )
+            _open_button(st, "打开最新每日研究 Excel 所在文件夹", workbook_path.parent)
         elif scheduled.get("workbook_path"):
             st.warning("最新自动更新 Excel 文件不存在，可能已被清理，请重新运行自动更新。")
     st.caption("页面启动不会自动执行自动更新；手动补跑会先做数据源预检，失败时不会启动重型更新。")
+    diag_col1, diag_col2, diag_col3 = st.columns(3)
+    if diag_col1.button("刷新数据状态", key="refresh_scheduled_update_status"):
+        st.info("已读取本地状态文件；如未变化，请点击页面右上角刷新。")
+    if diag_col2.button("运行数据质量诊断", key="run_real_data_diagnostic"):
+        _run_streaming_console_action(
+            st,
+            "运行数据质量诊断",
+            "diagnose_real_data",
+            [],
+            success_message="数据质量诊断完成。",
+        )
+    if diag_col3.button("运行批量更新诊断", key="run_update_batch_diagnostic"):
+        _run_streaming_console_action(
+            st,
+            "运行批量更新诊断",
+            "diagnose_update_batch",
+            [],
+            success_message="批量更新诊断完成。",
+        )
     if st.button("手动补跑一次自动更新", key="scheduled_daily_update_manual_catchup"):
         _run_streaming_console_action(
             st,
@@ -1828,6 +1939,64 @@ def _render_scheduled_update_section(st: Any) -> None:
             ["--force", "--format", "text"],
             success_message="自动更新补跑命令执行完成。请刷新页面查看最新状态。",
         )
+
+
+def _merge_scheduled_quality_fallback(scheduled: dict[str, Any], update_status: dict[str, Any]) -> dict[str, Any]:
+    """Fill missing scheduled quality fields from read-only update diagnostics."""
+    merged = dict(scheduled)
+    fallback_keys = [
+        "configured_symbol_count",
+        "latest_trade_date",
+        "latest_completed_trade_date",
+        "latest_daily_price_symbol_count",
+        "missing_latest_daily_price_symbol_count",
+        "latest_daily_price_coverage_rate",
+        "latest_daily_basic_symbol_count",
+        "missing_latest_daily_basic_symbol_count",
+        "latest_daily_basic_coverage_rate",
+        "latest_adj_factor_symbol_count",
+        "missing_latest_adj_factor_symbol_count",
+        "latest_adj_factor_coverage_rate",
+        "latest_all_required_tables_symbol_count",
+        "latest_all_required_tables_coverage_rate",
+        "history_complete_symbol_count",
+        "history_incomplete_symbol_count",
+        "history_missing_symbol_count",
+        "available_days_20d_count",
+        "available_days_60d_count",
+        "available_days_120d_count",
+        "available_days_252d_count",
+        "factor_ready_symbol_count",
+        "elder_ready_symbol_count",
+        "entry_zone_ready_symbol_count",
+        "lookback_ready_symbol_count",
+        "missing_latest_daily_price_examples",
+        "missing_latest_daily_basic_examples",
+        "missing_latest_adj_factor_examples",
+        "history_missing_examples",
+        "latest_updated_but_history_incomplete_examples",
+        "history_complete_but_latest_missing_examples",
+    ]
+    for key in fallback_keys:
+        if _is_missing(merged.get(key)) and key in update_status:
+            merged[key] = update_status.get(key)
+    if _is_missing(merged.get("latest_completed_trade_date")):
+        merged["latest_completed_trade_date"] = update_status.get("latest_trade_date") or scheduled.get("research_trade_date")
+    if _is_missing(merged.get("latest_daily_price_coverage_rate")):
+        merged["latest_daily_price_coverage_rate"] = update_status.get("latest_price_coverage_rate", 0.0)
+    price_rate = float(merged.get("latest_daily_price_coverage_rate", 0.0) or 0.0)
+    if _is_missing(merged.get("data_quality_status")):
+        if price_rate >= 0.95:
+            merged["data_quality_status"] = "ok"
+        elif price_rate >= 0.80:
+            merged["data_quality_status"] = "warning"
+        else:
+            merged["data_quality_status"] = "poor"
+    if _is_missing(merged.get("formal_result_usable")):
+        merged["formal_result_usable"] = merged.get("data_quality_status") not in {"poor", "failed"}
+    if not merged.get("formal_result_usable") and _is_missing(merged.get("formal_result_warning_reason")):
+        merged["formal_result_warning_reason"] = "流程完成，但最新交易日数据覆盖严重不足，当前结果仅供流程检查，不代表完整全市场筛选结果。"
+    return merged
 
 
 def _render_lookback_analysis_section(st: Any) -> None:

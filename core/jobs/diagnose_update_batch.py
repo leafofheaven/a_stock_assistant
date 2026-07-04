@@ -109,9 +109,17 @@ def main() -> None:
     print(f"- 覆盖率: {result['coverage_rate']:.2%}")
     print("- 最新数据覆盖:")
     print(f"  latest_trade_date: {result.get('latest_trade_date') or '暂无'}")
-    print(f"  latest_price_symbol_count: {result.get('latest_price_symbol_count', 0)}")
-    print(f"  missing_latest_price_symbol_count: {result.get('missing_latest_price_symbol_count', 0)}")
-    print(f"  latest_price_coverage_rate: {result.get('latest_price_coverage_rate', 0.0):.2%}")
+    print(f"  latest_daily_price_symbol_count: {result.get('latest_daily_price_symbol_count', result.get('latest_price_symbol_count', 0))}")
+    print(f"  missing_latest_daily_price_symbol_count: {result.get('missing_latest_daily_price_symbol_count', result.get('missing_latest_price_symbol_count', 0))}")
+    print(f"  latest_daily_price_coverage_rate: {result.get('latest_daily_price_coverage_rate', result.get('latest_price_coverage_rate', 0.0)):.2%}")
+    print(f"  latest_daily_basic_symbol_count: {result.get('latest_daily_basic_symbol_count', 0)}")
+    print(f"  missing_latest_daily_basic_symbol_count: {result.get('missing_latest_daily_basic_symbol_count', 0)}")
+    print(f"  latest_daily_basic_coverage_rate: {result.get('latest_daily_basic_coverage_rate', 0.0):.2%}")
+    print(f"  latest_adj_factor_symbol_count: {result.get('latest_adj_factor_symbol_count', 0)}")
+    print(f"  missing_latest_adj_factor_symbol_count: {result.get('missing_latest_adj_factor_symbol_count', 0)}")
+    print(f"  latest_adj_factor_coverage_rate: {result.get('latest_adj_factor_coverage_rate', 0.0):.2%}")
+    print(f"  latest_all_required_tables_symbol_count: {result.get('latest_all_required_tables_symbol_count', 0)}")
+    print(f"  latest_all_required_tables_coverage_rate: {result.get('latest_all_required_tables_coverage_rate', 0.0):.2%}")
     print("- 历史数据完整度:")
     print(f"  history_complete_symbol_count: {result.get('history_complete_symbol_count', 0)}")
     print(f"  history_incomplete_symbol_count: {result.get('history_incomplete_symbol_count', 0)}")
@@ -179,7 +187,11 @@ def _build_result(
     failure_state = _failure_state(tables.get("update_failures", pd.DataFrame()))
     missing = [item["ts_code"] for item in coverage if not item["has_daily_price"]]
     missing = sorted(missing, key=lambda symbol: (symbol in failure_state, symbol))
-    target_end_date = str(getattr(settings, "real_data_end_date", "") or "")
+    configured_target_end_date = str(getattr(settings, "real_data_end_date", "") or "")
+    latest_trade_date = str(data_quality.get("latest_trade_date") or "")
+    target_end_date = configured_target_end_date
+    if latest_trade_date and (not target_end_date or target_end_date > latest_trade_date):
+        target_end_date = latest_trade_date
     if not target_end_date:
         from datetime import date
 
@@ -239,6 +251,11 @@ def _data_quality_breakdown(
     rows_by_symbol = {str(item["ts_code"]): int(item.get("daily_price_rows", 0) or 0) for item in coverage}
     max_date_by_symbol = {str(item["ts_code"]): str(item.get("max_trade_date") or "") for item in coverage}
     latest_symbols = [symbol for symbol in configured_symbols if latest_trade_date and max_date_by_symbol.get(symbol) == latest_trade_date]
+    configured_set = set(configured_symbols)
+    latest_daily_price_symbols = set(latest_symbols)
+    latest_daily_basic_symbols = _table_symbols_at_date(tables.get("daily_basic", pd.DataFrame()), "trade_date", latest_trade_date).intersection(configured_set)
+    latest_adj_factor_symbols = _table_symbols_at_date(tables.get("adj_factor", pd.DataFrame()), "trade_date", latest_trade_date).intersection(configured_set)
+    latest_all_required_symbols = latest_daily_price_symbols.intersection(latest_daily_basic_symbols).intersection(latest_adj_factor_symbols)
     history_complete = [symbol for symbol, row_count in rows_by_symbol.items() if row_count >= 252]
     history_incomplete = [symbol for symbol, row_count in rows_by_symbol.items() if 0 < row_count < 252]
     history_missing = [symbol for symbol, row_count in rows_by_symbol.items() if row_count <= 0]
@@ -246,7 +263,6 @@ def _data_quality_breakdown(
     history_complete_but_latest_missing = [
         symbol for symbol in history_complete if latest_trade_date and max_date_by_symbol.get(symbol) != latest_trade_date
     ]
-    configured_set = set(configured_symbols)
     factor_symbols = _latest_table_symbols(tables.get("factor_scores", pd.DataFrame()), "trade_date").intersection(configured_set)
     elder_symbols = _latest_table_symbols(tables.get("watchlist_daily_snapshots", pd.DataFrame()), "trade_date").intersection(configured_set)
     entry_zone_symbols = _latest_table_symbols(tables.get("entry_zone_snapshots", pd.DataFrame()), "trade_date").intersection(configured_set)
@@ -260,6 +276,18 @@ def _data_quality_breakdown(
         "latest_price_symbol_count": len(latest_symbols),
         "missing_latest_price_symbol_count": max(len(configured_symbols) - len(latest_symbols), 0),
         "latest_price_coverage_rate": (len(latest_symbols) / len(configured_symbols)) if configured_symbols else 0.0,
+        "latest_daily_price_symbol_count": len(latest_daily_price_symbols),
+        "missing_latest_daily_price_symbol_count": max(len(configured_symbols) - len(latest_daily_price_symbols), 0),
+        "latest_daily_price_coverage_rate": (len(latest_daily_price_symbols) / len(configured_symbols)) if configured_symbols else 0.0,
+        "latest_daily_basic_symbol_count": len(latest_daily_basic_symbols),
+        "missing_latest_daily_basic_symbol_count": max(len(configured_symbols) - len(latest_daily_basic_symbols), 0),
+        "latest_daily_basic_coverage_rate": (len(latest_daily_basic_symbols) / len(configured_symbols)) if configured_symbols else 0.0,
+        "latest_adj_factor_symbol_count": len(latest_adj_factor_symbols),
+        "missing_latest_adj_factor_symbol_count": max(len(configured_symbols) - len(latest_adj_factor_symbols), 0),
+        "latest_adj_factor_coverage_rate": (len(latest_adj_factor_symbols) / len(configured_symbols)) if configured_symbols else 0.0,
+        "latest_all_required_tables_symbol_count": len(latest_all_required_symbols),
+        "missing_latest_all_required_tables_symbol_count": max(len(configured_symbols) - len(latest_all_required_symbols), 0),
+        "latest_all_required_tables_coverage_rate": (len(latest_all_required_symbols) / len(configured_symbols)) if configured_symbols else 0.0,
         "history_complete_symbol_count": len(history_complete),
         "history_incomplete_symbol_count": len(history_incomplete),
         "history_missing_symbol_count": len(history_missing),
@@ -298,6 +326,14 @@ def _latest_table_symbols(df: pd.DataFrame, date_column: str) -> set[str]:
     if not latest:
         return set()
     rows = df[df[date_column].astype(str) == latest]
+    return _table_symbols(rows)
+
+
+def _table_symbols_at_date(df: pd.DataFrame, date_column: str, target_date: str | None) -> set[str]:
+    """Return symbols present in one table on the target date."""
+    if not target_date or df.empty or "ts_code" not in df.columns or date_column not in df.columns:
+        return set()
+    rows = df[df[date_column].astype(str) == str(target_date)]
     return _table_symbols(rows)
 
 

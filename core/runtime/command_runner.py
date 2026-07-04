@@ -21,6 +21,8 @@ ALLOWED_COMMANDS: dict[str, list[str]] = {
     "uninstall_scheduled_daily_update": [sys.executable, "-m", "core.jobs.uninstall_scheduled_daily_update"],
     "run_daily_workflow": [sys.executable, "-m", "core.jobs.run_daily_workflow"],
     "run_daily_selection": [sys.executable, "-m", "core.jobs.run_daily_selection"],
+    "diagnose_real_data": [sys.executable, "-m", "core.jobs.diagnose_real_data"],
+    "diagnose_update_batch": [sys.executable, "-m", "core.jobs.diagnose_update_batch"],
     "diagnose_data_quality": [sys.executable, "-m", "core.jobs.diagnose_data_quality"],
     "diagnose_factors": [sys.executable, "-m", "core.jobs.diagnose_factors"],
     "refresh_watchlist_scores": [sys.executable, "-m", "core.jobs.refresh_watchlist_scores"],

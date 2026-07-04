@@ -167,6 +167,13 @@ COLUMN_LABELS = {
     "key_findings": "主要发现（key_findings）",
     "data_quality_summary": "数据质量提示（data_quality_summary）",
     "lookback_report_path": "完整回看报告路径（lookback_report_path）",
+    "data_quality_status": "数据质量等级（data_quality_status）",
+    "formal_result_usable": "正式全市场研究结果可用（formal_result_usable）",
+    "formal_result_warning_reason": "正式结果提示（formal_result_warning_reason）",
+    "latest_daily_price_coverage_rate": "最新交易日行情覆盖率（latest_daily_price_coverage_rate）",
+    "latest_daily_basic_coverage_rate": "最新交易日估值覆盖率（latest_daily_basic_coverage_rate）",
+    "latest_adj_factor_coverage_rate": "最新交易日复权因子覆盖率（latest_adj_factor_coverage_rate）",
+    "latest_all_required_tables_coverage_rate": "最新交易日三表共同覆盖率（latest_all_required_tables_coverage_rate）",
 }
 
 
@@ -222,11 +229,13 @@ def export_daily_research_workbook(
     watchlist_sheet = _with_display_order(_preferred_columns(watchlist_sheet, _watchlist_columns()))
     external_sheet = _latest_external_positions(external_positions)
     risk_sheet = _build_risk_sheet(entry_sheet, watchlist_sheet, external_sheet)
+    scheduled_status = _read_scheduled_update_status()
     quality_sheet = (
         _build_data_quality_sheet(resolved_store, selected_trade_date)
         if include_data_quality
         else _message_frame("数据质量导出已关闭。")
     )
+    quality_sheet = _append_scheduled_quality_rows(quality_sheet, scheduled_status)
     settings_sheet = _settings_sheet(resolved_settings)
     lookback_status = _read_lookback_status(lookback_status_path)
     lookback_sheet = _build_lookback_summary_sheet(lookback_status)
@@ -239,6 +248,7 @@ def export_daily_research_workbook(
         watchlist_rows=len(watchlist_sheet),
         external_position_rows=len(external_sheet),
         lookback_status=lookback_status,
+        scheduled_status=scheduled_status,
     )
     help_sheet = _help_sheet()
 
@@ -697,6 +707,7 @@ def _build_summary_sheet(
     watchlist_rows: int,
     external_position_rows: int,
     lookback_status: dict[str, Any] | None = None,
+    scheduled_status: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     rows = [
         {"metric": "导出时间", "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
@@ -718,6 +729,17 @@ def _build_summary_sheet(
         )
     else:
         rows.append({"metric": "最近一次自动回看状态", "value": "尚无自动回看记录。"})
+    if scheduled_status:
+        rows.extend(
+            [
+                {"metric": "自动更新数据质量等级", "value": scheduled_status.get("data_quality_status") or "暂无"},
+                {"metric": "最新交易日 daily_price 覆盖率", "value": _format_rate_value(scheduled_status.get("latest_daily_price_coverage_rate"))},
+                {"metric": "最新交易日 daily_basic 覆盖率", "value": _format_rate_value(scheduled_status.get("latest_daily_basic_coverage_rate"))},
+                {"metric": "最新交易日 adj_factor 覆盖率", "value": _format_rate_value(scheduled_status.get("latest_adj_factor_coverage_rate"))},
+                {"metric": "正式全市场研究结果可用", "value": "是" if scheduled_status.get("formal_result_usable") else "否"},
+                {"metric": "正式结果提示", "value": scheduled_status.get("formal_result_warning_reason") or "暂无"},
+            ]
+        )
     rows.extend(
         [
             {"metric": "输出文件", "value": str(output_path or "默认 reports/daily_research_*.xlsx")},
@@ -725,6 +747,72 @@ def _build_summary_sheet(
         ]
     )
     return pd.DataFrame(rows)
+
+
+def _read_scheduled_update_status(status_path: str | Path | None = None) -> dict[str, Any] | None:
+    """Read scheduled daily update status if available."""
+    path = Path(status_path) if status_path else PROJECT_ROOT / "data" / "runtime" / "scheduled_daily_update_status.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"status": "failed", "summary": "自动更新状态文件不可读。"}
+    return payload if isinstance(payload, dict) else None
+
+
+def _append_scheduled_quality_rows(frame: pd.DataFrame, scheduled_status: dict[str, Any] | None) -> pd.DataFrame:
+    """Append lightweight scheduled-update quality rows to the data-quality sheet."""
+    if not scheduled_status:
+        return frame
+    rows = [
+        {
+            "table_name": "scheduled_daily_update",
+            "row_count": "",
+            "distinct_symbols": "",
+            "latest_date": scheduled_status.get("latest_completed_trade_date") or scheduled_status.get("research_trade_date") or "",
+            "note": f"数据质量等级：{scheduled_status.get('data_quality_status') or '暂无'}；正式全市场研究结果可用：{'是' if scheduled_status.get('formal_result_usable') else '否'}。",
+        },
+        {
+            "table_name": "scheduled_daily_update",
+            "row_count": "",
+            "distinct_symbols": scheduled_status.get("latest_daily_price_symbol_count", ""),
+            "latest_date": scheduled_status.get("latest_completed_trade_date") or "",
+            "note": f"最新交易日 daily_price 覆盖率：{_format_rate_value(scheduled_status.get('latest_daily_price_coverage_rate'))}",
+        },
+        {
+            "table_name": "scheduled_daily_update",
+            "row_count": "",
+            "distinct_symbols": scheduled_status.get("latest_daily_basic_symbol_count", ""),
+            "latest_date": scheduled_status.get("latest_completed_trade_date") or "",
+            "note": f"最新交易日 daily_basic 覆盖率：{_format_rate_value(scheduled_status.get('latest_daily_basic_coverage_rate'))}",
+        },
+        {
+            "table_name": "scheduled_daily_update",
+            "row_count": "",
+            "distinct_symbols": scheduled_status.get("latest_adj_factor_symbol_count", ""),
+            "latest_date": scheduled_status.get("latest_completed_trade_date") or "",
+            "note": f"最新交易日 adj_factor 覆盖率：{_format_rate_value(scheduled_status.get('latest_adj_factor_coverage_rate'))}",
+        },
+    ]
+    if scheduled_status.get("formal_result_warning_reason"):
+        rows.append(
+            {
+                "table_name": "scheduled_daily_update",
+                "row_count": "",
+                "distinct_symbols": "",
+                "latest_date": scheduled_status.get("latest_completed_trade_date") or "",
+                "note": scheduled_status.get("formal_result_warning_reason"),
+            }
+        )
+    return pd.concat([frame, pd.DataFrame(rows)], ignore_index=True, sort=False)
+
+
+def _format_rate_value(value: Any) -> str:
+    try:
+        return f"{float(value or 0.0):.2%}"
+    except (TypeError, ValueError):
+        return "暂无"
 
 
 def _read_lookback_status(status_path: str | Path | None = None) -> dict[str, Any] | None:

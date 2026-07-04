@@ -26,7 +26,7 @@ from core.jobs.track_watchlist import track_watchlist
 from core.notifications.email import send_email_notification
 from core.notifications.macos import send_macos_notification
 from core.runtime.data_source_preflight import run_data_source_preflight
-from core.storage.duckdb_store import DuckDBStore
+from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATUS_PATH = PROJECT_ROOT / "data" / "runtime" / "scheduled_daily_update_status.json"
@@ -433,6 +433,13 @@ def _run_heavy_steps(
         steps[stage]["elapsed_seconds"] = round(time_module.monotonic() - started, 3)
         logs.append(f"{stage}: {steps[stage].get('status', 'success')}")
         _merge_update_stage_summary(status, stage, steps[stage])
+        if stage == "update_data":
+            quality = _run_data_quality_gate(
+                settings=settings,
+                research_trade_date=research_trade_date,
+                step_overrides=step_overrides,
+            )
+            status.update(quality)
         status["steps"] = steps
         status["last_heartbeat_at"] = datetime.now().isoformat(timespec="seconds")
         write_scheduled_status(status_path, status)
@@ -452,11 +459,18 @@ def _run_heavy_steps(
     workbook_path = Path(str(workbook.get("output_path", ""))) if workbook.get("output_path") else Path()
     research_trade_date = _research_trade_date(steps, status)
     workflow_step_count = _workflow_skipped_step_count(steps)
-    final_status = "warning" if _has_update_warnings(status, steps) else "success"
+    quality_status = str(status.get("data_quality_status") or "ok").lower()
+    final_status = "warning" if _has_update_warnings(status, steps) or quality_status in {"warning", "poor"} else "success"
+    if quality_status in {"poor", "failed"}:
+        summary = "流程完成，但最新交易日数据覆盖严重不足，当前结果仅供流程检查，不代表完整全市场筛选结果。"
+    elif final_status == "success":
+        summary = "每日自动更新完成。"
+    else:
+        summary = "每日自动更新完成，部分股票空数据、超时或数据质量 warning 已记录。"
     status.update(
         {
             "status": final_status,
-            "summary": "每日自动更新完成。" if final_status == "success" else "每日自动更新完成，部分股票空数据或超时已跳过。",
+            "summary": summary,
             "stage": "done",
             "trade_date": research_trade_date,
             "research_trade_date": research_trade_date,
@@ -924,6 +938,217 @@ def _merge_update_stage_summary(status: dict[str, Any], stage: str, result: dict
     )
 
 
+def _run_data_quality_gate(
+    *,
+    settings: Settings,
+    research_trade_date: str,
+    step_overrides: dict[str, Callable[[], dict[str, Any]]],
+) -> dict[str, Any]:
+    """Return latest-date market data quality metrics for formal-result gating."""
+    if "data_quality_gate" in step_overrides:
+        return _normalize_data_quality_gate(step_overrides["data_quality_gate"](), research_trade_date)
+    if step_overrides:
+        return _normalize_data_quality_gate({"data_quality_status": "ok", "formal_result_usable": True}, research_trade_date)
+    return _collect_latest_data_quality(settings=settings, research_trade_date=research_trade_date)
+
+
+def _collect_latest_data_quality(*, settings: Settings, research_trade_date: str) -> dict[str, Any]:
+    """Collect latest date coverage from local DuckDB without external API access."""
+    store = DuckDBStore(getattr(settings, "duckdb_path", None))
+    try:
+        stock_basic = store.read_table("stock_basic")
+    except DuckDBStoreError:
+        stock_basic = _empty_frame()
+    try:
+        daily_price = store.read_table("daily_price")
+    except DuckDBStoreError:
+        daily_price = _empty_frame()
+    try:
+        daily_basic = store.read_table("daily_basic")
+    except DuckDBStoreError:
+        daily_basic = _empty_frame()
+    try:
+        adj_factor = store.read_table("adj_factor")
+    except DuckDBStoreError:
+        adj_factor = _empty_frame()
+    try:
+        factor_scores = store.read_table("factor_scores")
+    except DuckDBStoreError:
+        factor_scores = _empty_frame()
+    try:
+        strategy_result = store.read_table("strategy_result")
+    except DuckDBStoreError:
+        strategy_result = _empty_frame()
+    try:
+        entry_zones = store.read_table("entry_zone_snapshots")
+    except DuckDBStoreError:
+        entry_zones = _empty_frame()
+    try:
+        watchlist_snapshots = store.read_table("watchlist_daily_snapshots")
+    except DuckDBStoreError:
+        watchlist_snapshots = _empty_frame()
+
+    configured_symbols = _symbols_from_table(stock_basic)
+    if not configured_symbols:
+        configured_symbols = sorted(
+            _symbols_from_table(daily_price)
+            | _symbols_from_table(daily_basic)
+            | _symbols_from_table(adj_factor)
+        )
+    return _build_latest_quality_metrics(
+        configured_symbols=list(configured_symbols),
+        daily_price=daily_price,
+        daily_basic=daily_basic,
+        adj_factor=adj_factor,
+        factor_scores=factor_scores,
+        strategy_result=strategy_result,
+        entry_zones=entry_zones,
+        watchlist_snapshots=watchlist_snapshots,
+        research_trade_date=research_trade_date,
+    )
+
+
+def _empty_frame() -> Any:
+    try:
+        import pandas as pd
+
+        return pd.DataFrame()
+    except Exception:
+        return []
+
+
+def _symbols_from_table(frame: Any) -> set[str]:
+    if not hasattr(frame, "empty") or frame.empty or "ts_code" not in frame.columns:
+        return set()
+    return set(frame["ts_code"].dropna().astype(str).tolist())
+
+
+def _symbols_at_date(frame: Any, trade_date: str) -> set[str]:
+    if not hasattr(frame, "empty") or frame.empty or "ts_code" not in frame.columns or "trade_date" not in frame.columns:
+        return set()
+    rows = frame[frame["trade_date"].astype(str) == str(trade_date)]
+    return _symbols_from_table(rows)
+
+
+def _build_latest_quality_metrics(
+    *,
+    configured_symbols: list[str],
+    daily_price: Any,
+    daily_basic: Any,
+    adj_factor: Any,
+    factor_scores: Any | None = None,
+    strategy_result: Any | None = None,
+    entry_zones: Any | None = None,
+    watchlist_snapshots: Any | None = None,
+    research_trade_date: str,
+) -> dict[str, Any]:
+    configured_set = set(configured_symbols)
+    configured_count = len(configured_set)
+    price_symbols = _symbols_at_date(daily_price, research_trade_date).intersection(configured_set) if configured_set else _symbols_at_date(daily_price, research_trade_date)
+    basic_symbols = _symbols_at_date(daily_basic, research_trade_date).intersection(configured_set) if configured_set else _symbols_at_date(daily_basic, research_trade_date)
+    adj_symbols = _symbols_at_date(adj_factor, research_trade_date).intersection(configured_set) if configured_set else _symbols_at_date(adj_factor, research_trade_date)
+    all_symbols = price_symbols.intersection(basic_symbols).intersection(adj_symbols)
+    denominator = configured_count or max(len(price_symbols | basic_symbols | adj_symbols), 1)
+    row_counts = _daily_price_row_counts(daily_price)
+    history_complete = [symbol for symbol in configured_set if row_counts.get(symbol, 0) >= 252]
+    history_incomplete = [symbol for symbol in configured_set if 0 < row_counts.get(symbol, 0) < 252]
+    history_missing = [symbol for symbol in configured_set if row_counts.get(symbol, 0) <= 0]
+    factor_symbols = _symbols_at_date(factor_scores, research_trade_date).intersection(configured_set) if factor_scores is not None else set()
+    elder_symbols = _symbols_at_date(watchlist_snapshots, research_trade_date).intersection(configured_set) if watchlist_snapshots is not None else set()
+    entry_zone_symbols = _symbols_at_date(entry_zones, research_trade_date).intersection(configured_set) if entry_zones is not None else set()
+    strategy_symbols = _symbols_at_date(strategy_result, research_trade_date).intersection(configured_set) if strategy_result is not None else set()
+    lookback_symbols = {symbol for symbol in strategy_symbols if row_counts.get(symbol, 0) >= 80}
+    latest_updated_but_history_incomplete = sorted(symbol for symbol in price_symbols if row_counts.get(symbol, 0) < 252)
+    history_complete_but_latest_missing = sorted(symbol for symbol in history_complete if symbol not in price_symbols)
+    metrics = {
+        "latest_completed_trade_date": research_trade_date,
+        "configured_symbol_count": configured_count,
+        "latest_daily_price_symbol_count": len(price_symbols),
+        "missing_latest_daily_price_symbol_count": max(denominator - len(price_symbols), 0),
+        "missing_latest_daily_price_examples": sorted((configured_set or price_symbols) - price_symbols)[:30],
+        "latest_daily_price_coverage_rate": len(price_symbols) / denominator if denominator else 0.0,
+        "latest_daily_basic_symbol_count": len(basic_symbols),
+        "missing_latest_daily_basic_symbol_count": max(denominator - len(basic_symbols), 0),
+        "missing_latest_daily_basic_examples": sorted((configured_set or basic_symbols) - basic_symbols)[:30],
+        "latest_daily_basic_coverage_rate": len(basic_symbols) / denominator if denominator else 0.0,
+        "latest_adj_factor_symbol_count": len(adj_symbols),
+        "missing_latest_adj_factor_symbol_count": max(denominator - len(adj_symbols), 0),
+        "missing_latest_adj_factor_examples": sorted((configured_set or adj_symbols) - adj_symbols)[:30],
+        "latest_adj_factor_coverage_rate": len(adj_symbols) / denominator if denominator else 0.0,
+        "latest_all_required_tables_symbol_count": len(all_symbols),
+        "missing_latest_all_required_tables_symbol_count": max(denominator - len(all_symbols), 0),
+        "latest_all_required_tables_coverage_rate": len(all_symbols) / denominator if denominator else 0.0,
+        "history_complete_symbol_count": len(history_complete),
+        "history_incomplete_symbol_count": len(history_incomplete),
+        "history_missing_symbol_count": len(history_missing),
+        "history_missing_examples": sorted(history_missing)[:30],
+        "available_days_20d_count": sum(1 for symbol in configured_set if row_counts.get(symbol, 0) >= 20),
+        "available_days_60d_count": sum(1 for symbol in configured_set if row_counts.get(symbol, 0) >= 60),
+        "available_days_120d_count": sum(1 for symbol in configured_set if row_counts.get(symbol, 0) >= 120),
+        "available_days_252d_count": sum(1 for symbol in configured_set if row_counts.get(symbol, 0) >= 252),
+        "factor_ready_symbol_count": len(factor_symbols),
+        "elder_ready_symbol_count": len(elder_symbols),
+        "entry_zone_ready_symbol_count": len(entry_zone_symbols),
+        "lookback_ready_symbol_count": len(lookback_symbols),
+        "latest_updated_but_history_incomplete_examples": latest_updated_but_history_incomplete[:30],
+        "history_complete_but_latest_missing_examples": history_complete_but_latest_missing[:30],
+        "latest_updated_but_history_incomplete_count": len(latest_updated_but_history_incomplete),
+        "history_complete_but_latest_missing_count": len(history_complete_but_latest_missing),
+    }
+    return _normalize_data_quality_gate(metrics, research_trade_date)
+
+
+def _daily_price_row_counts(frame: Any) -> dict[str, int]:
+    if not hasattr(frame, "empty") or frame.empty or "ts_code" not in frame.columns:
+        return {}
+    counts = frame.groupby(frame["ts_code"].astype(str)).size()
+    return {str(symbol): int(count) for symbol, count in counts.items()}
+
+
+def _normalize_data_quality_gate(payload: dict[str, Any], research_trade_date: str) -> dict[str, Any]:
+    """Normalize quality metrics and derive formal-result usability."""
+    result = dict(payload or {})
+    result.setdefault("latest_completed_trade_date", research_trade_date)
+    for key in [
+        "latest_daily_price_symbol_count",
+        "missing_latest_daily_price_symbol_count",
+        "latest_daily_basic_symbol_count",
+        "missing_latest_daily_basic_symbol_count",
+        "latest_adj_factor_symbol_count",
+        "missing_latest_adj_factor_symbol_count",
+        "latest_all_required_tables_symbol_count",
+        "missing_latest_all_required_tables_symbol_count",
+    ]:
+        result[key] = _positive_int(result.get(key))
+    for key in [
+        "latest_daily_price_coverage_rate",
+        "latest_daily_basic_coverage_rate",
+        "latest_adj_factor_coverage_rate",
+        "latest_all_required_tables_coverage_rate",
+    ]:
+        try:
+            result[key] = float(result.get(key) or 0.0)
+        except (TypeError, ValueError):
+            result[key] = 0.0
+    price_rate = float(result.get("latest_daily_price_coverage_rate", 0.0) or 0.0)
+    if str(result.get("data_quality_status") or "").strip():
+        quality_status = str(result["data_quality_status"]).lower()
+    elif price_rate >= 0.95:
+        quality_status = "ok"
+    elif price_rate >= 0.80:
+        quality_status = "warning"
+    else:
+        quality_status = "poor"
+    result["data_quality_status"] = quality_status
+    result["formal_result_usable"] = bool(result.get("formal_result_usable", quality_status not in {"poor", "failed"}))
+    if quality_status in {"poor", "failed"}:
+        result["formal_result_usable"] = False
+        result.setdefault("formal_result_warning_reason", "流程完成，但最新交易日数据覆盖严重不足，当前结果仅供流程检查，不代表完整全市场筛选结果。")
+    else:
+        result.setdefault("formal_result_warning_reason", "")
+    return result
+
+
 def _has_update_warnings(status: dict[str, Any], steps: dict[str, dict[str, Any]]) -> bool:
     update = steps.get("update_data", {})
     return (
@@ -1052,6 +1277,20 @@ def _base_status(
         "update_warning_count": 0,
         "update_warning_examples": [],
         "data_update_elapsed_seconds": 0,
+        "data_quality_status": "",
+        "formal_result_usable": False,
+        "formal_result_warning_reason": "",
+        "latest_daily_price_symbol_count": 0,
+        "missing_latest_daily_price_symbol_count": 0,
+        "latest_daily_price_coverage_rate": 0.0,
+        "latest_daily_basic_symbol_count": 0,
+        "missing_latest_daily_basic_symbol_count": 0,
+        "latest_daily_basic_coverage_rate": 0.0,
+        "latest_adj_factor_symbol_count": 0,
+        "missing_latest_adj_factor_symbol_count": 0,
+        "latest_adj_factor_coverage_rate": 0.0,
+        "latest_all_required_tables_symbol_count": 0,
+        "latest_all_required_tables_coverage_rate": 0.0,
         "processed_symbol_count": 0,
         "total_symbol_count": 0,
         "notification": {"macos_notification": "skipped", "email_enabled": False, "email_status": "disabled", "email_error": ""},
@@ -1082,6 +1321,10 @@ def _is_formal_success_for_date(previous: dict[str, Any], trade_date: str) -> bo
     if not str(previous.get("workbook_path") or "").strip():
         return False
     if _positive_int(previous.get("workbook_size_bytes")) <= 0:
+        return False
+    if str(previous.get("data_quality_status") or "").lower() in {"poor", "failed"}:
+        return False
+    if previous.get("formal_result_usable") is False:
         return False
     formal_date = str(previous.get("formal_success_date") or "")
     if formal_date:
@@ -1327,6 +1570,14 @@ def _print_status(status: dict[str, Any], output_format: str) -> None:
     print(f"- 埃尔德复核: {status.get('elder_review_count', 0)}")
     print(f"- 买入区间: {status.get('entry_zone_count', 0)}")
     print(f"- 观察池: {status.get('watchlist_count', 0)}")
+    if status.get("data_quality_status"):
+        print(f"- 数据质量等级: {status.get('data_quality_status')}")
+        print(f"- 最新交易日 daily_price 覆盖率: {float(status.get('latest_daily_price_coverage_rate', 0.0) or 0.0):.2%}")
+        print(f"- 最新交易日 daily_basic 覆盖率: {float(status.get('latest_daily_basic_coverage_rate', 0.0) or 0.0):.2%}")
+        print(f"- 最新交易日 adj_factor 覆盖率: {float(status.get('latest_adj_factor_coverage_rate', 0.0) or 0.0):.2%}")
+        print(f"- 正式全市场研究结果可用: {'是' if status.get('formal_result_usable') else '否'}")
+        if status.get("formal_result_warning_reason"):
+            print(f"- 数据质量提示: {status.get('formal_result_warning_reason')}")
     if status.get("stage"):
         print(f"- 当前/最后阶段: {status.get('stage')}")
     if status.get("empty_data_symbol_count") or status.get("network_timeout_count") or status.get("failed_symbol_count"):

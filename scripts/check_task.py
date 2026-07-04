@@ -3275,7 +3275,11 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing Task 57B phrase: {phrase}.")
 
-    tests_source = read_source(root / "tests/test_scheduled_daily_update.py")
+    tests_source = (
+        read_source(root / "tests/test_scheduled_daily_update.py")
+        + read_source(root / "tests/test_streamlit_app.py")
+        + read_source(root / "tests/test_daily_research_workbook.py")
+    )
     for phrase in [
         "test_scheduled_update_skips_before_scheduled_time",
         "test_scheduled_update_skips_if_already_success_today",
@@ -3315,6 +3319,13 @@ def check_task57b(root: Path) -> list[str]:
         "test_preflight_fails_when_python_and_curl_all_fail",
         "test_preflight_records_curl_fallback_available",
         "test_preflight_warning_message_in_text_output",
+        "test_formal_success_not_written_when_latest_coverage_poor",
+        "test_data_quality_poor_when_latest_daily_price_coverage_low",
+        "test_status_json_records_latest_table_coverages",
+        "test_non_trade_day_force_uses_latest_completed_trade_date",
+        "test_data_update_status_page_shows_data_quality_section",
+        "test_data_update_status_page_has_diagnosis_buttons",
+        "test_daily_workbook_summary_includes_data_quality",
         "test_no_algorithm_changes",
     ]:
         if phrase not in tests_source:
@@ -3329,13 +3340,21 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in docs_source:
             failures.append(f"docs/commands_reference.md is missing Task 57B wording: {phrase}.")
     diagnose_source = read_source(root / "core/jobs/diagnose_update_batch.py")
-    for phrase in ["latest_price_symbol_count", "history_complete_symbol_count", "elder_ready_symbol_count", "latest_updated_but_history_incomplete_count"]:
+    for phrase in ["latest_price_symbol_count", "latest_daily_basic_symbol_count", "latest_adj_factor_symbol_count", "latest_all_required_tables_symbol_count", "history_complete_symbol_count", "elder_ready_symbol_count", "latest_updated_but_history_incomplete_count"]:
         if phrase not in diagnose_source:
             failures.append(f"diagnose_update_batch.py is missing latest/history coverage field: {phrase}.")
     streamlit_source = read_source(root / "web/streamlit_app.py")
-    for phrase in ["最新数据覆盖", "历史数据完整度", "模块可用性", "本次更新结果"]:
+    for phrase in ["最新数据覆盖", "历史数据完整度", "模块可用性", "本次更新结果", "数据质量等级", "正式全市场研究结果可用", "运行数据质量诊断", "运行批量更新诊断"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing data update status section: {phrase}.")
+    scheduled_source = read_source(root / "core/jobs/run_scheduled_daily_update.py")
+    for phrase in ["data_quality_status", "formal_result_usable", "formal_result_warning_reason", "latest_daily_price_coverage_rate", "latest_daily_basic_coverage_rate", "latest_adj_factor_coverage_rate"]:
+        if phrase not in scheduled_source:
+            failures.append(f"run_scheduled_daily_update.py is missing data quality field: {phrase}.")
+    command_source = read_source(root / "core/runtime/command_runner.py")
+    for phrase in ["diagnose_real_data", "diagnose_update_batch"]:
+        if phrase not in command_source:
+            failures.append(f"command_runner.py is missing diagnostic command allowlist entry: {phrase}.")
     env_source = read_source(root / ".env.example")
     for phrase in ["DATA_SOURCE_REQUEST_TIMEOUT_SECONDS", "SYMBOL_UPDATE_TIMEOUT_SECONDS", "FULL_BATCH_UPDATE_TIMEOUT_SECONDS"]:
         if phrase not in env_source:
