@@ -61,6 +61,40 @@ def test_history_complete_is_separate_from_any_history(tmp_path: Path) -> None:
     assert snapshot["any_daily_price_symbol_count"] == 4995
 
 
+def test_price_data_enables_technical_research_without_daily_basic(tmp_path: Path) -> None:
+    db_path = _seed_price_only_quality_db(tmp_path)
+    snapshot = build_data_quality_snapshot(db_path=db_path, research_trade_date="20260703", latest_completed_trade_date="20260703")
+
+    assert snapshot["core_price_data_usable"] is True
+    assert snapshot["technical_research_usable"] is True
+
+
+def test_missing_daily_basic_marks_enhanced_data_incomplete_only(tmp_path: Path) -> None:
+    db_path = _seed_price_only_quality_db(tmp_path)
+    snapshot = build_data_quality_snapshot(db_path=db_path, research_trade_date="20260703", latest_completed_trade_date="20260703")
+
+    assert snapshot["enhanced_data_usable"] is False
+    assert snapshot["valuation_data_usable"] is False
+    assert snapshot["technical_research_usable"] is True
+
+
+def test_qfq_price_does_not_require_adj_factor_for_technical_research(tmp_path: Path) -> None:
+    db_path = _seed_price_only_quality_db(tmp_path)
+    snapshot = build_data_quality_snapshot(db_path=db_path, research_trade_date="20260703", latest_completed_trade_date="20260703")
+
+    assert snapshot["adj_factor_required"] is False
+    assert snapshot["price_adjustment_status"] == "qfq_price_available"
+    assert "不需要额外复权因子" in snapshot["price_adjustment_user_note"]
+
+
+def test_formal_full_market_result_still_false_when_enhanced_data_missing(tmp_path: Path) -> None:
+    db_path = _seed_price_only_quality_db(tmp_path)
+    snapshot = build_data_quality_snapshot(db_path=db_path, research_trade_date="20260703", latest_completed_trade_date="20260703")
+
+    assert snapshot["formal_full_market_result_usable"] is False
+    assert snapshot["formal_result_usable"] is False
+
+
 def test_normalize_trade_date_formats() -> None:
     assert normalize_trade_date(20260703) == "20260703"
     assert normalize_trade_date(" 20260703 ") == "20260703"
@@ -162,4 +196,32 @@ def _seed_quality_db(tmp_path: Path) -> Path:
         "daily_basic",
         pd.DataFrame({"ts_code": symbols[:3], "trade_date": ["20260703"] * 3, "turnover_rate": [1.0] * 3, "pe": [10.0] * 3, "pb": [1.0] * 3}),
     )
+    return db_path
+
+
+def _seed_price_only_quality_db(tmp_path: Path) -> Path:
+    db_path = tmp_path / "price_only_quality.duckdb"
+    store = DuckDBStore(db_path)
+    store.initialize()
+    symbols = [f"{index:06d}.SZ" for index in range(1, 101)]
+    store.upsert_dataframe("stock_basic", pd.DataFrame({"ts_code": symbols, "symbol": [code[:6] for code in symbols], "name": symbols}))
+    price_rows = []
+    for symbol in symbols[:95]:
+        for day in range(252):
+            price_rows.append(
+                {
+                    "ts_code": symbol,
+                    "trade_date": "20260703" if day == 0 else f"2025{(day // 28) + 1:02d}{(day % 28) + 1:02d}",
+                    "open": 1.0,
+                    "high": 1.0,
+                    "low": 1.0,
+                    "close": 1.0,
+                    "pre_close": 1.0,
+                    "change": 0.0,
+                    "pct_chg": 0.0,
+                    "vol": 1.0,
+                    "amount": 1.0,
+                }
+            )
+    store.upsert_dataframe("daily_price", pd.DataFrame(price_rows))
     return db_path

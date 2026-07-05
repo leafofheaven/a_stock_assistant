@@ -1634,6 +1634,8 @@ def _render_status_quality_main(st: Any, scheduled: dict[str, Any], status: dict
     display_dataframe(st, pd.DataFrame([_status_conclusion_row(scheduled, status)]))
     st.write("最新交易日覆盖")
     display_dataframe(st, _status_latest_coverage_frame(status))
+    st.write("复权语义")
+    display_dataframe(st, pd.DataFrame([_status_adjustment_semantics_row(status)]))
     st.write("历史数据完整度")
     display_dataframe(st, _status_history_frame(status))
     st.info("任意历史行情覆盖不等于最新交易日覆盖；历史完整按 252 日窗口统计。")
@@ -1649,7 +1651,11 @@ def _status_conclusion_row(scheduled: dict[str, Any], status: dict[str, Any]) ->
         "当前阶段": scheduled.get("stage") or "暂无",
         "研究交易日": status.get("latest_completed_trade_date") or status.get("research_trade_date") or scheduled.get("research_trade_date") or "暂无",
         "数据质量": status.get("data_quality_status") or "unknown",
-        "正式全市场研究结果可用": "是" if status.get("formal_result_usable") is True else "否",
+        "核心价格行情": "可用" if status.get("core_price_data_usable") is True else "不足",
+        "技术指标研究": "可用" if status.get("technical_research_usable") is True else "不足",
+        "增强数据": "可用" if status.get("enhanced_data_usable") is True else "不完整",
+        "估值/市值数据": "可用" if status.get("valuation_data_usable") is True else "不完整",
+        "正式全字段结果": "可用" if status.get("formal_full_market_result_usable") is True else "不可用",
         "核心行情状态": status.get("core_price_data_status") or _core_price_status(status),
         "增强数据状态": status.get("enhanced_data_status") or _enhanced_data_status(status),
         "主要提示": status.get("formal_result_warning_reason") or scheduled.get("failure_reason") or "暂无",
@@ -1669,6 +1675,18 @@ def _status_latest_coverage_frame(status: dict[str, Any]) -> pd.DataFrame:
         rate = float(status.get(rate_key, 0.0) or 0.0)
         rows.append({"表名": label, "已覆盖": f"{count} / {total}", "缺失": int(status.get(missing_key, max(total - count, 0)) or 0), "覆盖率": f"{rate:.2%}"})
     return pd.DataFrame(rows)
+
+
+def _status_adjustment_semantics_row(status: dict[str, Any]) -> dict[str, Any]:
+    source = status.get("adj_factor_source") or "暂无"
+    note = status.get("adj_factor_user_note") or "暂无明确复权语义。"
+    return {
+        "adj_factor 来源": source,
+        "是否需要额外复权因子": "是" if status.get("adj_factor_required") is True else "否",
+        "是否真实复权因子": "是" if status.get("adj_factor_is_real_factor") is True else "否",
+        "价格复权状态": status.get("price_adjustment_status") or "暂无",
+        "用户说明": status.get("price_adjustment_user_note") or note,
+    }
 
 
 def _status_history_frame(status: dict[str, Any]) -> pd.DataFrame:

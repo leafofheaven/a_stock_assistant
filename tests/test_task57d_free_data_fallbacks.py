@@ -11,8 +11,10 @@ import pandas as pd
 
 from core.data_sources.akshare_spot_snapshot import AKShareSpotSnapshotClient
 from core.data_sources.baostock_client import BaoStockClient
+from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.jobs.import_market_data import import_market_data, normalize_import_frame
 from core.jobs.market_data_progress import MarketDataProgressWriter, read_market_data_progress
+from core.jobs.refresh_data_quality_status import refresh_data_quality_status
 from core.jobs.update_market_data import _format_attempt_line, forward_fill_adj_factor, update_market_data
 from core.storage.duckdb_store import DuckDBStore
 
@@ -398,6 +400,7 @@ def test_market_data_progress_updates_provider_and_symbol_counts(tmp_path: Path)
 def test_latest_update_targets_missing_latest_symbols_first(tmp_path: Path) -> None:
     store = _seed_store(tmp_path, symbols=["000001.SZ", "000002.SZ", "000003.SZ"])
     store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
+    _seed_enhanced_rows(store, ["000001.SZ"], "20260703")
     module = _RecordingBaoStockModule()
 
     result = update_market_data(
@@ -418,6 +421,7 @@ def test_latest_update_targets_missing_latest_symbols_first(tmp_path: Path) -> N
 def test_latest_update_limit_applies_to_pending_symbols(tmp_path: Path) -> None:
     store = _seed_store(tmp_path, symbols=["000001.SZ", "000002.SZ", "000003.SZ"])
     store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
+    _seed_enhanced_rows(store, ["000001.SZ"], "20260703")
     module = _RecordingBaoStockModule()
 
     update_market_data(
@@ -438,6 +442,7 @@ def test_latest_update_skips_already_latest_symbols(tmp_path: Path) -> None:
     store = _seed_store(tmp_path, symbols=["000001.SZ", "000002.SZ"])
     store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
     store.upsert_dataframe("daily_price", _daily_price_frame("000002.SZ", "20260703"))
+    _seed_enhanced_rows(store, ["000001.SZ", "000002.SZ"], "20260703")
     module = _RecordingBaoStockModule()
 
     result = update_market_data(
@@ -512,6 +517,290 @@ def test_progress_json_contains_failure_summary(tmp_path: Path) -> None:
 
     assert payload["failure_summary"]["no_data"] == 1
     assert payload["failure_examples"]["no_data"] == ["000001.SZ"]
+
+
+def test_baostock_daily_basic_mapping(tmp_path: Path) -> None:
+    result = BaoStockClient(baostock_module=_BaoStockBasicModule()).get_daily_price(
+        start_date="20260703",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+    )
+
+    basic = result["daily_basic"]
+    assert basic.loc[0, "ts_code"] == "000001.SZ"
+    assert basic.loc[0, "trade_date"] == "20260703"
+    assert basic.loc[0, "turnover_rate"] == 2.5
+    assert basic.loc[0, "pe"] == 10.2
+    assert basic.loc[0, "pb"] == 1.1
+    assert basic.loc[0, "ps"] == 3.3
+
+
+def test_daily_basic_written_for_latest_trade_date(tmp_path: Path) -> None:
+    update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=_BaoStockBasicModule()),
+    )
+
+    daily_basic = DuckDBStore(tmp_path / "market.duckdb").read_table("daily_basic")
+    row = daily_basic[daily_basic["ts_code"] == "000001.SZ"].iloc[0]
+    assert row["trade_date"] == "20260703"
+    assert row["turnover_rate"] == 2.5
+    assert row["pe"] == 10.2
+    assert row["pb"] == 1.1
+
+
+def test_adj_factor_identity_written_for_adjusted_baostock_price(tmp_path: Path) -> None:
+    update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=_BaoStockBasicModule()),
+    )
+
+    adj_factor = DuckDBStore(tmp_path / "market.duckdb").read_table("adj_factor")
+    row = adj_factor[adj_factor["ts_code"] == "000001.SZ"].iloc[0]
+    assert row["trade_date"] == "20260703"
+    assert row["adj_factor"] == 1.0
+    assert bool(row["derived_adj_factor"]) is True
+    assert row["source_provider"] == "baostock_adjusted_price_identity"
+
+
+def test_adj_factor_identity_has_explicit_source_semantics(tmp_path: Path) -> None:
+    update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=_BaoStockBasicModule()),
+    )
+
+    snapshot = build_data_quality_snapshot(db_path=tmp_path / "market.duckdb", latest_completed_trade_date="20260703")
+    assert snapshot["adj_factor_source"] == "baostock_adjusted_price_identity"
+    assert "identity" in snapshot["adj_factor_semantics"]
+    assert snapshot["adj_factor_is_real_factor"] is False
+
+
+def test_no_double_adjustment_when_price_already_adjusted(tmp_path: Path) -> None:
+    update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=_BaoStockBasicModule()),
+    )
+    store = DuckDBStore(tmp_path / "market.duckdb")
+    price = store.read_table("daily_price").iloc[0]
+    adj = store.read_table("adj_factor").iloc[0]
+
+    assert float(price["close"]) * float(adj["adj_factor"]) == float(price["close"])
+
+
+def test_data_quality_snapshot_counts_compatible_adj_factor(tmp_path: Path) -> None:
+    update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=_BaoStockBasicModule()),
+    )
+
+    snapshot = build_data_quality_snapshot(db_path=tmp_path / "market.duckdb", latest_completed_trade_date="20260703")
+    assert snapshot["latest_adj_factor_symbol_count"] == 1
+    assert snapshot["latest_all_required_tables_symbol_count"] == 1
+
+
+def test_data_quality_snapshot_explains_compatible_adj_factor(tmp_path: Path) -> None:
+    update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=_BaoStockBasicModule()),
+    )
+
+    snapshot = build_data_quality_snapshot(db_path=tmp_path / "market.duckdb", latest_completed_trade_date="20260703")
+    assert "恒等兼容值" in snapshot["adj_factor_user_note"]
+    assert "不是真实复权因子" in snapshot["adj_factor_user_note"]
+
+
+def test_formal_result_not_usable_if_daily_basic_key_fields_missing(tmp_path: Path) -> None:
+    update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=_BaoStockModule()),
+    )
+
+    snapshot = build_data_quality_snapshot(db_path=tmp_path / "market.duckdb", latest_completed_trade_date="20260703")
+    assert snapshot["latest_daily_basic_symbol_count"] == 1
+    assert snapshot["latest_daily_basic_key_field_symbol_count"] == 0
+    assert snapshot["formal_result_usable"] is False
+    assert "daily_basic 缺估值或换手率关键字段" in snapshot["formal_result_warning_reason"]
+
+
+def test_enhanced_backfill_targets_existing_price_missing_basic_or_adj(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path, symbols=["000001.SZ", "000002.SZ"])
+    store.upsert_dataframe("daily_price", pd.concat([_daily_price_frame("000001.SZ", "20260703"), _daily_price_frame("000002.SZ", "20260703")], ignore_index=True))
+    module = _RecordingBaoStockBasicModule()
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ"],
+        update_limit=1,
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=module),
+        force_snapshot=True,
+    )
+
+    assert module.queried_codes == ["sz.000001"]
+    assert result["enhanced_pending_symbol_count"] == 2
+    assert result["missing_daily_basic_symbol_count"] == 2
+    assert result["missing_adj_factor_symbol_count"] == 2
+
+
+def test_update_limit_applies_to_enhanced_backfill_pool(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path, symbols=["000001.SZ", "000002.SZ", "000003.SZ"])
+    store.upsert_dataframe(
+        "daily_price",
+        pd.concat([_daily_price_frame("000001.SZ", "20260703"), _daily_price_frame("000002.SZ", "20260703"), _daily_price_frame("000003.SZ", "20260703")], ignore_index=True),
+    )
+    module = _RecordingBaoStockBasicModule()
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ"],
+        update_limit=2,
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=module),
+        force_snapshot=True,
+    )
+
+    assert module.queried_codes == ["sz.000001", "sz.000002"]
+    assert result["enhanced_processed_symbol_count"] == 2
+
+
+def test_enhanced_backfill_writes_daily_basic_without_new_price(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path, symbols=["000001.SZ"])
+    store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
+    before_price_rows = len(store.read_table("daily_price"))
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        update_limit=1,
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_RecordingBaoStockBasicModule()),
+        force_snapshot=True,
+    )
+    after_price_rows = len(store.read_table("daily_price"))
+
+    assert after_price_rows == before_price_rows
+    assert result["daily_basic_written_row_count"] == 1
+    assert len(store.read_table("daily_basic")) == 1
+
+
+def test_enhanced_backfill_writes_latest_identity_adj_factor(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path, symbols=["000001.SZ"])
+    store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
+
+    update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        update_limit=1,
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_RecordingBaoStockBasicModule()),
+        force_snapshot=True,
+    )
+
+    adj = store.read_table("adj_factor")
+    assert adj["trade_date"].tolist() == ["20260703"]
+    assert adj["adj_factor"].tolist() == [1.0]
+
+
+def test_refresh_data_quality_reports_identity_adj_factor_source(tmp_path: Path, capsys) -> None:
+    store = _seed_store(tmp_path, symbols=["000001.SZ"])
+    store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
+    update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        update_limit=1,
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_RecordingBaoStockBasicModule()),
+        force_snapshot=True,
+    )
+
+    refresh_data_quality_status(status_path=_status_path(tmp_path), output_format="text", db_path=store.db_path)
+    output = capsys.readouterr().out
+    assert "adj_factor_source: baostock_adjusted_price_identity" in output
+    assert "恒等兼容值" in output
+
+
+def test_latest_all_required_tables_increases_after_enhanced_backfill(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path, symbols=["000001.SZ"])
+    store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
+    before = build_data_quality_snapshot(db_path=store.db_path, latest_completed_trade_date="20260703")
+
+    update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        update_limit=1,
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_RecordingBaoStockBasicModule()),
+        force_snapshot=True,
+    )
+    after = build_data_quality_snapshot(db_path=store.db_path, latest_completed_trade_date="20260703")
+
+    assert before["latest_all_required_tables_symbol_count"] == 0
+    assert after["latest_all_required_tables_symbol_count"] == 1
 
 
 def test_market_data_progress_finishes_on_success_or_partial(tmp_path: Path) -> None:
@@ -956,6 +1245,36 @@ def test_streamlit_displays_failure_summary_without_raw_traceback() -> None:
         assert forbidden not in progress_source
 
 
+def test_streamlit_displays_adj_factor_semantics() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    status_source = _function_source(source, "_render_status_quality_main")
+    semantics_source = _function_source(source, "_status_adjustment_semantics_row")
+
+    assert "复权语义" in status_source
+    assert "adj_factor 来源" in semantics_source
+    assert "是否真实复权因子" in semantics_source
+    assert "用户说明" in semantics_source
+
+
+def test_streamlit_displays_layered_data_quality_status() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    conclusion_source = _function_source(source, "_status_conclusion_row")
+
+    assert "核心价格行情" in conclusion_source
+    assert "技术指标研究" in conclusion_source
+    assert "增强数据" in conclusion_source
+    assert "估值/市值数据" in conclusion_source
+    assert "正式全字段结果" in conclusion_source
+
+
+def test_streamlit_hides_raw_technical_details() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    primary = _function_source(source, "_render_status_quality_main") + _function_source(source, "_status_adjustment_semantics_row")
+
+    for forbidden in ["traceback", "raw_exception", "curl", "used_url", "proxy", "IPv4", "IPv6"]:
+        assert forbidden not in primary
+
+
 def test_auto_provider_attempts_are_recorded_but_not_user_selected(tmp_path: Path) -> None:
     status_path = _status_path(tmp_path)
     update_market_data(
@@ -1063,6 +1382,43 @@ def _daily_price_frame(symbol: str, trade_date: str) -> pd.DataFrame:
     )
 
 
+def _seed_enhanced_rows(store: DuckDBStore, symbols: list[str], trade_date: str) -> None:
+    store.upsert_dataframe(
+        "daily_basic",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": symbol,
+                    "trade_date": trade_date,
+                    "turnover_rate": 2.0,
+                    "volume_ratio": pd.NA,
+                    "pe": 10.0,
+                    "pb": 1.0,
+                    "ps": 2.0,
+                    "total_mv": pd.NA,
+                    "circ_mv": pd.NA,
+                }
+                for symbol in symbols
+            ]
+        ),
+    )
+    store.upsert_dataframe(
+        "adj_factor",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": symbol,
+                    "trade_date": trade_date,
+                    "adj_factor": 1.0,
+                    "derived_adj_factor": True,
+                    "source_provider": "baostock_adjusted_price_identity",
+                }
+                for symbol in symbols
+            ]
+        ),
+    )
+
+
 def _settings(tmp_path: Path, tushare_token: str = "") -> SimpleNamespace:
     return SimpleNamespace(
         duckdb_path=tmp_path / "market.duckdb",
@@ -1126,9 +1482,11 @@ class _BaoStockResult:
     error_msg = ""
     fields = ["date", "code", "open", "high", "low", "close", "preclose", "volume", "amount", "pctChg"]
 
-    def __init__(self, rows):
+    def __init__(self, rows, fields: list[str] | None = None):
         self.rows = list(rows)
         self.index = -1
+        if fields is not None:
+            self.fields = fields
 
     def next(self):
         self.index += 1
@@ -1147,6 +1505,25 @@ class _BaoStockModule:
 
     def query_history_k_data_plus(self, *_args, **_kwargs):
         return _BaoStockResult([["2026-07-03", "sz.000001", "10", "11", "9", "10.5", "10", "100", "1000", "5"]])
+
+
+class _BaoStockBasicModule(_BaoStockModule):
+    fields = ["date", "code", "open", "high", "low", "close", "preclose", "volume", "amount", "pctChg", "turn", "peTTM", "pbMRQ", "psTTM", "tradestatus", "isST"]
+
+    def query_history_k_data_plus(self, code, *_args, **_kwargs):
+        return _BaoStockResult(
+            [["2026-07-03", code, "10", "11", "9", "10.5", "10", "100", "1000", "5", "2.5", "10.2", "1.1", "3.3", "1", "0"]],
+            fields=self.fields,
+        )
+
+
+class _RecordingBaoStockBasicModule(_BaoStockBasicModule):
+    def __init__(self) -> None:
+        self.queried_codes: list[str] = []
+
+    def query_history_k_data_plus(self, code, *_args, **_kwargs):
+        self.queried_codes.append(code)
+        return super().query_history_k_data_plus(code)
 
 
 class _RecordingBaoStockModule(_BaoStockModule):

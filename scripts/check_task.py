@@ -3313,7 +3313,7 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in spot_source:
             failures.append(f"akshare_spot_snapshot.py is missing Task 57D phrase: {phrase}.")
     baostock_source = read_source(root / "core/data_sources/baostock_client.py")
-    for phrase in ["BaoStockClient", "query_history_k_data_plus", "daily_price", "adjustflag", "progress_callback", "failure_summary", "failure_examples", "max_retries"]:
+    for phrase in ["BaoStockClient", "query_history_k_data_plus", "daily_price", "daily_basic", "adjustflag", "progress_callback", "failure_summary", "failure_examples", "max_retries", "peTTM", "pbMRQ"]:
         if phrase not in baostock_source:
             failures.append(f"baostock_client.py is missing Task 57D phrase: {phrase}.")
     market_progress_source = read_source(root / "core/jobs/market_data_progress.py")
@@ -3330,6 +3330,14 @@ def check_task57b(root: Path) -> list[str]:
         "history_missing_symbol_count",
         "formal_result_usable",
         "readonly_duckdb_sql",
+        "adj_factor_source",
+        "adj_factor_semantics",
+        "baostock_adjusted_price_identity",
+        "daily_basic 缺估值或换手率关键字段",
+        "technical_research_usable",
+        "formal_full_market_result_usable",
+        "adj_factor_required",
+        "qfq_price_available",
     ]:
         if phrase not in snapshot_source:
             failures.append(f"data_quality_snapshot.py is missing Task 57C phrase: {phrase}.")
@@ -3458,6 +3466,24 @@ def check_task57b(root: Path) -> list[str]:
         "test_baostock_retry_only_for_transient_errors",
         "test_baostock_records_failure_examples",
         "test_progress_json_contains_failure_summary",
+        "test_baostock_daily_basic_mapping",
+        "test_daily_basic_written_for_latest_trade_date",
+        "test_adj_factor_identity_written_for_adjusted_baostock_price",
+        "test_adj_factor_identity_has_explicit_source_semantics",
+        "test_no_double_adjustment_when_price_already_adjusted",
+        "test_data_quality_snapshot_counts_compatible_adj_factor",
+        "test_data_quality_snapshot_explains_compatible_adj_factor",
+        "test_formal_result_not_usable_if_daily_basic_key_fields_missing",
+        "test_enhanced_backfill_targets_existing_price_missing_basic_or_adj",
+        "test_update_limit_applies_to_enhanced_backfill_pool",
+        "test_enhanced_backfill_writes_daily_basic_without_new_price",
+        "test_enhanced_backfill_writes_latest_identity_adj_factor",
+        "test_refresh_data_quality_reports_identity_adj_factor_source",
+        "test_latest_all_required_tables_increases_after_enhanced_backfill",
+        "test_price_data_enables_technical_research_without_daily_basic",
+        "test_missing_daily_basic_marks_enhanced_data_incomplete_only",
+        "test_qfq_price_does_not_require_adj_factor_for_technical_research",
+        "test_formal_full_market_result_still_false_when_enhanced_data_missing",
         "test_streamlit_free_provider_fallback_section",
         "test_streamlit_update_page_has_only_user_level_actions",
         "test_provider_buttons_hidden_in_advanced_expander",
@@ -3472,6 +3498,9 @@ def check_task57b(root: Path) -> list[str]:
         "test_streamlit_running_progress_autorefresh",
         "test_streamlit_progress_primary_view_hides_technical_fields",
         "test_streamlit_displays_failure_summary_without_raw_traceback",
+        "test_streamlit_displays_adj_factor_semantics",
+        "test_streamlit_displays_layered_data_quality_status",
+        "test_streamlit_hides_raw_technical_details",
         "test_auto_provider_attempts_are_recorded_but_not_user_selected",
         "test_data_quality_snapshot_metrics_preserved",
         "test_technical_terms_not_in_primary_buttons",

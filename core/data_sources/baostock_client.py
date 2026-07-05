@@ -37,6 +37,7 @@ class BaoStockClient:
         if getattr(login, "error_code", "0") != "0":
             raise BaoStockUnavailable(f"BaoStock login failed: {getattr(login, 'error_msg', '')}")
         frames: list[pd.DataFrame] = []
+        basic_frames: list[pd.DataFrame] = []
         failures: list[dict[str, str]] = []
         failure_summary: dict[str, int] = {}
         failure_examples: dict[str, list[str]] = {}
@@ -54,8 +55,8 @@ class BaoStockClient:
                     attempts += 1
                     try:
                         result = module.query_history_k_data_plus(
-                            query_symbol,
-                            "date,code,open,high,low,close,preclose,volume,amount,pctChg",
+                        query_symbol,
+                        "date,code,open,high,low,close,preclose,volume,amount,pctChg,turn,peTTM,pbMRQ,psTTM,tradestatus,isST",
                             start_date=_to_dash_date(start_date),
                             end_date=_to_dash_date(end_date),
                             frequency="d",
@@ -119,6 +120,9 @@ class BaoStockClient:
                     continue
                 frame = pd.DataFrame(rows, columns=fields)
                 frames.append(_normalize_baostock_frame(frame))
+                basic = _normalize_baostock_daily_basic(frame)
+                if not basic.empty:
+                    basic_frames.append(basic)
                 consecutive_failures = 0
                 _emit_progress(progress_callback, symbol=symbol, status="success", written_rows=len(rows), processed_symbol_count=index, total_symbol_count=total)
                 if sleep_seconds:
@@ -128,9 +132,11 @@ class BaoStockClient:
             if callable(logout):
                 logout()
         data = pd.concat(frames, ignore_index=True) if frames else _empty_price()
+        basic_data = pd.concat(basic_frames, ignore_index=True) if basic_frames else _empty_daily_basic()
         return {
             "status": "success" if failures == [] else "partial_success" if not data.empty else "failed",
             "daily_price": data,
+            "daily_basic": basic_data,
             "failure_records": failures,
             "failure_summary": failure_summary,
             "failure_examples": failure_examples,
@@ -173,6 +179,35 @@ def _normalize_baostock_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _empty_price() -> pd.DataFrame:
     return pd.DataFrame(columns=["ts_code", "trade_date", "open", "high", "low", "close", "pre_close", "change", "pct_chg", "vol", "amount"])
+
+
+def _normalize_baostock_daily_basic(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return _empty_daily_basic()
+    result = frame.rename(
+        columns={
+            "date": "trade_date",
+            "code": "symbol",
+            "turn": "turnover_rate",
+            "peTTM": "pe",
+            "pbMRQ": "pb",
+            "psTTM": "ps",
+        }
+    ).copy()
+    result["trade_date"] = result.get("trade_date", "").astype(str).str.replace("-", "", regex=False)
+    result["ts_code"] = result.get("symbol", "").map(_baostock_to_ts_code)
+    for column in ["turnover_rate", "pe", "pb", "ps"]:
+        if column not in result.columns:
+            result[column] = pd.NA
+        result[column] = pd.to_numeric(result[column], errors="coerce")
+    result["volume_ratio"] = pd.NA
+    result["total_mv"] = pd.NA
+    result["circ_mv"] = pd.NA
+    return result[["ts_code", "trade_date", "turnover_rate", "volume_ratio", "pe", "pb", "ps", "total_mv", "circ_mv"]]
+
+
+def _empty_daily_basic() -> pd.DataFrame:
+    return pd.DataFrame(columns=["ts_code", "trade_date", "turnover_rate", "volume_ratio", "pe", "pb", "ps", "total_mv", "circ_mv"])
 
 
 def _to_baostock_code(symbol: str) -> str:

@@ -46,6 +46,8 @@ def build_data_quality_snapshot(
         latest_price_count = _count_at_date(connection, "daily_price", target_date)
         latest_basic_count = _count_at_date(connection, "daily_basic", target_date)
         latest_adj_count = _count_at_date(connection, "adj_factor", target_date)
+        adj_semantics = _adj_factor_semantics(connection, target_date)
+        daily_basic_key_count = _daily_basic_key_count(connection, target_date)
         any_price_count = _count_any(connection, "daily_price")
         row_counts = _row_counts(connection, "daily_price")
 
@@ -61,13 +63,38 @@ def build_data_quality_snapshot(
         lookback_ready = {symbol for symbol in strategy_symbols if row_counts.get(symbol, 0) >= 80}
 
     latest_price_rate = _rate(latest_price_count, configured_count)
+    latest_basic_rate = _rate(latest_basic_count, configured_count)
+    latest_adj_rate = _rate(latest_adj_count, configured_count)
+    daily_basic_key_rate = _rate(daily_basic_key_count, configured_count)
     status = _quality_status(latest_price_rate)
-    formal_usable = status not in {"poor", "failed"}
+    core_price_usable = status not in {"poor", "failed"}
+    technical_research_usable = core_price_usable
+    enhanced_data_usable = latest_basic_rate >= 0.8 and daily_basic_key_rate >= 0.8
+    valuation_data_usable = daily_basic_key_rate >= 0.8
+    adj_factor_required = not core_price_usable
+    if not adj_semantics and core_price_usable:
+        adj_semantics = _qfq_price_available_semantics()
+    formal_full_market_usable = core_price_usable and enhanced_data_usable and valuation_data_usable
+    formal_usable = formal_full_market_usable
+    warning_reason = _formal_warning_reason(
+        formal_usable,
+        status,
+        latest_basic_rate,
+        latest_adj_rate,
+        daily_basic_key_rate,
+        adj_semantics,
+        adj_factor_required=adj_factor_required,
+    )
     return {
         "data_quality_snapshot_source": "readonly_duckdb_sql",
         "data_quality_status": status,
+        "core_price_data_usable": core_price_usable,
+        "technical_research_usable": technical_research_usable,
+        "enhanced_data_usable": enhanced_data_usable,
+        "valuation_data_usable": valuation_data_usable,
+        "formal_full_market_result_usable": formal_full_market_usable,
         "formal_result_usable": formal_usable,
-        "formal_result_warning_reason": "" if formal_usable else WARNING_REASON,
+        "formal_result_warning_reason": "" if formal_usable else warning_reason,
         "configured_symbol_count": configured_count,
         "research_trade_date": research_date,
         "latest_completed_trade_date": target_date,
@@ -76,10 +103,20 @@ def build_data_quality_snapshot(
         "latest_daily_price_coverage_rate": latest_price_rate,
         "latest_daily_basic_symbol_count": latest_basic_count,
         "missing_latest_daily_basic_symbol_count": max(configured_count - latest_basic_count, 0),
-        "latest_daily_basic_coverage_rate": _rate(latest_basic_count, configured_count),
+        "latest_daily_basic_coverage_rate": latest_basic_rate,
+        "latest_daily_basic_key_field_symbol_count": daily_basic_key_count,
+        "latest_daily_basic_key_field_coverage_rate": daily_basic_key_rate,
         "latest_adj_factor_symbol_count": latest_adj_count,
         "missing_latest_adj_factor_symbol_count": max(configured_count - latest_adj_count, 0),
-        "latest_adj_factor_coverage_rate": _rate(latest_adj_count, configured_count),
+        "latest_adj_factor_coverage_rate": latest_adj_rate,
+        "adj_factor_source": adj_semantics.get("adj_factor_source", ""),
+        "adj_factor_semantics": adj_semantics.get("adj_factor_semantics", ""),
+        "adjusted_price_source": adj_semantics.get("adjusted_price_source", ""),
+        "price_adjustment_status": adj_semantics.get("price_adjustment_status", ""),
+        "price_adjustment_user_note": adj_semantics.get("price_adjustment_user_note", adj_semantics.get("adj_factor_user_note", "")),
+        "adj_factor_required": adj_factor_required,
+        "adj_factor_is_real_factor": bool(adj_semantics.get("adj_factor_is_real_factor", False)),
+        "adj_factor_user_note": adj_semantics.get("adj_factor_user_note", ""),
         "latest_all_required_tables_symbol_count": len(latest_all_required.intersection(configured_set)),
         "missing_latest_all_required_tables_symbol_count": max(configured_count - len(latest_all_required.intersection(configured_set)), 0),
         "latest_all_required_tables_coverage_rate": _rate(len(latest_all_required.intersection(configured_set)), configured_count),
@@ -105,6 +142,9 @@ def build_data_quality_snapshot(
         "latest_updated_but_history_incomplete_examples": sorted(symbol for symbol in latest_price_configured if row_counts.get(symbol, 0) < 252)[:30],
         "history_complete_but_latest_missing_count": sum(1 for symbol in history_complete if symbol not in latest_price_configured),
         "history_complete_but_latest_missing_examples": sorted(symbol for symbol in history_complete if symbol not in latest_price_configured)[:30],
+        "core_price_data_status": "可用" if core_price_usable else "不足",
+        "enhanced_data_status": "完整" if formal_usable else "不完整",
+        "enhanced_data_missing_reason": "" if formal_usable else warning_reason,
     }
 
 
@@ -227,6 +267,107 @@ def _row_counts(connection: Any, table_name: str) -> dict[str, int]:
     if frame.empty or "ts_code" not in frame.columns or "row_count" not in frame.columns:
         return {}
     return {str(row["ts_code"]): int(row["row_count"] or 0) for _, row in frame.iterrows()}
+
+
+def _daily_basic_key_count(connection: Any, target_date: str) -> int:
+    if not target_date:
+        return 0
+    try:
+        return int(
+            connection.execute(
+                """
+                SELECT COUNT(DISTINCT ts_code)
+                FROM daily_basic
+                WHERE replace(CAST(trade_date AS VARCHAR), '-', '') = ?
+                  AND turnover_rate IS NOT NULL
+                  AND pe IS NOT NULL
+                  AND pb IS NOT NULL
+                """,
+                [target_date],
+            ).fetchone()[0]
+            or 0
+        )
+    except Exception:
+        return 0
+
+
+def _adj_factor_semantics(connection: Any, target_date: str) -> dict[str, Any]:
+    if not target_date:
+        return {}
+    try:
+        frame = connection.execute(
+            """
+            SELECT source_provider, COUNT(DISTINCT ts_code) AS symbol_count
+            FROM adj_factor
+            WHERE replace(CAST(trade_date AS VARCHAR), '-', '') = ?
+            GROUP BY source_provider
+            ORDER BY symbol_count DESC
+            """,
+            [target_date],
+        ).fetchdf()
+    except Exception:
+        return {}
+    if frame.empty or "source_provider" not in frame.columns:
+        return {}
+    providers = [str(value or "") for value in frame["source_provider"].dropna().tolist()]
+    if "baostock_adjusted_price_identity" in providers:
+        return {
+            "adj_factor_source": "baostock_adjusted_price_identity",
+            "adj_factor_semantics": "daily_price_is_qfq; adj_factor_is_identity_to_avoid_double_adjustment",
+            "adjusted_price_source": "baostock_adjustflag_2_qfq",
+            "price_adjustment_status": "qfq_price_with_identity_adj_factor",
+            "adj_factor_is_real_factor": False,
+            "adj_factor_user_note": "当前使用前复权行情价，adj_factor 为恒等兼容值，用于避免重复复权；这不是真实复权因子。",
+            "price_adjustment_user_note": "当前价格已为前复权价，技术指标不需要额外复权因子。",
+        }
+    if providers:
+        return {
+            "adj_factor_source": providers[0],
+            "adj_factor_semantics": "provided_or_derived_adj_factor",
+            "adjusted_price_source": "",
+            "price_adjustment_status": "adj_factor_available",
+            "adj_factor_is_real_factor": providers[0] not in {"forward_fill", ""},
+            "adj_factor_user_note": "adj_factor 已有来源记录，请结合 source_provider 判断是否为真实复权因子。",
+        }
+    return {}
+
+
+def _qfq_price_available_semantics() -> dict[str, Any]:
+    return {
+        "adj_factor_source": "",
+        "adj_factor_semantics": "daily_price_is_qfq; adj_factor_not_required_for_technical_research",
+        "adjusted_price_source": "local_daily_price_qfq_policy",
+        "price_adjustment_status": "qfq_price_available",
+        "adj_factor_is_real_factor": False,
+        "adj_factor_user_note": "当前价格已按前复权价格体系用于技术研究；adj_factor 缺失不阻断技术指标。",
+        "price_adjustment_user_note": "当前价格已为前复权价，技术指标不需要额外复权因子。",
+    }
+
+
+def _formal_warning_reason(
+    formal_usable: bool,
+    status: str,
+    latest_basic_rate: float,
+    latest_adj_rate: float,
+    daily_basic_key_rate: float,
+    adj_semantics: dict[str, Any],
+    *,
+    adj_factor_required: bool = True,
+) -> str:
+    if formal_usable:
+        return ""
+    reasons: list[str] = []
+    if status in {"poor", "failed"}:
+        reasons.append(WARNING_REASON)
+    if latest_basic_rate < 0.8:
+        reasons.append("daily_basic 最新交易日覆盖不足。")
+    elif daily_basic_key_rate < 0.8:
+        reasons.append("daily_basic 缺估值或换手率关键字段。")
+    if adj_factor_required and latest_adj_rate < 0.8:
+        reasons.append("adj_factor 最新交易日覆盖不足。")
+    elif adj_factor_required and not adj_semantics.get("price_adjustment_status"):
+        reasons.append("adj_factor 来源和复权语义不明确。")
+    return "；".join(reasons) if reasons else WARNING_REASON
 
 
 def _scalar(connection: Any, query: str) -> Any:
