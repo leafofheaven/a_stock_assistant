@@ -13,7 +13,9 @@ from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 from core.review.watchlist_scores import enrich_watchlist_latest_fields
 
 ALLOWED_DECISIONS = {"watch", "pass", "exclude", "needs_data", "pending"}
-ALLOWED_REVIEW_STATUS = {"active", "archived"}
+CURRENT_WATCH_REVIEW_STATUSES = {"active", "entry_zone", "triggered"}
+INACTIVE_WATCH_REVIEW_STATUSES = {"invalidated", "expired", "archived", "manual_removed"}
+ALLOWED_REVIEW_STATUS = CURRENT_WATCH_REVIEW_STATUSES | INACTIVE_WATCH_REVIEW_STATUSES
 ALLOWED_ACTION_TYPES = {"create", "update", "archive", "reactivate"}
 REQUIRED_IMPORT_COLUMNS = ["ts_code", "name", "selection_date", "decision", "reason", "notes", "reviewer"]
 REVIEW_COLUMNS = [
@@ -120,7 +122,7 @@ def build_watchlist_dataframe(store: DuckDBStore, active_only: bool = True) -> p
         return pd.DataFrame(columns=[*REVIEW_COLUMNS, "latest_trade_date", "latest_close", "total_score"])
     df = decisions.copy()
     if active_only and "review_status" in df.columns:
-        df = df[df["review_status"].fillna("active") == "active"]
+        df = df[df["review_status"].fillna("active").astype(str).isin(CURRENT_WATCH_REVIEW_STATUSES)]
     if "decision" in df.columns:
         df = df[df["decision"] == "watch"]
     history = read_review_decision_history(store)
@@ -138,7 +140,7 @@ def summarize_review_decisions(store: DuckDBStore) -> dict[str, Any]:
     active_watch = 0
     if not decisions.empty:
         active_watch = int(
-            len(decisions[(decisions["decision"] == "watch") & (decisions["review_status"].fillna("active") == "active")])
+            len(decisions[(decisions["decision"] == "watch") & (decisions["review_status"].fillna("active").astype(str).isin(CURRENT_WATCH_REVIEW_STATUSES))])
         )
     return {
         "total_rows": int(len(decisions)),

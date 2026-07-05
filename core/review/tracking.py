@@ -9,7 +9,12 @@ import uuid
 import pandas as pd
 
 from app.config import Settings
-from core.review.decisions import REVIEW_COLUMNS, build_watchlist_dataframe, read_review_decisions
+from core.review.decisions import (
+    CURRENT_WATCH_REVIEW_STATUSES,
+    REVIEW_COLUMNS,
+    build_watchlist_dataframe,
+    read_review_decisions,
+)
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 from core.strategy.selector import select_top_stocks
 from core.technical.elder import build_elder_review
@@ -45,6 +50,14 @@ SNAPSHOT_COLUMNS = [
 ]
 
 WATCH_STATUS_LABELS = {
+    "active": "正常观察",
+    "entry_zone": "接近买入区间",
+    "triggered": "触发人工复核",
+    "invalidated": "逻辑失效",
+    "expired": "观察过期",
+    "archived": "已归档",
+    "manual_removed": "手动移出",
+    # Legacy labels remain readable for older local snapshots.
     "new_candidate": "新入选",
     "active_watch": "正常观察",
     "strong_watch": "重点观察",
@@ -52,10 +65,15 @@ WATCH_STATUS_LABELS = {
     "near_buy_zone": "接近买入区间",
     "overheated": "短线过热",
     "weakening": "走势转弱",
-    "invalidated": "逻辑失效",
     "bought": "已买入",
     "removed": "已移出",
 }
+CURRENT_WATCH_STATUSES = {"active", "entry_zone", "triggered"}
+INACTIVE_WATCH_STATUSES = {"invalidated", "expired", "archived", "manual_removed"}
+DEFAULT_DAILY_NEW_LIMIT = 20
+DEFAULT_ACTIVE_LIMIT = 60
+DEFAULT_STALE_TRADING_DAYS = 5
+DEFAULT_MAX_WATCH_DAYS = 15
 
 DAILY_SNAPSHOT_COLUMNS = [
     "snapshot_id",
@@ -164,6 +182,10 @@ def refresh_watchlist_from_selection(
     store: DuckDBStore,
     trade_date: str | None = None,
     top_n: int | None = None,
+    daily_new_limit: int = DEFAULT_DAILY_NEW_LIMIT,
+    active_limit: int = DEFAULT_ACTIVE_LIMIT,
+    stale_trading_days: int = DEFAULT_STALE_TRADING_DAYS,
+    max_watch_days: int = DEFAULT_MAX_WATCH_DAYS,
 ) -> dict[str, Any]:
     """Refresh watchlist membership and daily candidate tracking from local selection data.
 
@@ -185,6 +207,8 @@ def refresh_watchlist_from_selection(
         existing_decisions=existing_decisions,
         active_codes=active_codes,
         selection_date=resolved_trade_date,
+        daily_new_limit=daily_new_limit,
+        remaining_active_slots=max(active_limit - len(active_codes), 0),
     )
     if new_rows:
         store.upsert_dataframe("review_decisions", pd.DataFrame(new_rows, columns=REVIEW_COLUMNS))
@@ -200,7 +224,11 @@ def refresh_watchlist_from_selection(
         trade_date=resolved_trade_date,
         top_n=resolved_top_n,
         new_codes={row["ts_code"] for row in new_rows},
+        stale_trading_days=stale_trading_days,
+        max_watch_days=max_watch_days,
+        active_limit=active_limit,
     )
+    status_sync = _sync_review_statuses_from_snapshots(store, snapshots, existing_decisions, resolved_trade_date)
     written = 0
     if not snapshots.empty:
         written = store.upsert_dataframe("watchlist_daily_snapshots", snapshots)
@@ -208,6 +236,8 @@ def refresh_watchlist_from_selection(
     if not events.empty:
         store.upsert_dataframe("watchlist_events", events)
     status_counts = _status_counts(snapshots)
+    current_watch_count = int(sum(status_counts.get(status, 0) for status in CURRENT_WATCH_STATUSES))
+    exited_count = int(sum(status_counts.get(status, 0) for status in INACTIVE_WATCH_STATUSES))
     return {
         "status": "success" if not snapshots.empty else "skipped",
         "data_provider": settings.data_provider,
@@ -216,11 +246,17 @@ def refresh_watchlist_from_selection(
         "top_n": resolved_top_n,
         "candidate_count": int(len(current_selection)),
         "new_candidate_count": int(len(new_rows)),
-        "active_watch_count": int(len(active_codes)),
+        "active_watch_count": current_watch_count,
+        "current_watch_count": current_watch_count,
+        "exited_watch_count": exited_count,
+        "refreshed_watch_count": int(max(current_watch_count - len(new_rows), 0)),
+        "daily_new_limit": int(daily_new_limit),
+        "active_limit": int(active_limit),
         "snapshot_count": int(len(snapshots)),
         "written_rows": int(written),
         "event_count": int(len(events)),
         "status_counts": status_counts,
+        "status_sync_count": int(status_sync),
         "snapshots": snapshots,
         "events": events,
         "next_steps": ["python -m core.jobs.track_watchlist", "python -m core.jobs.export_watchlist_tracking"],
@@ -443,7 +479,7 @@ def _active_watch_codes(decisions: pd.DataFrame) -> set[str]:
     if "decision" in df.columns:
         df = df[df["decision"].fillna("").astype(str) == "watch"]
     if "review_status" in df.columns:
-        df = df[df["review_status"].fillna("active").astype(str) == "active"]
+        df = df[df["review_status"].fillna("active").astype(str).isin(CURRENT_WATCH_REVIEW_STATUSES)]
     return set(df["ts_code"].dropna().astype(str))
 
 
@@ -453,13 +489,20 @@ def _new_watch_decision_rows(
     existing_decisions: pd.DataFrame,
     active_codes: set[str],
     selection_date: str,
+    daily_new_limit: int,
+    remaining_active_slots: int,
 ) -> list[dict[str, Any]]:
     if current_selection.empty or "ts_code" not in current_selection.columns:
+        return []
+    limit = max(min(int(daily_new_limit), int(remaining_active_slots)), 0)
+    if limit <= 0:
         return []
     existing_by_code = _latest_decision_by_code(existing_decisions)
     now = datetime.now().isoformat(timespec="seconds")
     rows: list[dict[str, Any]] = []
     for item in current_selection.to_dict("records"):
+        if len(rows) >= limit:
+            break
         ts_code = str(item.get("ts_code", ""))
         if not ts_code or ts_code in active_codes:
             continue
@@ -504,6 +547,9 @@ def _build_daily_snapshots(
     trade_date: str,
     top_n: int,
     new_codes: set[str],
+    stale_trading_days: int,
+    max_watch_days: int,
+    active_limit: int,
 ) -> pd.DataFrame:
     if not active_codes and current_selection.empty:
         return pd.DataFrame(columns=DAILY_SNAPSHOT_COLUMNS)
@@ -519,7 +565,7 @@ def _build_daily_snapshots(
     previous_snapshot_by_code = _previous_snapshot_by_code(latest_snapshots, trade_date)
     decisions_by_code = _latest_decision_by_code(existing_decisions)
     current_by_code = {str(row.get("ts_code")): row for row in current_selection.to_dict("records")}
-    codes = sorted(set(active_codes).union(current_by_code.keys()))
+    codes = sorted(set(active_codes))
     now = datetime.now().isoformat(timespec="seconds")
     rows: list[dict[str, Any]] = []
     for ts_code in codes:
@@ -540,6 +586,10 @@ def _build_daily_snapshots(
             previous=previous,
             elder_row=elder_row,
             is_new=ts_code in new_codes,
+            decision=decision,
+            trade_date=trade_date,
+            stale_trading_days=stale_trading_days,
+            max_watch_days=max_watch_days,
         )
         rows.append(
             {
@@ -579,7 +629,8 @@ def _build_daily_snapshots(
                 "created_at": now,
             }
         )
-    return pd.DataFrame(rows, columns=DAILY_SNAPSHOT_COLUMNS)
+    snapshots = pd.DataFrame(rows, columns=DAILY_SNAPSHOT_COLUMNS)
+    return _apply_active_watch_limit(snapshots, active_limit)
 
 
 def _elder_review_for_current_selection(selection: pd.DataFrame, price: pd.DataFrame) -> dict[str, dict[str, Any]]:
@@ -650,44 +701,47 @@ def _resolve_watch_status(
     previous: dict[str, Any],
     elder_row: dict[str, Any],
     is_new: bool,
+    decision: dict[str, Any],
+    trade_date: str,
+    stale_trading_days: int,
+    max_watch_days: int,
 ) -> str:
     action_hint = str(elder_row.get("action_hint") or "")
-    if is_new:
-        return "new_candidate"
-    if "短线过热" in action_hint or "不追" in action_hint:
-        return "overheated"
-    if "等待回调" in action_hint:
-        return "wait_pullback"
+    existing_status = str(decision.get("review_status") or "active")
+    if existing_status in INACTIVE_WATCH_STATUSES:
+        return existing_status
+    watch_days = _watch_days(decision.get("selection_date"), trade_date)
+    days_since_last_seen = _days_since(stats.get("last_selected_date"), trade_date)
+    if watch_days is not None and watch_days > max_watch_days:
+        return "expired"
+    if days_since_last_seen is not None and days_since_last_seen > stale_trading_days:
+        return "expired"
     if "趋势偏弱" in action_hint or "暂缓" in action_hint:
-        return "weakening"
-    if stats.get("top_n_flag") is False and int(stats.get("consecutive_selected_days") or 0) == 0:
         return "invalidated"
+    if "趋势确认" in action_hint or existing_status == "triggered":
+        return "triggered"
+    if "等待回调" in action_hint or "接近" in action_hint or "回调" in action_hint or existing_status == "entry_zone":
+        return "entry_zone"
     score_change = stats.get("total_score_change")
     rank_change = stats.get("rank_change")
     if (rank_change is not None and rank_change <= -5) or (score_change is not None and score_change <= -8):
-        return "weakening"
-    if int(stats.get("selected_count_5d") or 0) >= 3 and (rank_change is None or rank_change >= 0):
-        return "strong_watch"
-    if "接近" in action_hint or "回调" in action_hint:
-        return "near_buy_zone"
-    return "active_watch"
+        return "invalidated"
+    return "active"
 
 
 def _watch_reason(status: str, stats: dict[str, Any], elder_row: dict[str, Any]) -> str:
-    if status == "new_candidate":
+    if status == "active" and stats.get("today_rank") is not None:
         return "今日首次进入候选，进入观察池持续跟踪。"
-    if status == "strong_watch":
+    if status == "triggered":
         return "近 5 日多次入选且排名或分数保持稳定。"
-    if status == "wait_pullback":
+    if status == "entry_zone":
         return "技术复核提示等待回调，适合继续观察节奏。"
-    if status == "overheated":
-        return "技术复核提示短线过热，避免把复核分解读为追高优先级。"
-    if status == "weakening":
-        return "排名、分数或技术状态转弱，需要人工复核。"
     if status == "invalidated":
         return "当前未进入候选范围，观察逻辑需要复核。"
-    if status == "near_buy_zone":
-        return "技术位置接近观察区间，仍需人工判断。"
+    if status == "expired":
+        return "超过观察窗口或多日未重新入选，已从当前观察池移出。"
+    if status in {"archived", "manual_removed"}:
+        return "该记录已不属于当前观察池。"
     return "正常观察，暂无明显状态变化。"
 
 
@@ -702,6 +756,88 @@ def _daily_note(status: str, stats: dict[str, Any], elder_row: dict[str, Any]) -
     if elder_row.get("action_hint"):
         pieces.append(str(elder_row["action_hint"]))
     return "；".join(pieces)
+
+
+def _apply_active_watch_limit(snapshots: pd.DataFrame, active_limit: int) -> pd.DataFrame:
+    """Keep current watchlist size bounded without changing candidate order."""
+    if snapshots.empty or "watch_status" not in snapshots.columns:
+        return snapshots
+    result = snapshots.copy()
+    current_mask = result["watch_status"].astype(str).isin(CURRENT_WATCH_STATUSES)
+    current = result[current_mask].copy()
+    if len(current) <= int(active_limit):
+        return result
+    current["_priority_status"] = current["watch_status"].map({"triggered": 0, "entry_zone": 1, "active": 2}).fillna(9)
+    current["_priority_selected"] = ~current["top_n_flag"].fillna(False).astype(bool)
+    current["_priority_score"] = pd.to_numeric(current.get("total_score"), errors="coerce")
+    current["_priority_watch_days"] = pd.to_numeric(current.get("watch_days"), errors="coerce").fillna(0)
+    keep_index = set(
+        current.sort_values(
+            ["_priority_status", "_priority_selected", "_priority_score", "_priority_watch_days", "ts_code"],
+            ascending=[True, True, False, True, True],
+            na_position="last",
+        )
+        .head(int(active_limit))
+        .index
+    )
+    archive_mask = current_mask & ~result.index.isin(keep_index)
+    result.loc[archive_mask, "watch_status"] = "archived"
+    result.loc[archive_mask, "watch_status_label"] = WATCH_STATUS_LABELS["archived"]
+    result.loc[archive_mask, "watch_reason"] = "当前观察池超过上限，低优先级记录已归档。"
+    result.loc[archive_mask, "daily_note"] = "观察池容量控制归档；可在历史跟踪中查看。"
+    return result
+
+
+def _sync_review_statuses_from_snapshots(
+    store: DuckDBStore,
+    snapshots: pd.DataFrame,
+    existing_decisions: pd.DataFrame,
+    trade_date: str,
+) -> int:
+    """Mirror latest lifecycle status back to review_decisions for current filtering."""
+    if snapshots.empty or existing_decisions.empty or "ts_code" not in snapshots.columns:
+        return 0
+    decision_by_code = _latest_decision_by_code(existing_decisions)
+    now = datetime.now().isoformat(timespec="seconds")
+    rows: list[dict[str, Any]] = []
+    for item in snapshots.to_dict("records"):
+        ts_code = str(item.get("ts_code") or "")
+        if not ts_code:
+            continue
+        decision = decision_by_code.get(ts_code)
+        if not decision:
+            continue
+        status = _review_status_from_watch_status(str(item.get("watch_status") or "active"))
+        if str(decision.get("review_status") or "active") == status:
+            continue
+        row = {column: decision.get(column) for column in REVIEW_COLUMNS}
+        row["review_status"] = status
+        row["review_date"] = str(trade_date)
+        row["updated_at"] = now
+        rows.append(row)
+    if not rows:
+        return 0
+    store.upsert_dataframe("review_decisions", pd.DataFrame(rows, columns=REVIEW_COLUMNS))
+    return len(rows)
+
+
+def _review_status_from_watch_status(status: str) -> str:
+    if status in CURRENT_WATCH_STATUSES:
+        return status
+    if status in INACTIVE_WATCH_STATUSES:
+        return status
+    legacy_map = {
+        "new_candidate": "active",
+        "active_watch": "active",
+        "strong_watch": "triggered",
+        "wait_pullback": "entry_zone",
+        "near_buy_zone": "entry_zone",
+        "overheated": "entry_zone",
+        "weakening": "invalidated",
+        "removed": "manual_removed",
+        "bought": "archived",
+    }
+    return legacy_map.get(status, "active")
 
 
 def _build_watchlist_events(*, store: DuckDBStore, snapshots: pd.DataFrame, trade_date: str) -> pd.DataFrame:
@@ -795,6 +931,15 @@ def _watch_days(first_date: Any, trade_date: str) -> int | None:
         return None
     try:
         return max((datetime.strptime(str(trade_date), "%Y%m%d") - datetime.strptime(start, "%Y%m%d")).days, 0)
+    except ValueError:
+        return None
+
+
+def _days_since(last_date: Any, trade_date: str) -> int | None:
+    if not last_date:
+        return None
+    try:
+        return max((datetime.strptime(str(trade_date), "%Y%m%d") - datetime.strptime(str(last_date), "%Y%m%d")).days, 0)
     except ValueError:
         return None
 

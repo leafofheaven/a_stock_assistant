@@ -70,6 +70,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task57a": check_task57a,
         "task57b": check_task57b,
         "task58": check_task58,
+        "task59": check_task59,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -3632,6 +3633,57 @@ def check_task58(root: Path) -> list[str]:
     return failures
 
 
+def check_task59(root: Path) -> list[str]:
+    """Check Task 59 watchlist lifecycle and Elder review scope support."""
+    failures: list[str] = []
+    required_paths = [
+        "core/review/tracking.py",
+        "core/review/decisions.py",
+        "core/jobs/run_elder_review.py",
+        "core/jobs/export_daily_research_workbook.py",
+        "tests/test_watchlist_lifecycle_task59.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+    tracking_source = read_source(root / "core/review/tracking.py")
+    for phrase in [
+        "CURRENT_WATCH_STATUSES",
+        "DEFAULT_DAILY_NEW_LIMIT",
+        "DEFAULT_ACTIVE_LIMIT",
+        "_apply_active_watch_limit",
+        "_sync_review_statuses_from_snapshots",
+        "expired",
+    ]:
+        if phrase not in tracking_source:
+            failures.append(f"core/review/tracking.py is missing Task 59 phrase: {phrase}.")
+    decisions_source = read_source(root / "core/review/decisions.py")
+    for phrase in ["CURRENT_WATCH_REVIEW_STATUSES", "entry_zone", "triggered", "manual_removed"]:
+        if phrase not in decisions_source:
+            failures.append(f"core/review/decisions.py is missing Task 59 status support: {phrase}.")
+    elder_source = read_source(root / "core/jobs/run_elder_review.py")
+    for phrase in ["_append_current_watchlist_targets", "review_scope", "当前观察池"]:
+        if phrase not in elder_source:
+            failures.append(f"core/jobs/run_elder_review.py is missing Task 59 Elder scope phrase: {phrase}.")
+    workbook_source = read_source(root / "core/jobs/export_daily_research_workbook.py")
+    for phrase in ["_current_watchlist_scope", "review_reason", "暂无埃尔德复核分"]:
+        if phrase not in workbook_source:
+            failures.append(f"core/jobs/export_daily_research_workbook.py is missing Task 59 workbook phrase: {phrase}.")
+    tests_source = read_source(root / "tests/test_watchlist_lifecycle_task59.py")
+    for phrase in [
+        "test_watchlist_does_not_append_duplicate_active_rows",
+        "test_watchlist_daily_new_limit",
+        "test_watchlist_active_size_limit",
+        "test_watchlist_expires_stale_symbols",
+        "test_watchlist_keeps_entry_zone_priority",
+        "test_elder_review_includes_active_watchlist",
+        "test_elder_review_no_blank_score_without_reason",
+        "test_daily_research_excel_watchlist_current_scope",
+        "test_daily_research_excel_elder_review_scope",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_watchlist_lifecycle_task59.py is missing {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -3722,6 +3774,7 @@ def main(argv: list[str] | None = None) -> int:
             "task57a",
             "task57b",
             "task58",
+            "task59",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

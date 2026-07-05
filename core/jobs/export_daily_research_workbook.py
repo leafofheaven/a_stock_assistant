@@ -85,6 +85,9 @@ COLUMN_LABELS = {
     "select_reason": "候选原因（select_reason）",
     "risk_note": "风险提示（risk_note）",
     "elder_score": "埃尔德分（elder_score）",
+    "review_scope": "复核范围（review_scope）",
+    "review_status": "复核状态（review_status）",
+    "review_reason": "复核说明（review_reason）",
     "action_hint": "操作提示（action_hint）",
     "review_action": "复核动作（review_action）",
     "elder_reason": "复核原因（elder_reason）",
@@ -219,8 +222,10 @@ def export_daily_research_workbook(
     strategy_sheet = _build_strategy_sheet(strategy, selected_trade_date)
     elder_sheet = _build_elder_sheet(strategy_sheet, watchlist, selected_trade_date)
     entry_sheet = _build_entry_zone_sheet(entry_zones, strategy_sheet, watchlist, selected_trade_date)
-    watchlist_sheet = _latest_by_date(watchlist, "trade_date", selected_trade_date)
-    watchlist_sheet = _with_display_order(_preferred_columns(watchlist_sheet, _watchlist_columns()))
+    latest_watchlist_sheet = _latest_by_date(watchlist, "trade_date", selected_trade_date)
+    current_watchlist_sheet = _current_watchlist_scope(latest_watchlist_sheet)
+    watchlist_sheet = _with_display_order(_preferred_columns(current_watchlist_sheet, _watchlist_columns()))
+    watchlist_tracking_sheet = _with_display_order(_preferred_columns(latest_watchlist_sheet, _watchlist_columns()))
     external_sheet = _latest_external_positions(external_positions)
     risk_sheet = _build_risk_sheet(entry_sheet, watchlist_sheet, external_sheet)
     data_quality_snapshot = _safe_data_quality_snapshot(resolved_store, selected_trade_date)
@@ -256,7 +261,7 @@ def export_daily_research_workbook(
         "02_埃尔德复核": elder_sheet,
         "03_买入区间": entry_sheet,
         "04_观察池": _empty_if_needed(watchlist_sheet, "暂无观察池跟踪数据。"),
-        "05_观察池跟踪": _empty_if_needed(watchlist_sheet, "暂无观察池跟踪数据。"),
+        "05_观察池跟踪": _empty_if_needed(watchlist_tracking_sheet, "暂无观察池跟踪数据。"),
         "06_外部模拟持仓": _empty_if_needed(external_sheet, "暂无外部模拟持仓数据。"),
         "07_风险提示": _empty_if_needed(risk_sheet, "暂无需要特别提示的风险项。"),
         "08_数据质量": quality_sheet,
@@ -367,6 +372,9 @@ def _build_elder_sheet(strategy: pd.DataFrame, watchlist: pd.DataFrame, trade_da
     strategy_elder_columns = [
         "display_order",
         "source",
+        "review_scope",
+        "review_status",
+        "review_reason",
         "trade_date",
         "review_date",
         "latest_trade_date",
@@ -386,17 +394,50 @@ def _build_elder_sheet(strategy: pd.DataFrame, watchlist: pd.DataFrame, trade_da
     if not strategy.empty and {"elder_score", "action_hint", "elder_reason"}.intersection(strategy.columns):
         strategy_frame = strategy.copy()
         strategy_frame["source"] = "今日候选"
+        _ensure_elder_review_status(strategy_frame)
+        rows.append(_preferred_columns(strategy_frame, strategy_elder_columns))
+    elif not strategy.empty and "message" not in strategy.columns:
+        strategy_frame = strategy.copy()
+        strategy_frame["source"] = "今日候选"
+        strategy_frame["review_scope"] = "今日候选"
+        strategy_frame["review_status"] = "未复核"
+        strategy_frame["review_reason"] = "今日候选暂无持久化埃尔德复核结果，请运行 python -m core.jobs.run_elder_review。"
         rows.append(_preferred_columns(strategy_frame, strategy_elder_columns))
 
     watch_frame = _latest_by_date(watchlist, "trade_date", trade_date)
+    watch_frame = _current_watchlist_scope(watch_frame)
     if not watch_frame.empty:
         watch_frame = watch_frame.copy()
         watch_frame["source"] = "观察池"
+        _ensure_elder_review_status(watch_frame)
         rows.append(_preferred_columns(watch_frame, strategy_elder_columns))
 
     if not rows:
         return _message_frame("暂无复核结果。请先运行 python -m core.jobs.run_elder_review。")
     return _with_display_order(pd.concat(rows, ignore_index=True, sort=False))
+
+
+def _ensure_elder_review_status(frame: pd.DataFrame) -> None:
+    if "review_scope" not in frame.columns:
+        frame["review_scope"] = frame.get("source", "今日候选")
+    if "review_status" not in frame.columns:
+        has_score = pd.to_numeric(frame.get("elder_score"), errors="coerce").notna() if "elder_score" in frame.columns else pd.Series([False] * len(frame), index=frame.index)
+        frame["review_status"] = has_score.map({True: "已复核", False: "未复核"})
+    if "review_reason" not in frame.columns:
+        frame["review_reason"] = frame.get("elder_reason", "")
+    missing_reason = frame["review_reason"].isna() | (frame["review_reason"].astype(str).str.strip() == "")
+    missing_score = pd.to_numeric(frame.get("elder_score"), errors="coerce").isna() if "elder_score" in frame.columns else pd.Series([True] * len(frame), index=frame.index)
+    frame.loc[missing_reason & missing_score, "review_reason"] = "暂无埃尔德复核分；该行未找到可用复核结果或数据样本不足。"
+
+
+def _current_watchlist_scope(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "watch_status" not in frame.columns:
+        return frame.copy()
+    current_statuses = {"active", "entry_zone", "triggered", "active_watch", "strong_watch", "wait_pullback", "near_buy_zone"}
+    result = frame[frame["watch_status"].fillna("active").astype(str).isin(current_statuses)].copy()
+    if "ts_code" in result.columns:
+        result = result.drop_duplicates("ts_code", keep="last")
+    return result.reset_index(drop=True)
 
 
 def _build_entry_zone_sheet(
@@ -667,7 +708,8 @@ def _missing_value_metrics(store: DuckDBStore, trade_date: str) -> list[dict[str
         if frame.empty:
             continue
         row = frame.iloc[0]
-        missing_count = int(row.get("missing_count") or 0)
+        raw_missing = row.get("missing_count")
+        missing_count = 0 if pd.isna(raw_missing) else int(raw_missing or 0)
         if missing_count > 0:
             note_prefix = FUNDAMENTAL_SCORE_MISSING_NOTE_PREFIX if column_name == "fundamental_score" else f"{label}缺失记录数"
             metrics.append(

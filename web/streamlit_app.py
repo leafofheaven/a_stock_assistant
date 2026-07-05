@@ -953,7 +953,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     with tabs[3]:
         _render_section(st, "选股逻辑", _render_selection_logic_tab, st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[4]:
-        _render_section(st, "埃尔德复核", _render_elder_review_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("price", pd.DataFrame()))
+        _render_section(st, "埃尔德复核", _render_elder_review_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("price", pd.DataFrame()), dashboard_data.get("watchlist_snapshot", pd.DataFrame()))
     with tabs[5]:
         _render_section(st, "观察池跟踪", _render_watchlist_tab, st, dashboard_data.get("watchlist", pd.DataFrame()), dashboard_data.get("watchlist_snapshot", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[6]:
@@ -1432,18 +1432,38 @@ def _render_core_logic_guide_download(st: Any) -> None:
     )
 
 
-def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.DataFrame) -> None:
+def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.DataFrame, watchlist_snapshot: pd.DataFrame | None = None) -> None:
     st.subheader("埃尔德复核")
     st.caption("二次技术状态 / 节奏复核层，不覆盖 total_score，不改变今日选股原始排序，也不代表买入优先级。")
-    review_df = build_elder_review(selection_df, price_df)
+    review_df = build_elder_review(_with_review_scope_for_display(selection_df, "今日候选"), price_df)
+    watch_review = pd.DataFrame()
+    current_watch = _current_watchlist_for_elder_tab(watchlist_snapshot if isinstance(watchlist_snapshot, pd.DataFrame) else pd.DataFrame())
+    if not current_watch.empty:
+        existing_codes = set(review_df.get("ts_code", pd.Series(dtype=str)).dropna().astype(str))
+        watch_targets = current_watch[~current_watch["ts_code"].astype(str).isin(existing_codes)].copy()
+        if not watch_targets.empty:
+            watch_review = build_elder_review(_with_review_scope_for_display(watch_targets, "观察池"), price_df)
     if review_df.empty:
         st.info("暂无埃尔德复核结果。请先运行每日选股并确保本地 daily_price 有足够行情。")
         return
-    display_df = format_elder_review_display(review_df, source="今日候选")
+    display_df = pd.concat(
+        [
+            format_elder_review_display(review_df, source="今日候选"),
+            format_elder_review_display(watch_review, source="观察池") if not watch_review.empty else pd.DataFrame(),
+        ],
+        ignore_index=True,
+        sort=False,
+    )
+    if not display_df.empty:
+        display_df = display_df.reset_index(drop=True)
+        display_df["display_order"] = range(1, len(display_df) + 1)
     st.info("埃尔德复核为二次技术状态判断，不改变 total_score 和系统内部选股结果。序号为当前页面显示顺序；来源用于区分今日候选、观察池或持仓池。")
     display_columns = [
         "display_order",
         "source",
+        "review_scope",
+        "review_status",
+        "review_reason",
         "ts_code",
         "name",
         "industry",
@@ -1480,6 +1500,15 @@ def format_elder_review_display(review_df: pd.DataFrame, *, source: str = "今�
         return review_df.copy()
     result = review_df.copy().reset_index(drop=True)
     result["source"] = source
+    if "review_scope" not in result.columns:
+        result["review_scope"] = source
+    if "review_status" not in result.columns:
+        result["review_status"] = result.get("elder_score", pd.Series(index=result.index)).notna().map({True: "已复核", False: "未复核"})
+    if "review_reason" not in result.columns:
+        result["review_reason"] = result.get("elder_reason", "")
+    missing_reason = result["review_reason"].isna() | (result["review_reason"].astype(str).str.strip() == "")
+    missing_score = pd.to_numeric(result.get("elder_score"), errors="coerce").isna() if "elder_score" in result.columns else pd.Series([True] * len(result), index=result.index)
+    result.loc[missing_reason & missing_score, "review_reason"] = "暂无埃尔德复核分；该行未找到可用复核结果或数据样本不足。"
     if "rank" in result.columns:
         result["candidate_rank"] = result["rank"]
     elif "candidate_rank" not in result.columns:
@@ -1502,6 +1531,25 @@ def format_elder_review_display(review_df: pd.DataFrame, *, source: str = "今�
     result = result.reset_index(drop=True)
     result["display_order"] = range(1, len(result) + 1)
     return result.drop(columns=[column for column in ["_source_order", "_candidate_rank_sort"] if column in result.columns])
+
+
+def _with_review_scope_for_display(frame: pd.DataFrame, scope: str) -> pd.DataFrame:
+    result = frame.copy()
+    if not result.empty:
+        result["review_scope"] = scope
+    return result
+
+
+def _current_watchlist_for_elder_tab(snapshot: pd.DataFrame) -> pd.DataFrame:
+    if snapshot.empty or "watch_status" not in snapshot.columns:
+        return pd.DataFrame()
+    current_statuses = {"active", "entry_zone", "triggered", "active_watch", "strong_watch", "wait_pullback", "near_buy_zone"}
+    result = snapshot[snapshot["watch_status"].fillna("active").astype(str).isin(current_statuses)].copy()
+    if "ts_code" in result.columns:
+        result = result.drop_duplicates("ts_code", keep="last")
+    if "trade_date" not in result.columns and "latest_trade_date" in result.columns:
+        result["trade_date"] = result["latest_trade_date"]
+    return result.reset_index(drop=True)
 
 
 def _render_positions_tab(st: Any, positions_df: pd.DataFrame) -> None:

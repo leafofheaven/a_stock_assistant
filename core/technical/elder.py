@@ -18,6 +18,9 @@ ELDER_REVIEW_COLUMNS = [
     "name",
     "industry",
     "trade_date",
+    "review_scope",
+    "review_status",
+    "review_reason",
     "review_date",
     "price_latest_trade_date",
     "price_row_count",
@@ -287,8 +290,12 @@ def _review_row(
     """Build one review output row."""
     row = {column: candidate.get(column) for column in ["rank", "ts_code", "name", "industry", "trade_date", "total_score"]}
     review_date = str(latest.get("trade_date")) if latest is not None and latest.get("trade_date") is not None else None
+    status = "未复核" if action_hint == "数据不足" else "已复核"
     row.update(
         {
+            "review_scope": candidate.get("review_scope") or "今日候选",
+            "review_status": status,
+            "review_reason": reason,
             "review_date": review_date,
             "price_latest_trade_date": review_date,
             "price_row_count": int(price_row_count),
