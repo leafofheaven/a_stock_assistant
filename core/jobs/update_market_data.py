@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +49,7 @@ def update_market_data(
     akshare_client: AKShareClient | None = None,
     spot_client: AKShareSpotSnapshotClient | None = None,
     baostock_client: BaoStockClient | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Update market data through free fallback providers."""
     if provider not in PROVIDERS:
@@ -55,7 +58,8 @@ def update_market_data(
     if resolved_goal not in GOALS:
         raise ValueError(f"Unsupported goal: {resolved_goal}")
     resolved_settings = settings or get_settings()
-    end = _normalize_date(end_date) or _default_end_date(resolved_settings)
+    current_dt = now or datetime.now()
+    end = _normalize_date(end_date) or _default_end_date(resolved_settings, status_path=status_path, now=current_dt)
     start = _normalize_date(start_date) or _start_from_end(end, int(getattr(resolved_settings, "full_update_lookback_days", 250) or 250))
     resolved_symbols = _resolve_symbols(symbols, update_limit=update_limit, settings=resolved_settings)
     if dry_run:
@@ -75,7 +79,7 @@ def update_market_data(
     store.initialize()
     attempts: list[dict[str, Any]] = []
     provider_order = _provider_order(provider, resolved_settings, resolved_goal)
-    for candidate in provider_order:
+    for index, candidate in enumerate(provider_order):
         result = _run_provider(
             candidate,
             goal=resolved_goal,
@@ -91,7 +95,8 @@ def update_market_data(
             akshare_client=akshare_client,
             spot_client=spot_client,
             baostock_client=baostock_client,
-        )
+            now=current_dt,
+            )
         attempts.append(result)
         if provider != "auto":
             return _finalize_result(
@@ -106,6 +111,9 @@ def update_market_data(
                 message=result.get("message") or result.get("error_message") or "",
             )
         if result.get("status") in {"success", "partial_success"} and int(result.get("written_row_count", 0) or 0) > 0:
+            attempts.extend(_unexecuted_attempts(provider_order[index + 1 :], goal=resolved_goal))
+            if not any(item.get("provider") == "manual_import" for item in attempts):
+                attempts.append(_manual_import_result(goal=resolved_goal, mode=mode))
             return _finalize_result(
                 status="partial" if result.get("partial_update") else "success",
                 goal=resolved_goal,
@@ -148,6 +156,7 @@ def _run_provider(
     akshare_client: AKShareClient | None,
     spot_client: AKShareSpotSnapshotClient | None,
     baostock_client: BaoStockClient | None,
+    now: datetime,
 ) -> dict[str, Any]:
     try:
         if provider == "akshare_kline":
@@ -158,14 +167,109 @@ def _run_provider(
                 enable_basic_enrichment=False,
                 enable_valuation_enrichment=False,
             )
-            price = client.get_daily_price(start_date, end_date, symbols)
+            fetch_symbols = symbols
+            if goal == "latest" and len(symbols) > 2:
+                probe_symbols = symbols[:2]
+                try:
+                    with _suppress_akshare_traceback_logs():
+                        probe = client.get_daily_price(start_date, end_date, probe_symbols)
+                except Exception as exc:
+                    error_type, message, technical = _sanitize_kline_failure(exc)
+                    _record(
+                        provider,
+                        goal,
+                        mode,
+                        "failed",
+                        0,
+                        [],
+                        False,
+                        end_date,
+                        status_path,
+                        db_path=db_path,
+                        error_type=error_type,
+                        error_message=message,
+                        technical_details=technical,
+                    )
+                    return _provider_result(
+                        provider,
+                        goal,
+                        "failed",
+                        0,
+                        [],
+                        False,
+                        error_type=error_type,
+                        error_message=message,
+                        technical_details=technical,
+                    )
+                if not isinstance(probe, pd.DataFrame) or probe.empty:
+                    message = "东方财富 K 线接口不可用，已尝试下一个免费数据源。"
+                    _record(
+                        provider,
+                        goal,
+                        mode,
+                        "failed",
+                        0,
+                        [],
+                        False,
+                        end_date,
+                        status_path,
+                        db_path=db_path,
+                        error_type="network_or_provider_unavailable",
+                        error_message=message,
+                        technical_details={"reason": "empty_probe_result", "probe_symbol_count": len(probe_symbols)},
+                    )
+                    return _provider_result(
+                        provider,
+                        goal,
+                        "failed",
+                        0,
+                        [],
+                        False,
+                        error_type="network_or_provider_unavailable",
+                        error_message=message,
+                        technical_details={"reason": "empty_probe_result", "probe_symbol_count": len(probe_symbols)},
+                    )
+                fetch_symbols = symbols
+            try:
+                with _suppress_akshare_traceback_logs():
+                    price = client.get_daily_price(start_date, end_date, fetch_symbols)
+            except Exception as exc:
+                error_type, message, technical = _sanitize_kline_failure(exc)
+                _record(
+                    provider,
+                    goal,
+                    mode,
+                    "failed",
+                    0,
+                    [],
+                    False,
+                    end_date,
+                    status_path,
+                    db_path=db_path,
+                    error_type=error_type,
+                    error_message=message,
+                    technical_details=technical,
+                )
+                return _provider_result(
+                    provider,
+                    goal,
+                    "failed",
+                    0,
+                    [],
+                    False,
+                    error_type=error_type,
+                    error_message=message,
+                    technical_details=technical,
+                )
             written = _write_price_and_partial_basic(store, price, write_basic=False)
             status = "success" if written else "failed"
             _record(provider, goal, mode, status, written, ["daily_price"], False, end_date, status_path, db_path=db_path, error_message="" if written else "历史行情接口未写入有效数据。")
             return _provider_result(provider, goal, status, written, ["daily_price"], False, error_message="" if written else "历史行情接口未写入有效数据。")
         if provider == "akshare_spot_snapshot":
             client = spot_client or AKShareSpotSnapshotClient()
-            payload = client.fetch_latest(trade_date=end_date, symbols=symbols, force=force_snapshot)
+            completed_before_today = _target_is_completed_before_today(end_date, now)
+            snapshot_force = force_snapshot or completed_before_today
+            payload = client.fetch_latest(trade_date=end_date, symbols=symbols, force=snapshot_force, now=now)
             if payload.get("status") == "skipped":
                 message = str(payload.get("message") or "skipped")
                 _record(provider, goal, mode, "skipped", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_message=message)
@@ -178,7 +282,8 @@ def _run_provider(
             written = written_price + written_basic + written_adj
             status = "success" if written_price else "failed"
             _record(provider, goal, mode, status, written, ["daily_price", "daily_basic", "adj_factor"], True, end_date, status_path, db_path=db_path, error_message="" if written_price else "实时行情快照未写入有效日行情。")
-            return _provider_result(provider, goal, status, written, ["daily_price", "daily_basic", "adj_factor"], True, error_message="" if written_price else "实时行情快照未写入有效日行情。", extra={"written_price_rows": written_price})
+            message = "当前为非交易日，允许使用快照补最近一个已完成交易日。" if completed_before_today and not force_snapshot else ""
+            return _provider_result(provider, goal, status, written, ["daily_price", "daily_basic", "adj_factor"], True, error_message="" if written_price else "实时行情快照未写入有效日行情。", message=message, extra={"written_price_rows": written_price})
         if provider == "baostock":
             client = baostock_client or BaoStockClient()
             payload = client.get_daily_price(start_date=start_date, end_date=end_date, symbols=symbols, limit=0)
@@ -197,11 +302,18 @@ def _run_provider(
             _record("manual_import", goal, mode, "available", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_message=message)
             return _provider_result("manual_import", goal, "available", 0, [], True, error_message=message, message=message)
     except BaoStockUnavailable as exc:
-        _record(provider, goal, mode, "unavailable", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_type="provider_unavailable", error_message=str(exc))
-        return _provider_result(provider, goal, "unavailable", 0, [], True, error_type="provider_unavailable", error_message=str(exc))
+        message = "历史行情兜底当前不可用，已记录并继续。"
+        technical = {"raw_exception_type": type(exc).__name__, "raw_exception": str(exc)}
+        _record(provider, goal, mode, "unavailable", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_type="provider_unavailable", error_message=message, technical_details=technical)
+        return _provider_result(provider, goal, "unavailable", 0, [], True, error_type="provider_unavailable", error_message=message, technical_details=technical)
     except Exception as exc:
-        _record(provider, goal, mode, "failed", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_type=type(exc).__name__, error_message=str(exc))
-        return _provider_result(provider, goal, "failed", 0, [], True, error_type=type(exc).__name__, error_message=str(exc))
+        if provider == "akshare_spot_snapshot" and _target_is_completed_before_today(end_date, now):
+            message = "当前为非交易日，已允许使用快照补最近一个已完成交易日；但接口请求失败。"
+        else:
+            message = "数据源请求失败，已记录并继续尝试其他免费数据源。"
+        technical = {"raw_exception_type": type(exc).__name__, "raw_exception": str(exc)}
+        _record(provider, goal, mode, "failed", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_type=type(exc).__name__, error_message=message, technical_details=technical)
+        return _provider_result(provider, goal, "failed", 0, [], True, error_type=type(exc).__name__, error_message=message, technical_details=technical)
     return _provider_result(provider, goal, "skipped", 0, [], True, error_message="该数据源未执行。")
 
 
@@ -260,6 +372,7 @@ def _record(
     success: bool | None = None,
     error_type: str = "",
     error_message: str = "",
+    technical_details: dict[str, Any] | None = None,
 ) -> None:
     record_provider_attempt(
         provider=provider,
@@ -273,6 +386,7 @@ def _record(
         partial_update=partial,
         error_type=error_type,
         error_message=error_message,
+        technical_details=technical_details,
         trade_date=trade_date,
         status_path=status_path,
         db_path=db_path,
@@ -293,11 +407,14 @@ def _provider_result(
     technical_details: dict[str, Any] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    now = datetime.now().isoformat(timespec="seconds")
     result = {
         "provider": provider,
         "display_name": _display_name(provider),
         "goal": goal,
         "status": status,
+        "started_at": now,
+        "finished_at": now,
         "success": status == "success",
         "written_table_names": tables,
         "written_row_count": int(written or 0),
@@ -313,7 +430,8 @@ def _provider_result(
 
 
 def _manual_import_attempt(*, goal: str, mode: str, status_path: str | Path, db_path: str | Path, end_date: str) -> dict[str, Any]:
-    message = "所有自动数据源均未写入有效数据，可使用本地 CSV / Excel 导入行情文件。"
+    result = _manual_import_result(goal=goal, mode=mode)
+    message = str(result.get("message") or "")
     _record(
         "manual_import",
         goal,
@@ -328,7 +446,31 @@ def _manual_import_attempt(*, goal: str, mode: str, status_path: str | Path, db_
         success=False,
         error_message=message,
     )
-    return _provider_result("manual_import", goal, "available", 0, [], True, error_message=message, message=message)
+    return result
+
+
+def _manual_import_result(*, goal: str, mode: str) -> dict[str, Any]:
+    message = "所有自动数据源均未写入有效数据，可使用本地 CSV / Excel 导入行情文件。"
+    result = _provider_result("manual_import", goal, "available", 0, [], True, error_message=message, message=message)
+    result["mode"] = mode
+    return result
+
+
+def _unexecuted_attempts(providers: list[str], *, goal: str) -> list[dict[str, Any]]:
+    attempts: list[dict[str, Any]] = []
+    for provider in providers:
+        attempts.append(
+            _provider_result(
+                provider,
+                goal,
+                "skipped",
+                0,
+                [],
+                True,
+                message="已有可用数据源写入，本次未继续执行该数据源。",
+            )
+        )
+    return attempts
 
 
 def _finalize_result(
@@ -365,6 +507,7 @@ def _finalize_result(
     result = {
         **quality,
         "status": status,
+        "summary": message,
         "goal": goal,
         "mode": mode,
         "provider": provider,
@@ -428,6 +571,74 @@ def _provider_order(provider: str, settings: Settings, goal: str) -> list[str]:
     return order
 
 
+@contextmanager
+def _suppress_akshare_traceback_logs():
+    """Keep provider tracebacks out of normal CLI output; details go to JSON."""
+    logger = logging.getLogger("core.data_sources.akshare_client")
+    previous_disabled = logger.disabled
+    previous_level = logger.level
+    logger.disabled = True
+    logger.setLevel(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logger.disabled = previous_disabled
+        logger.setLevel(previous_level)
+
+
+def _sanitize_kline_failure(exc: Exception) -> tuple[str, str, dict[str, Any]]:
+    raw = str(exc)
+    raw_lower = raw.lower()
+    exception_name = type(exc).__name__
+    systemic_markers = [
+        "proxyerror",
+        "remotedisconnected",
+        "empty reply",
+        "returncode=52",
+        "curl returncode 52",
+        "push2his.eastmoney.com",
+        "stock_zh_a_hist",
+        "akshare call failed",
+    ]
+    technical = {"raw_exception_type": exception_name, "raw_exception": raw}
+    if any(marker in raw_lower for marker in systemic_markers) or exception_name in {"ProxyError", "RemoteDisconnected"}:
+        return "network_or_provider_unavailable", "东方财富 K 线接口不可用，已尝试下一个免费数据源。", technical
+    return exception_name, "历史行情接口请求失败，已尝试下一个免费数据源。", technical
+
+
+def _format_attempt_line(index: int, attempt: dict[str, Any]) -> str:
+    status = str(attempt.get("status") or ("success" if attempt.get("success") else "failed"))
+    status_label = {
+        "success": "成功",
+        "partial": "部分成功",
+        "failed": "失败",
+        "skipped": "跳过",
+        "unavailable": "不可用",
+        "available": "可用",
+    }.get(status, status)
+    message = _safe_attempt_message(attempt)
+    suffix = f"，{message}" if message else ""
+    return f"  {index}. {attempt.get('display_name') or attempt.get('provider')}: {status_label}{suffix}"
+
+
+def _safe_attempt_message(attempt: dict[str, Any]) -> str:
+    provider = str(attempt.get("provider") or "")
+    status = str(attempt.get("status") or "")
+    message = str(attempt.get("message") or attempt.get("error_message") or "")
+    if provider == "akshare_kline" and status == "failed":
+        return "东方财富 K 线接口不可用"
+    if provider == "akshare_spot_snapshot" and status == "skipped":
+        return "未到收盘安全写入时间"
+    if provider == "baostock" and status == "unavailable":
+        return "兜底源不可用"
+    if provider == "manual_import":
+        return "可在网络源不可用时使用"
+    forbidden = ["traceback", "proxyerror", "curl", "stderr", "stdout", "push2his", "empty reply", "remotedisconnected"]
+    if any(term in message.lower() for term in forbidden):
+        return "技术错误已记录到高级诊断"
+    return message
+
+
 def _resolve_goal(goal: str, mode: str) -> str:
     clean = str(goal or "").strip().lower()
     if clean:
@@ -453,8 +664,19 @@ def _resolve_symbols(symbols: list[str] | None, *, update_limit: int, settings: 
     return result[:update_limit] if update_limit else result
 
 
-def _default_end_date(settings: Settings) -> str:
-    return settings.real_data_end_date or datetime.now().strftime("%Y%m%d")
+def _default_end_date(settings: Settings, *, status_path: str | Path, now: datetime) -> str:
+    status = read_market_status(status_path)
+    for key in ["latest_completed_trade_date", "research_trade_date"]:
+        value = _normalize_date(str(status.get(key) or ""))
+        if value:
+            return value
+    return settings.real_data_end_date or now.strftime("%Y%m%d")
+
+
+def _target_is_completed_before_today(target_date: str, now: datetime) -> bool:
+    target = _normalize_date(target_date)
+    today = now.strftime("%Y%m%d")
+    return bool(target and target < today)
 
 
 def _start_from_end(end_date: str, days: int) -> str:
@@ -510,6 +732,9 @@ def main(argv: list[str] | None = None) -> None:
         print("免费数据源更新")
         print(f"- 状态: {result.get('status')}")
         print(f"- 目标: {result.get('goal')}")
+        print("- 自动尝试:")
+        for index, attempt in enumerate(result.get("provider_attempts") or [], start=1):
+            print(_format_attempt_line(index, attempt))
         print(f"- 后台选择: {result.get('latest_success_provider') or '暂无成功数据源'}")
         print(f"- 写入行数: {result.get('written_row_count', 0)}")
         print(f"- 说明: {result.get('user_summary') or result.get('message', '')}")

@@ -1829,7 +1829,28 @@ def _attempt_status_cn(status: str) -> str:
 def _attempt_user_message(provider: str, item: dict[str, Any]) -> str:
     if provider == "manual_import" and not item:
         return "网络数据源不可用时，可上传本地 CSV / Excel。"
+    status = str(item.get("status") or "")
+    if provider == "akshare_kline" and status == "failed":
+        return "东方财富 K 线接口不可用，系统已继续尝试兜底数据源。"
+    if provider == "akshare_spot_snapshot" and status == "skipped":
+        return "未到收盘安全写入时间，或本次已有其他数据源完成。"
+    if provider == "akshare_spot_snapshot" and status in {"failed", "unavailable"}:
+        message = str(item.get("message") or item.get("error_message") or "")
+        if "非交易日" in message:
+            return message
+        return "收盘行情快照暂不可用。"
+    if provider == "baostock" and status == "unavailable":
+        return "历史行情兜底源当前不可用。"
+    if provider == "manual_import":
+        return "网络数据源不可用时，可上传本地 CSV / Excel。"
+    if status == "success":
+        return "已写入本地数据库。"
+    if status == "failed":
+        return "数据源请求失败，技术细节见高级诊断。"
     message = str(item.get("message") or item.get("error_message") or "")
+    forbidden = ["used_url", "curl", "stderr", "stdout", "http_status", "ipv4", "ipv6", "proxy", "clash", "push2his", "empty_reply", "proxyerror", "traceback"]
+    if any(term in message.lower() for term in forbidden):
+        return "技术细节见高级诊断。"
     return message or "暂无"
 
 
