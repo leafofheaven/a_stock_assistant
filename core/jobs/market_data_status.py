@@ -26,11 +26,15 @@ def record_provider_attempt(
     provider: str,
     mode: str,
     success: bool,
+    goal: str = "",
+    display_name: str = "",
+    attempt_status: str | None = None,
     written_table_names: list[str] | None = None,
     written_row_count: int = 0,
     partial_update: bool = False,
     error_type: str = "",
     error_message: str = "",
+    technical_details: dict[str, Any] | None = None,
     trade_date: str = "",
     status_path: str | Path = DEFAULT_STATUS_PATH,
     db_path: str | Path | None = None,
@@ -42,15 +46,19 @@ def record_provider_attempt(
     now = datetime.now().isoformat(timespec="seconds")
     attempt = {
         "provider": provider,
+        "display_name": display_name or provider,
+        "goal": goal or mode,
         "mode": mode,
         "started_at": now,
         "finished_at": now,
+        "status": attempt_status or ("success" if success else "failed"),
         "success": bool(success),
         "written_table_names": written_table_names or [],
         "written_row_count": int(written_row_count or 0),
         "partial_update": bool(partial_update),
         "error_type": error_type,
         "error_message": error_message,
+        "technical_details": technical_details or {},
     }
     if extra:
         attempt.update(extra)

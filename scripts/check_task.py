@@ -69,7 +69,6 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task56": check_task56,
         "task57a": check_task57a,
         "task57b": check_task57b,
-        "task57d": check_task57b,
         "task58": check_task58,
     }
     if task_name not in task_checks:
@@ -3281,7 +3280,25 @@ def check_task57b(root: Path) -> list[str]:
             failures.append(f"command_runner.py is missing {phrase}.")
 
     update_market_source = read_source(root / "core/jobs/update_market_data.py")
-    for phrase in ["akshare_kline", "akshare_spot_snapshot", "baostock", "csv", "tushare_optional", "auto", "forward_fill_adj_factor", "record_provider_attempt"]:
+    for phrase in [
+        "akshare_kline",
+        "akshare_spot_snapshot",
+        "baostock",
+        "manual_import",
+        "csv",
+        "tushare_optional",
+        "auto",
+        "GOALS",
+        "latest",
+        "history",
+        "diagnosis",
+        "forward_fill_adj_factor",
+        "record_provider_attempt",
+        "provider_attempts",
+        "network_or_provider_unavailable",
+        "core_price_data_usable",
+        "enhanced_data_status",
+    ]:
         if phrase not in update_market_source:
             failures.append(f"update_market_data.py is missing Task 57D phrase: {phrase}.")
     import_market_source = read_source(root / "core/jobs/import_market_data.py")
@@ -3393,6 +3410,9 @@ def check_task57b(root: Path) -> list[str]:
         "test_tushare_is_optional_and_disabled_without_token",
         "test_akshare_spot_snapshot_mapping_daily_price",
         "test_akshare_spot_snapshot_not_used_before_market_close_without_force",
+        "test_spot_snapshot_skips_on_trade_day_before_close_without_force",
+        "test_spot_snapshot_allowed_on_non_trade_day_before_close",
+        "test_spot_snapshot_uses_latest_completed_trade_date_on_non_trade_day",
         "test_akshare_spot_snapshot_marks_partial_daily_basic",
         "test_adj_factor_forward_fill_marks_derived",
         "test_baostock_daily_price_mapping",
@@ -3405,10 +3425,30 @@ def check_task57b(root: Path) -> list[str]:
         "test_update_market_data_refreshes_data_quality_snapshot",
         "test_provider_failure_recorded_in_status_json",
         "test_partial_success_does_not_mark_formal_usable",
+        "test_update_latest_auto_attempts_fallback_after_kline_failure",
+        "test_update_latest_kline_fail_fast_before_full_symbol_loop",
+        "test_update_latest_kline_fail_fast_on_exception",
+        "test_update_latest_auto_records_unavailable_provider",
+        "test_update_latest_all_failed_records_manual_import_available",
+        "test_update_latest_all_failed_no_success_provider",
+        "test_update_market_data_text_output_hides_tracebacks",
+        "test_update_market_data_json_contains_all_provider_attempts",
+        "test_update_latest_partial_success_does_not_mark_formal_usable",
+        "test_update_history_auto_prefers_history_provider",
+        "test_diagnosis_does_not_write_success_provider",
+        "test_diagnosis_does_not_write_duckdb_or_success_provider",
+        "test_status_json_contains_provider_attempts_after_one_click_update",
+        "test_refresh_data_quality_snapshot_after_update",
         "test_streamlit_free_provider_fallback_section",
         "test_streamlit_update_page_has_only_user_level_actions",
         "test_provider_buttons_hidden_in_advanced_expander",
         "test_update_latest_uses_provider_auto",
+        "test_streamlit_one_click_update_calls_goal_latest_provider_auto",
+        "test_streamlit_history_backfill_calls_goal_history_provider_auto",
+        "test_streamlit_no_col4_name_error",
+        "test_streamlit_primary_view_hides_technical_fields",
+        "test_streamlit_primary_attempt_message_sanitizes_technical_fields",
+        "test_streamlit_advanced_contains_technical_details",
         "test_auto_provider_attempts_are_recorded_but_not_user_selected",
         "test_data_quality_snapshot_metrics_preserved",
         "test_technical_terms_not_in_primary_buttons",

@@ -15,6 +15,7 @@ setup(
     packages=find_packages(include=["app", "app.*", "core", "core.*", "web", "web.*"]),
     install_requires=[
         "duckdb",
+        "baostock>=0.9.2",
         "openpyxl",
         "pandas",
         "pydantic-settings",

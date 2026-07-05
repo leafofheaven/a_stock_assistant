@@ -12,7 +12,7 @@ import pandas as pd
 from core.data_sources.akshare_spot_snapshot import AKShareSpotSnapshotClient
 from core.data_sources.baostock_client import BaoStockClient
 from core.jobs.import_market_data import import_market_data, normalize_import_frame
-from core.jobs.update_market_data import forward_fill_adj_factor, update_market_data
+from core.jobs.update_market_data import _format_attempt_line, forward_fill_adj_factor, update_market_data
 from core.storage.duckdb_store import DuckDBStore
 
 
@@ -51,6 +51,303 @@ def test_tushare_is_optional_and_disabled_without_token(tmp_path: Path) -> None:
     assert "可选" in result["message"]
 
 
+def test_update_latest_auto_attempts_fallback_after_kline_failure(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        force_snapshot=True,
+    )
+
+    attempts = result["provider_attempts"]
+    assert [item["provider"] for item in attempts[:2]] == ["akshare_kline", "akshare_spot_snapshot"]
+    assert attempts[0]["status"] == "failed"
+    assert attempts[1]["status"] == "success"
+    assert result["status"] == "partial"
+    assert result["latest_success_provider"] == "akshare_spot_snapshot"
+
+
+def test_update_latest_kline_fail_fast_before_full_symbol_loop(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+    akshare = _RecordingEmptyAkshareKline()
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        akshare_client=akshare,
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        force_snapshot=True,
+    )
+
+    assert akshare.calls == [["000001.SZ", "000002.SZ"]]
+    first_attempt = result["provider_attempts"][0]
+    assert first_attempt["provider"] == "akshare_kline"
+    assert first_attempt["status"] == "failed"
+    assert first_attempt["error_type"] == "network_or_provider_unavailable"
+    assert result["provider_attempts"][1]["provider"] == "akshare_spot_snapshot"
+
+
+def test_update_latest_kline_fail_fast_on_exception(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+    akshare = _ExceptionAkshareKline("ProxyError: curl returncode 52 from push2his.eastmoney.com")
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        akshare_client=akshare,
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        force_snapshot=True,
+    )
+
+    first_attempt = result["provider_attempts"][0]
+    assert akshare.calls == [["000001.SZ", "000002.SZ"]]
+    assert first_attempt["status"] == "failed"
+    assert first_attempt["error_type"] == "network_or_provider_unavailable"
+    assert first_attempt["error_message"] == "东方财富 K 线接口不可用，已尝试下一个免费数据源。"
+    assert "push2his.eastmoney.com" in first_attempt["technical_details"]["raw_exception"]
+    assert result["provider_attempts"][1]["provider"] == "akshare_spot_snapshot"
+
+
+def test_update_latest_auto_records_unavailable_provider(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_FailBaoStockModule()),
+        force_snapshot=True,
+    )
+
+    attempts = result["provider_attempts"]
+    baostock_attempt = next(item for item in attempts if item["provider"] == "baostock")
+    assert baostock_attempt["status"] == "unavailable"
+    assert baostock_attempt["error_type"] == "provider_unavailable"
+
+
+def test_update_latest_all_failed_records_manual_import_available(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_FailBaoStockModule()),
+        force_snapshot=True,
+    )
+
+    assert result["status"] == "failed"
+    assert result["latest_success_provider"] == ""
+    assert result["provider_attempts"][-1]["provider"] == "manual_import"
+    assert result["provider_attempts"][-1]["status"] == "available"
+    assert "导入" in result["suggested_action"]
+    assert [item["provider"] for item in result["provider_attempts"]] == [
+        "akshare_kline",
+        "akshare_spot_snapshot",
+        "baostock",
+        "manual_import",
+    ]
+
+
+def test_update_latest_all_failed_no_success_provider(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_FailBaoStockModule()),
+        force_snapshot=True,
+    )
+
+    assert result["status"] == "failed"
+    assert result["latest_success_provider"] == ""
+    assert result["latest_success_trade_date"] == ""
+
+
+def test_update_market_data_text_output_hides_tracebacks() -> None:
+    line = _format_attempt_line(
+        1,
+        {
+            "provider": "akshare_kline",
+            "display_name": "历史行情接口",
+            "status": "failed",
+            "error_message": "Traceback ProxyError curl_returncode=52 push2his.eastmoney.com stderr",
+            "technical_details": {"raw_exception": "Traceback ProxyError push2his.eastmoney.com"},
+        },
+    )
+
+    assert "历史行情接口: 失败" in line
+    assert "东方财富 K 线接口不可用" in line
+    for forbidden in ["Traceback", "ProxyError", "curl", "push2his", "stderr"]:
+        assert forbidden not in line
+
+
+def test_update_market_data_json_contains_all_provider_attempts(tmp_path: Path) -> None:
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_FailBaoStockModule()),
+        force_snapshot=True,
+    )
+
+    attempts = result["provider_attempts"]
+    assert [item["provider"] for item in attempts] == ["akshare_kline", "akshare_spot_snapshot", "baostock", "manual_import"]
+    for item in attempts:
+        assert {"provider", "display_name", "goal", "status", "started_at", "finished_at", "technical_details"}.issubset(item)
+
+
+def test_update_latest_partial_success_does_not_mark_formal_usable(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        force_snapshot=True,
+    )
+
+    assert result["latest_update_completeness"] == "partial"
+    assert result["formal_result_usable"] is False
+
+
+def test_update_history_auto_prefers_history_provider(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    result = update_market_data(
+        goal="history",
+        provider="auto",
+        start_date="20260701",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        baostock_client=BaoStockClient(baostock_module=_BaoStockModule()),
+    )
+
+    assert result["provider_attempts"][0]["provider"] == "baostock"
+    assert result["latest_success_provider"] == "baostock"
+
+
+def test_diagnosis_does_not_write_success_provider(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    result = update_market_data(
+        goal="diagnosis",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+    )
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+    assert result["status"] == "skipped"
+    assert result["provider_attempts"] == []
+    assert "latest_success_provider" not in payload
+
+
+def test_diagnosis_does_not_write_duckdb_or_success_provider(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    result = update_market_data(
+        goal="diagnosis",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+    )
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+    assert result["written_row_count"] == 0
+    assert result["provider_attempts"] == []
+    assert "latest_success_provider" not in payload
+
+
+def test_status_json_contains_provider_attempts_after_one_click_update(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        force_snapshot=True,
+    )
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+    assert payload["goal"] == "latest"
+    assert payload["provider"] == "auto"
+    assert payload["provider_attempts"]
+    assert payload["provider_attempts"][0]["display_name"]
+
+
+def test_refresh_data_quality_snapshot_after_update(tmp_path: Path) -> None:
+    status_path = _status_path(tmp_path)
+
+    update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=status_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        force_snapshot=True,
+    )
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+    assert payload["data_quality_snapshot_source"] == "readonly_duckdb_sql"
+    assert "data_quality_status" in payload
+
+
 def test_akshare_spot_snapshot_mapping_daily_price() -> None:
     result = AKShareSpotSnapshotClient(akshare_module=_SpotModule()).fetch_latest(
         trade_date="20260703",
@@ -75,6 +372,65 @@ def test_akshare_spot_snapshot_not_used_before_market_close_without_force() -> N
 
     assert result["status"] == "skipped"
     assert result["daily_price"].empty
+
+
+def test_spot_snapshot_skips_on_trade_day_before_close_without_force(tmp_path: Path) -> None:
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_FailBaoStockModule()),
+        now=datetime(2026, 7, 3, 14, 30),
+    )
+
+    spot_attempt = next(item for item in result["provider_attempts"] if item["provider"] == "akshare_spot_snapshot")
+    assert spot_attempt["status"] == "skipped"
+    assert "15:10" in spot_attempt["message"]
+
+
+def test_spot_snapshot_allowed_on_non_trade_day_before_close(tmp_path: Path) -> None:
+    result = update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        now=datetime(2026, 7, 5, 9, 30),
+    )
+
+    spot_attempt = next(item for item in result["provider_attempts"] if item["provider"] == "akshare_spot_snapshot")
+    assert spot_attempt["status"] == "success"
+    assert "非交易日" in spot_attempt["message"]
+    assert result["latest_success_provider"] == "akshare_spot_snapshot"
+
+
+def test_spot_snapshot_uses_latest_completed_trade_date_on_non_trade_day(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.real_data_end_date = ""
+    store = _seed_store(tmp_path)
+
+    update_market_data(
+        goal="latest",
+        provider="auto",
+        symbols=["000001.SZ"],
+        settings=settings,
+        status_path=_status_path(tmp_path),
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        now=datetime(2026, 7, 5, 9, 30),
+    )
+    price = store.read_table("daily_price")
+
+    assert price["trade_date"].astype(str).tolist() == ["20260703"]
+    assert "20260705" not in price["trade_date"].astype(str).tolist()
 
 
 def test_akshare_spot_snapshot_marks_partial_daily_basic() -> None:
@@ -276,7 +632,69 @@ def test_update_latest_uses_provider_auto() -> None:
     primary = _function_source(source, "_render_user_level_data_update_actions")
 
     assert "auto_update_latest_trade_date" in primary
+    assert '"--goal", "latest"' in primary
     assert '"--provider", "auto"' in primary
+
+
+def test_streamlit_one_click_update_calls_goal_latest_provider_auto() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    primary = _function_source(source, "_render_user_level_data_update_actions")
+
+    assert "一键更新最新交易日数据" in primary
+    assert '"--goal", "latest"' in primary
+    assert '"--provider", "auto"' in primary
+
+
+def test_streamlit_history_backfill_calls_goal_history_provider_auto() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    primary = _function_source(source, "_render_user_level_data_update_actions")
+
+    assert "auto_repair_history_gap" in primary
+    assert '"--goal", "history"' in primary
+    assert '"--provider", "auto"' in primary
+
+
+def test_streamlit_no_col4_name_error() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    primary = _function_source(source, "_render_user_level_data_update_actions")
+
+    assert "col1, col2, col3, col4 = st.columns(4)" in primary
+    assert "col4.button" in primary
+
+
+def test_streamlit_primary_view_hides_technical_fields() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    primary = _function_source(source, "_render_user_level_data_update_actions")
+    visible_labels = _button_labels(primary)
+
+    forbidden_visible = ["AKShare", "BaoStock", "Tushare", "curl_returncode", "used_url", "stderr", "partial_update"]
+    assert visible_labels
+    for label in visible_labels:
+        assert not any(term.lower() in label.lower() for term in forbidden_visible)
+
+
+def test_streamlit_primary_attempt_message_sanitizes_technical_fields() -> None:
+    from web.streamlit_app import _attempt_user_message
+
+    message = _attempt_user_message(
+        "akshare_kline",
+        {
+            "status": "failed",
+            "error_message": "ProxyError curl_returncode=52 push2his.eastmoney.com stderr traceback",
+        },
+    )
+
+    assert "东方财富 K 线接口不可用" in message
+    for forbidden in ["ProxyError", "curl", "push2his", "stderr", "traceback"]:
+        assert forbidden not in message
+
+
+def test_streamlit_advanced_contains_technical_details() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    advanced = _function_source(source, "_render_status_advanced_sections")
+
+    assert "_render_free_provider_fallback_section" in advanced
+    assert "高级" in advanced
 
 
 def test_auto_provider_attempts_are_recorded_but_not_user_selected(tmp_path: Path) -> None:
@@ -380,6 +798,25 @@ class _EmptyAkshareKline:
         return pd.DataFrame()
 
 
+class _RecordingEmptyAkshareKline:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def get_daily_price(self, _start_date, _end_date, symbols):
+        self.calls.append(list(symbols or []))
+        return pd.DataFrame()
+
+
+class _ExceptionAkshareKline:
+    def __init__(self, message: str) -> None:
+        self.message = message
+        self.calls: list[list[str]] = []
+
+    def get_daily_price(self, _start_date, _end_date, symbols):
+        self.calls.append(list(symbols or []))
+        raise RuntimeError(self.message)
+
+
 class _SpotModule:
     def stock_zh_a_spot_em(self):
         return pd.DataFrame(
@@ -389,6 +826,10 @@ class _SpotModule:
                 {"代码": "000002", "名称": "停牌", "最新价": 0, "成交量": 0, "成交额": 0},
             ]
         )
+
+
+class _NoSpotModule:
+    pass
 
 
 class _BaoStockResult:
