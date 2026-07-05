@@ -37,12 +37,24 @@ class MarketDataProgressWriter:
             "failed_symbol_count": 0,
             "skipped_symbol_count": 0,
             "written_row_count": 0,
+            "pending_symbol_count": int(total_symbol_count or 0),
+            "already_latest_symbol_count": 0,
+            "failure_summary": {},
+            "failure_examples": {},
             "provider_progress": [],
             "suggested_action": "",
         }
         self.write()
 
-    def start_provider(self, provider: str, display_name: str, *, total_symbol_count: int) -> None:
+    def start_provider(
+        self,
+        provider: str,
+        display_name: str,
+        *,
+        total_symbol_count: int,
+        pending_symbol_count: int | None = None,
+        already_latest_symbol_count: int | None = None,
+    ) -> None:
         self._provider(provider, display_name).update(
             {
                 "status": "running",
@@ -52,18 +64,23 @@ class MarketDataProgressWriter:
                 "failed_symbol_count": 0,
                 "skipped_symbol_count": 0,
                 "written_row_count": 0,
+                "failure_summary": {},
+                "failure_examples": {},
             }
         )
-        self.state.update(
-            {
-                "running": True,
-                "status": "running",
-                "current_provider": provider,
-                "current_provider_display_name": display_name,
-                "current_symbol": "",
-                "last_heartbeat_at": _now(),
-            }
-        )
+        update = {
+            "running": True,
+            "status": "running",
+            "current_provider": provider,
+            "current_provider_display_name": display_name,
+            "current_symbol": "",
+            "last_heartbeat_at": _now(),
+        }
+        if pending_symbol_count is not None:
+            update["pending_symbol_count"] = int(pending_symbol_count or 0)
+        if already_latest_symbol_count is not None:
+            update["already_latest_symbol_count"] = int(already_latest_symbol_count or 0)
+        self.state.update(update)
         self.write()
 
     def update_symbol(
@@ -76,6 +93,7 @@ class MarketDataProgressWriter:
         written_rows: int = 0,
         processed_symbol_count: int | None = None,
         total_symbol_count: int | None = None,
+        failure_type: str = "",
     ) -> None:
         provider_state = self._provider(provider, display_name)
         provider_state["status"] = "running"
@@ -91,6 +109,8 @@ class MarketDataProgressWriter:
             provider_state["failed_symbol_count"] = int(provider_state.get("failed_symbol_count", 0) or 0) + 1
         elif status == "skipped":
             provider_state["skipped_symbol_count"] = int(provider_state.get("skipped_symbol_count", 0) or 0) + 1
+        if failure_type:
+            _record_failure(provider_state, failure_type, symbol)
         provider_state["written_row_count"] = int(provider_state.get("written_row_count", 0) or 0) + int(written_rows or 0)
         self._sync_totals(provider_state, symbol)
         self.write()
@@ -104,6 +124,8 @@ class MarketDataProgressWriter:
         written_rows: int = 0,
         processed_symbol_count: int | None = None,
         total_symbol_count: int | None = None,
+        failure_summary: dict[str, int] | None = None,
+        failure_examples: dict[str, list[str]] | None = None,
     ) -> None:
         provider_state = self._provider(provider, display_name)
         provider_state["status"] = status
@@ -113,6 +135,13 @@ class MarketDataProgressWriter:
             provider_state["processed_symbol_count"] = int(processed_symbol_count or 0)
         if written_rows:
             provider_state["written_row_count"] = int(written_rows or 0)
+        if failure_summary is not None:
+            provider_state["failure_summary"] = {str(key): int(value or 0) for key, value in failure_summary.items()}
+        if failure_examples is not None:
+            provider_state["failure_examples"] = {
+                str(key): [str(item) for item in list(value or [])[:20]]
+                for key, value in failure_examples.items()
+            }
         self._sync_totals(provider_state, self.state.get("current_symbol", ""))
         self.write()
 
@@ -151,6 +180,8 @@ class MarketDataProgressWriter:
             "failed_symbol_count": 0,
             "skipped_symbol_count": 0,
             "written_row_count": 0,
+            "failure_summary": {},
+            "failure_examples": {},
         }
         providers.append(item)
         return item
@@ -167,6 +198,8 @@ class MarketDataProgressWriter:
                 "failed_symbol_count": int(provider_state.get("failed_symbol_count", 0) or 0),
                 "skipped_symbol_count": int(provider_state.get("skipped_symbol_count", 0) or 0),
                 "written_row_count": int(provider_state.get("written_row_count", 0) or 0),
+                "failure_summary": dict(provider_state.get("failure_summary") or {}),
+                "failure_examples": dict(provider_state.get("failure_examples") or {}),
                 "last_heartbeat_at": _now(),
             }
         )
@@ -182,3 +215,13 @@ def read_market_data_progress(path: str | Path = DEFAULT_PROGRESS_PATH) -> dict[
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _record_failure(provider_state: dict[str, Any], failure_type: str, symbol: str) -> None:
+    summary = provider_state.setdefault("failure_summary", {})
+    examples = provider_state.setdefault("failure_examples", {})
+    summary[failure_type] = int(summary.get(failure_type, 0) or 0) + 1
+    bucket = examples.setdefault(failure_type, [])
+    clean_symbol = str(symbol or "")
+    if clean_symbol and len(bucket) < 20 and clean_symbol not in bucket:
+        bucket.append(clean_symbol)

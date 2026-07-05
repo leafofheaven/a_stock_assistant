@@ -1851,6 +1851,25 @@ def _render_market_data_update_progress(st: Any, progress: dict[str, Any]) -> No
             }
         )
     display_dataframe(st, pd.DataFrame(provider_rows) if provider_rows else pd.DataFrame(columns=["数据来源", "状态", "已处理数量", "总数量", "成功数量", "失败数量", "跳过数量", "写入行数"]))
+    failure_summary = progress.get("failure_summary") or {}
+    if isinstance(failure_summary, dict) and failure_summary:
+        st.write("失败原因摘要")
+        display_dataframe(
+            st,
+            pd.DataFrame(
+                [
+                    {"失败类型": _failure_type_cn(str(key)), "数量": int(value or 0)}
+                    for key, value in failure_summary.items()
+                ]
+            ),
+        )
+        examples = progress.get("failure_examples") or {}
+        example_rows = []
+        if isinstance(examples, dict):
+            for key, values in examples.items():
+                example_rows.append({"失败类型": _failure_type_cn(str(key)), "样例": "、".join([str(item) for item in list(values or [])[:20]])})
+        if example_rows:
+            display_dataframe(st, pd.DataFrame(example_rows))
     if progress.get("running"):
         st.caption("更新运行中，页面每 2 秒刷新一次。")
         time.sleep(2)
@@ -1866,6 +1885,17 @@ def _elapsed_seconds(started_at: Any, ended_at: Any) -> int | None:
     if pd.isna(start) or pd.isna(end):
         return None
     return max(0, int((end - start).total_seconds()))
+
+
+def _failure_type_cn(value: str) -> str:
+    return {
+        "no_data": "接口无数据",
+        "unsupported_symbol": "代码不支持",
+        "timeout": "请求超时",
+        "connection_error": "网络连接错误",
+        "provider_error": "数据源返回错误",
+        "unknown_error": "未知错误",
+    }.get(value, value)
 
 
 def _automatic_attempt_summary_frame(status: dict[str, Any]) -> pd.DataFrame:
