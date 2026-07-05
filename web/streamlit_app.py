@@ -7,6 +7,7 @@ import json
 from io import StringIO
 from pathlib import Path
 import tempfile
+import time
 from typing import Any
 
 import pandas as pd
@@ -34,6 +35,7 @@ from core.reporting.workflow_report import load_latest_workflow_report
 from core.reporting.daily_workflow_report import load_latest_daily_workflow_report
 from core.config.env_file import masked_env_values, parse_stock_symbols, read_env_file, update_env_file
 from core.runtime.command_runner import ALLOWED_COMMANDS, open_project_path, run_command_streaming
+from core.jobs.market_data_progress import DEFAULT_PROGRESS_PATH, read_market_data_progress
 from core.jobs.run_scheduled_daily_update import DEFAULT_STATUS_PATH, read_scheduled_status
 from core.runtime.progress import parse_progress_line
 from core.technical.elder import build_elder_review
@@ -1723,6 +1725,7 @@ def _render_user_level_data_update_actions(st: Any, scheduled: dict[str, Any], s
     st.write("数据更新操作")
     st.info("系统会在后台自动判断可用免费数据源；你不需要选择具体接口。")
     display_dataframe(st, pd.DataFrame([_automatic_source_summary_row(scheduled, status)]))
+    _render_market_data_update_progress(st, read_market_data_progress(DEFAULT_PROGRESS_PATH))
     st.write("最近一次自动尝试摘要")
     display_dataframe(st, _automatic_attempt_summary_frame(scheduled))
     st.write("下一步建议")
@@ -1790,6 +1793,68 @@ def _automatic_source_summary_row(scheduled: dict[str, Any], status: dict[str, A
         "后台自动选择结果": result,
         "提示": "本次仅完成部分更新，尚不能作为正式全市场研究结果。" if not usable else "数据覆盖满足正式研究口径。",
     }
+
+
+def _render_market_data_update_progress(st: Any, progress: dict[str, Any]) -> None:
+    st.write("数据更新实时进度")
+    if not progress:
+        st.caption("暂无正在运行的数据更新任务。")
+        return
+    total = int(progress.get("total_symbol_count", 0) or 0)
+    processed = int(progress.get("processed_symbol_count", 0) or 0)
+    ratio = min(1.0, processed / total) if total > 0 else 0.0
+    st.progress(ratio)
+    elapsed = _elapsed_seconds(progress.get("started_at"), progress.get("finished_at") or progress.get("last_heartbeat_at"))
+    display_dataframe(
+        st,
+        pd.DataFrame(
+            [
+                {
+                    "运行状态": "运行中" if progress.get("running") else _attempt_status_cn(str(progress.get("status") or "")),
+                    "当前数据源": progress.get("current_provider_display_name") or "暂无",
+                    "当前股票": progress.get("current_symbol") or "暂无",
+                    "已处理数量": processed,
+                    "总数量": total,
+                    "成功数量": int(progress.get("success_symbol_count", 0) or 0),
+                    "失败数量": int(progress.get("failed_symbol_count", 0) or 0),
+                    "跳过数量": int(progress.get("skipped_symbol_count", 0) or 0),
+                    "写入行数": int(progress.get("written_row_count", 0) or 0),
+                    "已耗时": f"{elapsed} 秒" if elapsed is not None else "暂无",
+                    "最近更新时间": progress.get("last_heartbeat_at") or "暂无",
+                }
+            ]
+        ),
+    )
+    provider_rows = []
+    for item in progress.get("provider_progress") or []:
+        provider_rows.append(
+            {
+                "数据来源": item.get("display_name") or "暂无",
+                "状态": _attempt_status_cn(str(item.get("status") or "")),
+                "已处理数量": int(item.get("processed_symbol_count", 0) or 0),
+                "总数量": int(item.get("total_symbol_count", 0) or 0),
+                "成功数量": int(item.get("success_symbol_count", 0) or 0),
+                "失败数量": int(item.get("failed_symbol_count", 0) or 0),
+                "跳过数量": int(item.get("skipped_symbol_count", 0) or 0),
+                "写入行数": int(item.get("written_row_count", 0) or 0),
+            }
+        )
+    display_dataframe(st, pd.DataFrame(provider_rows) if provider_rows else pd.DataFrame(columns=["数据来源", "状态", "已处理数量", "总数量", "成功数量", "失败数量", "跳过数量", "写入行数"]))
+    if progress.get("running"):
+        st.caption("更新运行中，页面每 2 秒刷新一次。")
+        time.sleep(2)
+        st.rerun()
+
+
+def _elapsed_seconds(started_at: Any, ended_at: Any) -> int | None:
+    try:
+        start = pd.to_datetime(started_at)
+        end = pd.to_datetime(ended_at)
+    except Exception:
+        return None
+    if pd.isna(start) or pd.isna(end):
+        return None
+    return max(0, int((end - start).total_seconds()))
 
 
 def _automatic_attempt_summary_frame(status: dict[str, Any]) -> pd.DataFrame:

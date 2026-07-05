@@ -12,6 +12,7 @@ import pandas as pd
 from core.data_sources.akshare_spot_snapshot import AKShareSpotSnapshotClient
 from core.data_sources.baostock_client import BaoStockClient
 from core.jobs.import_market_data import import_market_data, normalize_import_frame
+from core.jobs.market_data_progress import MarketDataProgressWriter, read_market_data_progress
 from core.jobs.update_market_data import _format_attempt_line, forward_fill_adj_factor, update_market_data
 from core.storage.duckdb_store import DuckDBStore
 
@@ -346,6 +347,110 @@ def test_refresh_data_quality_snapshot_after_update(tmp_path: Path) -> None:
 
     assert payload["data_quality_snapshot_source"] == "readonly_duckdb_sql"
     assert "data_quality_status" in payload
+
+
+def test_market_data_progress_file_created_when_update_starts(tmp_path: Path) -> None:
+    progress_path = tmp_path / "progress.json"
+
+    update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        progress_path=progress_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        force_snapshot=True,
+    )
+
+    payload = read_market_data_progress(progress_path)
+    assert payload["goal"] == "latest"
+    assert payload["provider"] == "auto"
+    assert payload["total_symbol_count"] == 1
+
+
+def test_market_data_progress_updates_provider_and_symbol_counts(tmp_path: Path) -> None:
+    progress_path = tmp_path / "progress.json"
+
+    update_market_data(
+        goal="history",
+        provider="auto",
+        start_date="20260701",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        progress_path=progress_path,
+        baostock_client=BaoStockClient(baostock_module=_PartialBaoStockModule()),
+    )
+
+    payload = read_market_data_progress(progress_path)
+    baostock = next(item for item in payload["provider_progress"] if item["provider"] == "baostock")
+    assert payload["current_provider"] == "baostock"
+    assert baostock["processed_symbol_count"] == 2
+    assert baostock["total_symbol_count"] == 2
+    assert baostock["success_symbol_count"] == 1
+    assert baostock["failed_symbol_count"] == 1
+
+
+def test_market_data_progress_finishes_on_success_or_partial(tmp_path: Path) -> None:
+    progress_path = tmp_path / "progress.json"
+
+    update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        progress_path=progress_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_SpotModule()),
+        force_snapshot=True,
+    )
+    payload = read_market_data_progress(progress_path)
+
+    assert payload["running"] is False
+    assert payload["status"] == "partial"
+    assert payload["finished_at"]
+
+
+def test_market_data_progress_finishes_on_failure(tmp_path: Path) -> None:
+    progress_path = tmp_path / "progress.json"
+
+    update_market_data(
+        goal="latest",
+        provider="auto",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        progress_path=progress_path,
+        akshare_client=_EmptyAkshareKline(),
+        spot_client=AKShareSpotSnapshotClient(akshare_module=_NoSpotModule()),
+        baostock_client=BaoStockClient(baostock_module=_FailBaoStockModule()),
+        force_snapshot=True,
+    )
+    payload = read_market_data_progress(progress_path)
+
+    assert payload["running"] is False
+    assert payload["status"] == "failed"
+    assert payload["finished_at"]
+
+
+def test_market_data_progress_atomic_write(tmp_path: Path) -> None:
+    progress_path = tmp_path / "progress.json"
+    writer = MarketDataProgressWriter(progress_path)
+
+    writer.start(goal="latest", provider="auto", total_symbol_count=2)
+    writer.update_symbol("baostock", "历史行情兜底", symbol="000001.SZ", status="success", written_rows=3)
+
+    payload = read_market_data_progress(progress_path)
+    assert payload["current_symbol"] == "000001.SZ"
+    assert payload["written_row_count"] == 3
+    assert not progress_path.with_suffix(".json.tmp").exists()
 
 
 def test_akshare_spot_snapshot_mapping_daily_price() -> None:
@@ -695,6 +800,31 @@ def test_streamlit_advanced_contains_technical_details() -> None:
 
     assert "_render_free_provider_fallback_section" in advanced
     assert "高级" in advanced
+
+
+def test_streamlit_progress_table_reads_progress_json() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+
+    assert "read_market_data_progress(DEFAULT_PROGRESS_PATH)" in source
+    assert "_render_market_data_update_progress" in source
+    assert "provider_progress" in source
+
+
+def test_streamlit_running_progress_autorefresh() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    progress_source = _function_source(source, "_render_market_data_update_progress")
+
+    assert "time.sleep(2)" in progress_source
+    assert "st.rerun()" in progress_source
+
+
+def test_streamlit_progress_primary_view_hides_technical_fields() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    progress_source = _function_source(source, "_render_market_data_update_progress")
+    forbidden = ["used_url", "curl_returncode", "proxy", "IPv4", "IPv6", "traceback", "raw_exception", "push2his.eastmoney.com"]
+
+    for term in forbidden:
+        assert term not in progress_source
 
 
 def test_auto_provider_attempts_are_recorded_but_not_user_selected(tmp_path: Path) -> None:

@@ -3198,6 +3198,7 @@ def check_task57b(root: Path) -> list[str]:
             "core/jobs/run_scheduled_daily_update.py",
             "core/jobs/refresh_data_quality_status.py",
             "core/jobs/update_market_data.py",
+            "core/jobs/market_data_progress.py",
             "core/jobs/import_market_data.py",
             "core/jobs/market_data_status.py",
             "core/diagnostics/data_quality_snapshot.py",
@@ -3295,6 +3296,8 @@ def check_task57b(root: Path) -> list[str]:
         "forward_fill_adj_factor",
         "record_provider_attempt",
         "provider_attempts",
+        "MarketDataProgressWriter",
+        "DEFAULT_PROGRESS_PATH",
         "network_or_provider_unavailable",
         "core_price_data_usable",
         "enhanced_data_status",
@@ -3310,9 +3313,13 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in spot_source:
             failures.append(f"akshare_spot_snapshot.py is missing Task 57D phrase: {phrase}.")
     baostock_source = read_source(root / "core/data_sources/baostock_client.py")
-    for phrase in ["BaoStockClient", "query_history_k_data_plus", "daily_price", "adjustflag"]:
+    for phrase in ["BaoStockClient", "query_history_k_data_plus", "daily_price", "adjustflag", "progress_callback"]:
         if phrase not in baostock_source:
             failures.append(f"baostock_client.py is missing Task 57D phrase: {phrase}.")
+    market_progress_source = read_source(root / "core/jobs/market_data_progress.py")
+    for phrase in ["MarketDataProgressWriter", "market_data_update_progress.json", "read_market_data_progress", ".tmp", "replace"]:
+        if phrase not in market_progress_source:
+            failures.append(f"market_data_progress.py is missing Task 57E phrase: {phrase}.")
 
     snapshot_source = read_source(root / "core/diagnostics/data_quality_snapshot.py")
     for phrase in [
@@ -3439,6 +3446,11 @@ def check_task57b(root: Path) -> list[str]:
         "test_diagnosis_does_not_write_duckdb_or_success_provider",
         "test_status_json_contains_provider_attempts_after_one_click_update",
         "test_refresh_data_quality_snapshot_after_update",
+        "test_market_data_progress_file_created_when_update_starts",
+        "test_market_data_progress_updates_provider_and_symbol_counts",
+        "test_market_data_progress_finishes_on_success_or_partial",
+        "test_market_data_progress_finishes_on_failure",
+        "test_market_data_progress_atomic_write",
         "test_streamlit_free_provider_fallback_section",
         "test_streamlit_update_page_has_only_user_level_actions",
         "test_provider_buttons_hidden_in_advanced_expander",
@@ -3449,6 +3461,9 @@ def check_task57b(root: Path) -> list[str]:
         "test_streamlit_primary_view_hides_technical_fields",
         "test_streamlit_primary_attempt_message_sanitizes_technical_fields",
         "test_streamlit_advanced_contains_technical_details",
+        "test_streamlit_progress_table_reads_progress_json",
+        "test_streamlit_running_progress_autorefresh",
+        "test_streamlit_progress_primary_view_hides_technical_fields",
         "test_auto_provider_attempts_are_recorded_but_not_user_selected",
         "test_data_quality_snapshot_metrics_preserved",
         "test_technical_terms_not_in_primary_buttons",
