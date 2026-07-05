@@ -1564,9 +1564,17 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     snapshot = _status_page_quality_snapshot(tables, scheduled, legacy_status)
     status = {**legacy_status, **snapshot}
 
-    _render_status_quality_main(st, scheduled, status)
-    _render_user_level_data_update_actions(st, scheduled, status)
-    _render_status_advanced_sections(st, tables, scheduled, legacy_status)
+    _safe_render_status_block(st, "数据质量看板", _render_status_quality_main, st, scheduled, status)
+    _safe_render_status_block(st, "数据更新操作", _render_user_level_data_update_actions, st, scheduled, status)
+    _safe_render_status_block(st, "高级信息", _render_status_advanced_sections, st, tables, scheduled, legacy_status)
+
+
+def _safe_render_status_block(st: Any, label: str, func: Any, *args: Any) -> None:
+    """Render one status-page block without taking down the whole page."""
+    try:
+        func(*args)
+    except Exception as exc:
+        st.error(f"{label} 加载失败：{exc}")
 
 
 def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: dict[str, Any], legacy_status: dict[str, Any]) -> dict[str, Any]:
@@ -1629,6 +1637,8 @@ def _status_conclusion_row(scheduled: dict[str, Any], status: dict[str, Any]) ->
         "研究交易日": status.get("latest_completed_trade_date") or status.get("research_trade_date") or scheduled.get("research_trade_date") or "暂无",
         "数据质量": status.get("data_quality_status") or "unknown",
         "正式全市场研究结果可用": "是" if status.get("formal_result_usable") is True else "否",
+        "核心行情状态": status.get("core_price_data_status") or _core_price_status(status),
+        "增强数据状态": status.get("enhanced_data_status") or _enhanced_data_status(status),
         "主要提示": status.get("formal_result_warning_reason") or scheduled.get("failure_reason") or "暂无",
     }
 
@@ -1713,13 +1723,17 @@ def _render_user_level_data_update_actions(st: Any, scheduled: dict[str, Any], s
     st.write("数据更新操作")
     st.info("系统会在后台自动判断可用免费数据源；你不需要选择具体接口。")
     display_dataframe(st, pd.DataFrame([_automatic_source_summary_row(scheduled, status)]))
-    col1, col2, col3 = st.columns(3)
+    st.write("最近一次自动尝试摘要")
+    display_dataframe(st, _automatic_attempt_summary_frame(scheduled))
+    st.write("下一步建议")
+    st.info(scheduled.get("suggested_action") or _next_data_update_suggestion(status))
+    col1, col2, col3, col4 = st.columns(4)
     if col1.button("一键更新最新交易日数据", key="auto_update_latest_trade_date"):
         _run_streaming_console_action(
             st,
             "一键更新最新交易日数据",
             "update_market_data",
-            ["--mode", "daily_incremental", "--provider", "auto", "--format", "text"],
+            ["--goal", "latest", "--provider", "auto", "--format", "text"],
             success_message="最新交易日数据更新完成。请刷新页面查看数据质量。",
         )
     if col2.button("补历史行情缺口", key="auto_repair_history_gap"):
@@ -1727,7 +1741,7 @@ def _render_user_level_data_update_actions(st: Any, scheduled: dict[str, Any], s
             st,
             "补历史行情缺口",
             "update_market_data",
-            ["--mode", "full_backfill", "--provider", "auto", "--format", "text"],
+            ["--goal", "history", "--provider", "auto", "--format", "text"],
             success_message="历史行情缺口补齐命令执行完成。请刷新页面查看数据质量。",
         )
     if col3.button("运行数据源诊断", key="run_user_level_data_source_diagnosis"):
@@ -1778,6 +1792,57 @@ def _automatic_source_summary_row(scheduled: dict[str, Any], status: dict[str, A
     }
 
 
+def _automatic_attempt_summary_frame(status: dict[str, Any]) -> pd.DataFrame:
+    attempts = list(status.get("provider_attempts") or [])
+    by_provider = {str(item.get("provider")): item for item in attempts}
+    rows = []
+    for provider, label in [
+        ("akshare_kline", "历史行情接口"),
+        ("akshare_spot_snapshot", "实时行情快照"),
+        ("baostock", "历史行情兜底"),
+        ("manual_import", "本地导入"),
+    ]:
+        item = by_provider.get(provider) or {}
+        rows.append(
+            {
+                "数据来源": label,
+                "结果": _attempt_status_cn(str(item.get("status") or ("available" if provider == "manual_import" else "not_tried"))),
+                "写入行数": int(item.get("written_row_count", 0) or 0),
+                "说明": _attempt_user_message(provider, item),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _attempt_status_cn(status: str) -> str:
+    return {
+        "success": "成功",
+        "partial": "部分成功",
+        "failed": "失败",
+        "skipped": "跳过",
+        "unavailable": "不可用",
+        "available": "可用",
+        "not_tried": "未尝试",
+    }.get(status, status or "未尝试")
+
+
+def _attempt_user_message(provider: str, item: dict[str, Any]) -> str:
+    if provider == "manual_import" and not item:
+        return "网络数据源不可用时，可上传本地 CSV / Excel。"
+    message = str(item.get("message") or item.get("error_message") or "")
+    return message or "暂无"
+
+
+def _next_data_update_suggestion(status: dict[str, Any]) -> str:
+    if not status.get("provider_attempts"):
+        return "最新交易日行情仍不足，建议先点击【一键更新最新交易日数据】。"
+    if not status.get("formal_result_usable"):
+        return "自动数据源暂不可用或覆盖不足，可使用【导入本地行情文件】或稍后重试。"
+    if int(status.get("history_missing_symbol_count", 0) or 0) > 0:
+        return "历史行情存在缺口，可使用【补历史行情缺口】分批修复。"
+    return "当前数据质量满足正式研究口径。"
+
+
 def _friendly_provider_name(provider: str) -> str:
     return {
         "akshare_kline": "历史行情接口",
@@ -1787,6 +1852,17 @@ def _friendly_provider_name(provider: str) -> str:
         "excel_manual_import": "本地 Excel 导入",
         "auto": "后台自动判断",
     }.get(provider, "暂无")
+
+
+def _core_price_status(status: dict[str, Any]) -> str:
+    rate = float(status.get("latest_daily_price_coverage_rate", 0.0) or 0.0)
+    return "可用" if rate >= 0.8 else "不足"
+
+
+def _enhanced_data_status(status: dict[str, Any]) -> str:
+    basic = float(status.get("latest_daily_basic_coverage_rate", 0.0) or 0.0)
+    adj = float(status.get("latest_adj_factor_coverage_rate", 0.0) or 0.0)
+    return "完整" if basic >= 0.8 and adj >= 0.8 else "不完整"
 
 
 def _market_table_label(table_name: str) -> str:
