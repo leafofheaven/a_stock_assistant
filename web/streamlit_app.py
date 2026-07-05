@@ -179,11 +179,22 @@ def display_dataframe(
     show_rank_fields: bool = False,
 ) -> None:
     """Render a dataframe without exposing pandas' raw index."""
-    display_df = prepare_display_table(df, columns=columns, show_rank_fields=show_rank_fields)
+    display_df = _make_arrow_safe_display_df(
+        prepare_display_table(df, columns=columns, show_rank_fields=show_rank_fields)
+    )
     try:
         st.dataframe(display_df, width="stretch", hide_index=True)
     except TypeError:
         st.dataframe(display_df, width="stretch")
+
+
+def _make_arrow_safe_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy whose object columns are safe for Streamlit Arrow serialization."""
+    display_df = df.copy()
+    for column in display_df.columns:
+        if display_df[column].dtype == "object":
+            display_df[column] = display_df[column].map(lambda value: "" if pd.isna(value) else str(value))
+    return display_df
 
 
 def enrich_selection_with_watchlist_status(selection_df: pd.DataFrame, tables: dict[str, Any]) -> pd.DataFrame:

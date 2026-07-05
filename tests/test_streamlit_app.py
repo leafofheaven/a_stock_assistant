@@ -96,6 +96,23 @@ def test_streamlit_tables_hide_raw_index() -> None:
     assert fake.width_values == ["stretch"]
 
 
+def test_display_dataframe_makes_mixed_object_columns_arrow_safe() -> None:
+    """Mixed string/int display columns should be converted before Streamlit Arrow serialization."""
+    fake = FakeStreamlit()
+    df = pd.DataFrame(
+        {
+            "指标": ["任意历史行情覆盖", "完全缺行情"],
+            "数量": ["4995 / 5055", 60],
+        }
+    )
+
+    display_dataframe(fake, df)
+
+    rendered = fake.dataframes[0]
+    assert rendered["数量"].tolist() == ["4995 / 5055", "60"]
+    assert all(isinstance(value, str) for value in rendered["数量"].tolist())
+
+
 def test_display_order_continuous_after_sort() -> None:
     """Sorting by total_score should keep display_order continuous."""
     sorted_df = filter_selection_data(_selection_df(), sort_descending=True)
