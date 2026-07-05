@@ -25,6 +25,7 @@ class BaoStockClient:
         symbols: list[str],
         adjustflag: str = "2",
         limit: int = 0,
+        progress_callback: Any | None = None,
     ) -> dict[str, Any]:
         """Fetch daily bars for symbols and return a normalized frame."""
         module = self._module()
@@ -34,7 +35,9 @@ class BaoStockClient:
         frames: list[pd.DataFrame] = []
         failures: list[dict[str, str]] = []
         try:
-            for symbol in symbols[: limit or None]:
+            planned_symbols = symbols[: limit or None]
+            total = len(planned_symbols)
+            for index, symbol in enumerate(planned_symbols, start=1):
                 query_symbol = _to_baostock_code(symbol)
                 try:
                     result = module.query_history_k_data_plus(
@@ -47,18 +50,22 @@ class BaoStockClient:
                     )
                 except Exception as exc:
                     failures.append({"symbol": _to_ts_code(symbol), "error_message": f"{type(exc).__name__}: {exc}"})
+                    _emit_progress(progress_callback, symbol=symbol, status="failed", written_rows=0, processed_symbol_count=index, total_symbol_count=total)
                     continue
                 if getattr(result, "error_code", "0") != "0":
                     failures.append({"symbol": _to_ts_code(symbol), "error_message": str(getattr(result, "error_msg", ""))})
+                    _emit_progress(progress_callback, symbol=symbol, status="failed", written_rows=0, processed_symbol_count=index, total_symbol_count=total)
                     continue
                 rows: list[list[Any]] = []
                 fields = list(getattr(result, "fields", []) or [])
                 while result.next():
                     rows.append(result.get_row_data())
                 if not rows:
+                    _emit_progress(progress_callback, symbol=symbol, status="skipped", written_rows=0, processed_symbol_count=index, total_symbol_count=total)
                     continue
                 frame = pd.DataFrame(rows, columns=fields)
                 frames.append(_normalize_baostock_frame(frame))
+                _emit_progress(progress_callback, symbol=symbol, status="success", written_rows=len(rows), processed_symbol_count=index, total_symbol_count=total)
         finally:
             logout = getattr(module, "logout", None)
             if callable(logout):
@@ -136,3 +143,12 @@ def _to_dash_date(value: str) -> str:
     if "-" in text:
         return text
     return f"{text[:4]}-{text[4:6]}-{text[6:8]}" if len(text) >= 8 else text
+
+
+def _emit_progress(callback: Any | None, **payload: Any) -> None:
+    if callback is None:
+        return
+    try:
+        callback(**payload)
+    except Exception:
+        return

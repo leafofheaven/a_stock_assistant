@@ -16,6 +16,7 @@ from app.config import Settings, get_settings
 from core.data_sources.akshare_client import AKShareClient
 from core.data_sources.akshare_spot_snapshot import AKShareSpotSnapshotClient
 from core.data_sources.baostock_client import BaoStockClient, BaoStockUnavailable
+from core.jobs.market_data_progress import DEFAULT_PROGRESS_PATH, MarketDataProgressWriter
 from core.jobs.market_data_status import DEFAULT_STATUS_PATH, read_market_status, record_provider_attempt
 from core.storage.duckdb_store import DuckDBStore
 
@@ -45,6 +46,7 @@ def update_market_data(
     dry_run: bool = False,
     force_snapshot: bool = False,
     status_path: str | Path = DEFAULT_STATUS_PATH,
+    progress_path: str | Path = DEFAULT_PROGRESS_PATH,
     settings: Settings | None = None,
     akshare_client: AKShareClient | None = None,
     spot_client: AKShareSpotSnapshotClient | None = None,
@@ -75,69 +77,85 @@ def update_market_data(
         }
     if resolved_goal == "diagnosis":
         return _diagnosis_result(provider=provider, mode=mode, goal=resolved_goal)
+    progress = MarketDataProgressWriter(progress_path)
+    progress.start(goal=resolved_goal, provider=provider, total_symbol_count=len(resolved_symbols))
     store = DuckDBStore(resolved_settings.duckdb_path)
     store.initialize()
     attempts: list[dict[str, Any]] = []
     provider_order = _provider_order(provider, resolved_settings, resolved_goal)
-    for index, candidate in enumerate(provider_order):
-        result = _run_provider(
-            candidate,
+    try:
+        for index, candidate in enumerate(provider_order):
+            result = _run_provider(
+                candidate,
+                goal=resolved_goal,
+                mode=mode,
+                start_date=start,
+                end_date=end,
+                symbols=resolved_symbols,
+                store=store,
+                force_snapshot=force_snapshot,
+                status_path=status_path,
+                db_path=store.db_path,
+                settings=resolved_settings,
+                akshare_client=akshare_client,
+                spot_client=spot_client,
+                baostock_client=baostock_client,
+                now=current_dt,
+                progress=progress,
+                )
+            attempts.append(result)
+            if provider != "auto":
+                final = _finalize_result(
+                    status=result.get("status", "failed"),
+                    goal=resolved_goal,
+                    mode=mode,
+                    provider=provider,
+                    attempts=attempts,
+                    end_date=end,
+                    status_path=status_path,
+                    db_path=store.db_path,
+                    message=result.get("message") or result.get("error_message") or "",
+                )
+                progress.finish(status=str(final.get("status") or "failed"), suggested_action=str(final.get("suggested_action") or ""))
+                return final
+            if result.get("status") in {"success", "partial_success"} and int(result.get("written_row_count", 0) or 0) > 0:
+                attempts.extend(_unexecuted_attempts(provider_order[index + 1 :], goal=resolved_goal))
+                if not any(item.get("provider") == "manual_import" for item in attempts):
+                    attempts.append(_manual_import_result(goal=resolved_goal, mode=mode))
+                final = _finalize_result(
+                    status="partial" if result.get("partial_update") else "success",
+                    goal=resolved_goal,
+                    mode=mode,
+                    provider=provider,
+                    attempts=attempts,
+                    end_date=end,
+                    status_path=status_path,
+                    db_path=store.db_path,
+                    message=f"系统已自动尝试可用免费数据源，本次使用：{result.get('display_name') or _display_name(str(result.get('provider')))}。",
+                )
+                progress.finish(status=str(final.get("status") or "partial"), suggested_action=str(final.get("suggested_action") or ""))
+                return final
+        manual = _manual_import_attempt(goal=resolved_goal, mode=mode, status_path=status_path, db_path=store.db_path, end_date=end)
+        attempts.append(manual)
+        final = _finalize_result(
+            status="failed",
             goal=resolved_goal,
             mode=mode,
-            start_date=start,
+            provider=provider,
+            attempts=attempts,
             end_date=end,
-            symbols=resolved_symbols,
-            store=store,
-            force_snapshot=force_snapshot,
             status_path=status_path,
             db_path=store.db_path,
-            settings=resolved_settings,
-            akshare_client=akshare_client,
-            spot_client=spot_client,
-            baostock_client=baostock_client,
-            now=current_dt,
-            )
-        attempts.append(result)
-        if provider != "auto":
-            return _finalize_result(
-                status=result.get("status", "failed"),
-                goal=resolved_goal,
-                mode=mode,
-                provider=provider,
-                attempts=attempts,
-                end_date=end,
-                status_path=status_path,
-                db_path=store.db_path,
-                message=result.get("message") or result.get("error_message") or "",
-            )
-        if result.get("status") in {"success", "partial_success"} and int(result.get("written_row_count", 0) or 0) > 0:
-            attempts.extend(_unexecuted_attempts(provider_order[index + 1 :], goal=resolved_goal))
-            if not any(item.get("provider") == "manual_import" for item in attempts):
-                attempts.append(_manual_import_result(goal=resolved_goal, mode=mode))
-            return _finalize_result(
-                status="partial" if result.get("partial_update") else "success",
-                goal=resolved_goal,
-                mode=mode,
-                provider=provider,
-                attempts=attempts,
-                end_date=end,
-                status_path=status_path,
-                db_path=store.db_path,
-                message=f"系统已自动尝试可用免费数据源，本次使用：{result.get('display_name') or _display_name(str(result.get('provider')))}。",
-            )
-    manual = _manual_import_attempt(goal=resolved_goal, mode=mode, status_path=status_path, db_path=store.db_path, end_date=end)
-    attempts.append(manual)
-    return _finalize_result(
-        status="failed",
-        goal=resolved_goal,
-        mode=mode,
-        provider=provider,
-        attempts=attempts,
-        end_date=end,
-        status_path=status_path,
-        db_path=store.db_path,
-        message="自动数据源暂不可用，请使用【导入本地行情文件】或稍后重试。",
-    )
+            message="自动数据源暂不可用，请使用【导入本地行情文件】或稍后重试。",
+        )
+        progress.finish(status="failed", suggested_action=str(final.get("suggested_action") or ""))
+        return final
+    except KeyboardInterrupt:
+        progress.finish(status="interrupted", suggested_action="本次更新被中断，可重新运行。")
+        raise
+    except Exception:
+        progress.finish(status="failed")
+        raise
 
 
 def _run_provider(
@@ -157,8 +175,10 @@ def _run_provider(
     spot_client: AKShareSpotSnapshotClient | None,
     baostock_client: BaoStockClient | None,
     now: datetime,
+    progress: MarketDataProgressWriter,
 ) -> dict[str, Any]:
     try:
+        progress.start_provider(provider, _display_name(provider), total_symbol_count=len(symbols))
         if provider == "akshare_kline":
             client = akshare_client or AKShareClient(
                 adjust=settings.akshare_adjust,
@@ -190,6 +210,7 @@ def _run_provider(
                         error_message=message,
                         technical_details=technical,
                     )
+                    progress.finish_provider(provider, _display_name(provider), status="failed", processed_symbol_count=len(probe_symbols), total_symbol_count=len(symbols))
                     return _provider_result(
                         provider,
                         goal,
@@ -218,6 +239,7 @@ def _run_provider(
                         error_message=message,
                         technical_details={"reason": "empty_probe_result", "probe_symbol_count": len(probe_symbols)},
                     )
+                    progress.finish_provider(provider, _display_name(provider), status="failed", processed_symbol_count=len(probe_symbols), total_symbol_count=len(symbols))
                     return _provider_result(
                         provider,
                         goal,
@@ -264,6 +286,7 @@ def _run_provider(
             written = _write_price_and_partial_basic(store, price, write_basic=False)
             status = "success" if written else "failed"
             _record(provider, goal, mode, status, written, ["daily_price"], False, end_date, status_path, db_path=db_path, error_message="" if written else "历史行情接口未写入有效数据。")
+            progress.finish_provider(provider, _display_name(provider), status=status, written_rows=written, processed_symbol_count=len(symbols), total_symbol_count=len(symbols))
             return _provider_result(provider, goal, status, written, ["daily_price"], False, error_message="" if written else "历史行情接口未写入有效数据。")
         if provider == "akshare_spot_snapshot":
             client = spot_client or AKShareSpotSnapshotClient()
@@ -273,6 +296,7 @@ def _run_provider(
             if payload.get("status") == "skipped":
                 message = str(payload.get("message") or "skipped")
                 _record(provider, goal, mode, "skipped", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_message=message)
+                progress.finish_provider(provider, _display_name(provider), status="skipped", processed_symbol_count=0, total_symbol_count=len(symbols))
                 return _provider_result(provider, goal, "skipped", 0, [], True, error_message=message, message=message)
             price = payload.get("daily_price", pd.DataFrame())
             basic = payload.get("daily_basic", pd.DataFrame())
@@ -283,28 +307,39 @@ def _run_provider(
             status = "success" if written_price else "failed"
             _record(provider, goal, mode, status, written, ["daily_price", "daily_basic", "adj_factor"], True, end_date, status_path, db_path=db_path, error_message="" if written_price else "实时行情快照未写入有效日行情。")
             message = "当前为非交易日，允许使用快照补最近一个已完成交易日。" if completed_before_today and not force_snapshot else ""
+            progress.finish_provider(provider, _display_name(provider), status=status, written_rows=written, processed_symbol_count=len(symbols), total_symbol_count=len(symbols))
             return _provider_result(provider, goal, status, written, ["daily_price", "daily_basic", "adj_factor"], True, error_message="" if written_price else "实时行情快照未写入有效日行情。", message=message, extra={"written_price_rows": written_price})
         if provider == "baostock":
             client = baostock_client or BaoStockClient()
-            payload = client.get_daily_price(start_date=start_date, end_date=end_date, symbols=symbols, limit=0)
+            payload = client.get_daily_price(
+                start_date=start_date,
+                end_date=end_date,
+                symbols=symbols,
+                limit=0,
+                progress_callback=lambda **payload: progress.update_symbol(provider, _display_name(provider), **payload),
+            )
             price = payload.get("daily_price", pd.DataFrame())
             written = _write_price_and_partial_basic(store, price, write_basic=False)
             status = "success" if written else "failed"
             _record(provider, goal, mode, status, written, ["daily_price"], True, end_date, status_path, db_path=db_path, error_message="" if written else "历史行情兜底未写入有效数据。")
+            progress.finish_provider(provider, _display_name(provider), status=status, written_rows=written, processed_symbol_count=len(symbols), total_symbol_count=len(symbols))
             return _provider_result(provider, goal, status, written, ["daily_price"], True, error_message="" if written else "历史行情兜底未写入有效数据。")
         if provider == "tushare_optional":
             if not settings.tushare_token:
                 message = "Tushare token 未配置；Tushare 仅作为可选项，已跳过。"
                 _record(provider, goal, mode, "skipped", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_message=message)
+                progress.finish_provider(provider, _display_name(provider), status="skipped", processed_symbol_count=0, total_symbol_count=len(symbols))
                 return _provider_result(provider, goal, "skipped", 0, [], True, error_message=message, message=message)
         if provider in {"csv", "manual_import"}:
             message = "CSV / Excel 需要用户通过 import_market_data 手动导入。"
             _record("manual_import", goal, mode, "available", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_message=message)
+            progress.finish_provider("manual_import", _display_name("manual_import"), status="available", processed_symbol_count=0, total_symbol_count=len(symbols))
             return _provider_result("manual_import", goal, "available", 0, [], True, error_message=message, message=message)
     except BaoStockUnavailable as exc:
         message = "历史行情兜底当前不可用，已记录并继续。"
         technical = {"raw_exception_type": type(exc).__name__, "raw_exception": str(exc)}
         _record(provider, goal, mode, "unavailable", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_type="provider_unavailable", error_message=message, technical_details=technical)
+        progress.finish_provider(provider, _display_name(provider), status="unavailable", processed_symbol_count=0, total_symbol_count=len(symbols))
         return _provider_result(provider, goal, "unavailable", 0, [], True, error_type="provider_unavailable", error_message=message, technical_details=technical)
     except Exception as exc:
         if provider == "akshare_spot_snapshot" and _target_is_completed_before_today(end_date, now):
@@ -313,6 +348,7 @@ def _run_provider(
             message = "数据源请求失败，已记录并继续尝试其他免费数据源。"
         technical = {"raw_exception_type": type(exc).__name__, "raw_exception": str(exc)}
         _record(provider, goal, mode, "failed", 0, [], True, end_date, status_path, db_path=db_path, success=False, error_type=type(exc).__name__, error_message=message, technical_details=technical)
+        progress.finish_provider(provider, _display_name(provider), status="failed", processed_symbol_count=0, total_symbol_count=len(symbols))
         return _provider_result(provider, goal, "failed", 0, [], True, error_type=type(exc).__name__, error_message=message, technical_details=technical)
     return _provider_result(provider, goal, "skipped", 0, [], True, error_message="该数据源未执行。")
 
@@ -711,6 +747,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--symbols", default="")
     parser.add_argument("--update-limit", type=int, default=0)
     parser.add_argument("--force-snapshot", action="store_true")
+    parser.add_argument("--progress-path", default=str(DEFAULT_PROGRESS_PATH))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--format", choices=["text", "json"], default="text")
     args = parser.parse_args(argv)
@@ -725,6 +762,7 @@ def main(argv: list[str] | None = None) -> None:
         update_limit=args.update_limit,
         force_snapshot=args.force_snapshot,
         dry_run=args.dry_run,
+        progress_path=args.progress_path,
     )
     if args.format == "json":
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
