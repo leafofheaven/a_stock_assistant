@@ -69,6 +69,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task56": check_task56,
         "task57a": check_task57a,
         "task57b": check_task57b,
+        "task57d": check_task57b,
         "task58": check_task58,
     }
     if task_name not in task_checks:
@@ -3197,13 +3198,19 @@ def check_task57b(root: Path) -> list[str]:
         [
             "core/jobs/run_scheduled_daily_update.py",
             "core/jobs/refresh_data_quality_status.py",
+            "core/jobs/update_market_data.py",
+            "core/jobs/import_market_data.py",
+            "core/jobs/market_data_status.py",
             "core/diagnostics/data_quality_snapshot.py",
+            "core/data_sources/akshare_spot_snapshot.py",
+            "core/data_sources/baostock_client.py",
             "core/jobs/install_scheduled_daily_update.py",
             "core/jobs/uninstall_scheduled_daily_update.py",
             "core/notifications/macos.py",
             "core/notifications/email.py",
             "tests/test_scheduled_daily_update.py",
             "tests/test_task57c_data_quality_snapshot.py",
+            "tests/test_task57d_free_data_fallbacks.py",
             "scripts/verify_task.py",
             "web/streamlit_app.py",
         ],
@@ -3269,9 +3276,26 @@ def check_task57b(root: Path) -> list[str]:
             failures.append(f"uninstall_scheduled_daily_update.py is missing {phrase}.")
 
     command_source = read_source(root / "core/runtime/command_runner.py")
-    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "uninstall_scheduled_daily_update", "refresh_data_quality_status"]:
+    for phrase in ["run_scheduled_daily_update", "install_scheduled_daily_update", "uninstall_scheduled_daily_update", "refresh_data_quality_status", "update_market_data", "import_market_data"]:
         if phrase not in command_source:
             failures.append(f"command_runner.py is missing {phrase}.")
+
+    update_market_source = read_source(root / "core/jobs/update_market_data.py")
+    for phrase in ["akshare_kline", "akshare_spot_snapshot", "baostock", "csv", "tushare_optional", "auto", "forward_fill_adj_factor", "record_provider_attempt"]:
+        if phrase not in update_market_source:
+            failures.append(f"update_market_data.py is missing Task 57D phrase: {phrase}.")
+    import_market_source = read_source(root / "core/jobs/import_market_data.py")
+    for phrase in ["import_market_data", "CSV", "Excel", "normalize_ts_code", "normalize_trade_date", "upsert_dataframe"]:
+        if phrase not in import_market_source:
+            failures.append(f"import_market_data.py is missing Task 57D phrase: {phrase}.")
+    spot_source = read_source(root / "core/data_sources/akshare_spot_snapshot.py")
+    for phrase in ["AKShareSpotSnapshotClient", "MARKET_CLOSE_WRITE_TIME", "source_granularity", "eod_snapshot", "turnover_rate"]:
+        if phrase not in spot_source:
+            failures.append(f"akshare_spot_snapshot.py is missing Task 57D phrase: {phrase}.")
+    baostock_source = read_source(root / "core/data_sources/baostock_client.py")
+    for phrase in ["BaoStockClient", "query_history_k_data_plus", "daily_price", "adjustflag"]:
+        if phrase not in baostock_source:
+            failures.append(f"baostock_client.py is missing Task 57D phrase: {phrase}.")
 
     snapshot_source = read_source(root / "core/diagnostics/data_quality_snapshot.py")
     for phrase in [
@@ -3298,11 +3322,16 @@ def check_task57b(root: Path) -> list[str]:
             failures.append(f"refresh_data_quality_status.py is missing Task 57C phrase: {phrase}.")
 
     streamlit_source = read_source(root / "web/streamlit_app.py")
-    for phrase in ["自动更新状态", "下载最新自动更新 Excel", "手动补跑一次自动更新", "read_scheduled_status"]:
+    for phrase in ["自动更新状态", "下载最新自动更新 Excel", "手动补跑一次自动更新", "read_scheduled_status", "数据更新操作", "一键更新最新交易日数据", "补历史行情缺口", "运行数据源诊断", "上传 CSV / Excel 导入行情", "后台自动判断"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing Task 57B phrase: {phrase}.")
 
-    tests_source = read_source(root / "tests/test_scheduled_daily_update.py") + read_source(root / "tests/test_task57c_data_quality_snapshot.py") + read_source(root / "tests/test_streamlit_app.py")
+    tests_source = (
+        read_source(root / "tests/test_scheduled_daily_update.py")
+        + read_source(root / "tests/test_task57c_data_quality_snapshot.py")
+        + read_source(root / "tests/test_task57d_free_data_fallbacks.py")
+        + read_source(root / "tests/test_streamlit_app.py")
+    )
     for phrase in [
         "test_scheduled_update_skips_before_scheduled_time",
         "test_scheduled_update_skips_if_already_success_today",
@@ -3360,6 +3389,30 @@ def check_task57b(root: Path) -> list[str]:
         "test_raw_json_sections_collapsed_by_default",
         "test_status_page_no_lookback_button",
         "test_no_duplicate_streamlit_keys",
+        "test_provider_auto_prefers_free_fallbacks_before_tushare",
+        "test_tushare_is_optional_and_disabled_without_token",
+        "test_akshare_spot_snapshot_mapping_daily_price",
+        "test_akshare_spot_snapshot_not_used_before_market_close_without_force",
+        "test_akshare_spot_snapshot_marks_partial_daily_basic",
+        "test_adj_factor_forward_fill_marks_derived",
+        "test_baostock_daily_price_mapping",
+        "test_baostock_partial_provider_status",
+        "test_manual_import_daily_price_csv",
+        "test_manual_import_xlsx",
+        "test_manual_import_trade_date_normalization",
+        "test_manual_import_symbol_normalization",
+        "test_manual_import_upsert_deduplicates",
+        "test_update_market_data_refreshes_data_quality_snapshot",
+        "test_provider_failure_recorded_in_status_json",
+        "test_partial_success_does_not_mark_formal_usable",
+        "test_streamlit_free_provider_fallback_section",
+        "test_streamlit_update_page_has_only_user_level_actions",
+        "test_provider_buttons_hidden_in_advanced_expander",
+        "test_update_latest_uses_provider_auto",
+        "test_auto_provider_attempts_are_recorded_but_not_user_selected",
+        "test_data_quality_snapshot_metrics_preserved",
+        "test_technical_terms_not_in_primary_buttons",
+        "test_no_data_runtime_files_committed",
     ]:
         if phrase not in tests_source:
             failures.append(f"Task 57B tests are missing {phrase}.")

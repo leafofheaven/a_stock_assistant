@@ -238,6 +238,28 @@ python -m core.jobs.run_scheduled_daily_update --force --update-mode full_backfi
 
 通知框架默认支持 macOS 本地通知。邮件通知默认关闭；如需启用，可配置 `NOTIFY_EMAIL_ENABLED=true`、`NOTIFY_EMAIL_TO`、`SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASSWORD`、`SMTP_FROM` 和 `SMTP_USE_SSL`。未配置邮件时不会报错，只显示 email disabled。
 
+## 免费数据源兜底与本地导入
+
+东方财富 K 线历史接口不可用时，不需要把 Tushare 作为默认依赖。统一免费兜底入口：
+
+```bash
+python -m core.jobs.update_market_data --mode daily_incremental --provider auto --format text
+```
+
+`provider=auto` 的顺序为：`akshare_kline`、`akshare_spot_snapshot`、`baostock`、`csv` 手动导入提示、`tushare_optional`。Tushare 仅在已配置 token 且用户主动选择时作为可选项；未配置不会报错。
+
+常用兜底命令：
+
+```bash
+python -m core.jobs.update_market_data --provider akshare_spot_snapshot --force-snapshot --format text
+python -m core.jobs.update_market_data --provider baostock --mode full_backfill --format text
+python -m core.jobs.import_market_data --file /path/to/market.csv --table daily_price --format text
+python -m core.jobs.import_market_data --file /path/to/market.xlsx --table daily_basic --format text
+python -m core.jobs.import_market_data --file /path/to/adj.csv --table adj_factor --format text
+```
+
+实时行情快照只用于收盘后补最新交易日，不用于长期历史回补；BaoStock 只作为 `daily_price` 历史兜底；CSV / Excel 导入支持“股票代码 / 交易日期 / 收盘 / 成交额 / 复权因子”等中文字段别名。所有写库命令结束后都会刷新 `data_quality_snapshot`，partial update 不会被标记为完整正式结果。
+
 ## 候选复核
 
 命令：
