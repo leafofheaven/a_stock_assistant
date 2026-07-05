@@ -395,6 +395,125 @@ def test_market_data_progress_updates_provider_and_symbol_counts(tmp_path: Path)
     assert baostock["failed_symbol_count"] == 1
 
 
+def test_latest_update_targets_missing_latest_symbols_first(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path, symbols=["000001.SZ", "000002.SZ", "000003.SZ"])
+    store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
+    module = _RecordingBaoStockModule()
+
+    result = update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=module),
+    )
+
+    assert module.queried_codes == ["sz.000002", "sz.000003"]
+    assert result["already_latest_symbol_count"] == 1
+    assert result["pending_symbol_count"] == 2
+
+
+def test_latest_update_limit_applies_to_pending_symbols(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path, symbols=["000001.SZ", "000002.SZ", "000003.SZ"])
+    store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
+    module = _RecordingBaoStockModule()
+
+    update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ"],
+        update_limit=1,
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=module),
+    )
+
+    assert module.queried_codes == ["sz.000002"]
+
+
+def test_latest_update_skips_already_latest_symbols(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path, symbols=["000001.SZ", "000002.SZ"])
+    store.upsert_dataframe("daily_price", _daily_price_frame("000001.SZ", "20260703"))
+    store.upsert_dataframe("daily_price", _daily_price_frame("000002.SZ", "20260703"))
+    module = _RecordingBaoStockModule()
+
+    result = update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        baostock_client=BaoStockClient(baostock_module=module),
+    )
+
+    assert module.queried_codes == []
+    assert result["status"] == "skipped"
+    assert "无待更新股票" in result["message"]
+
+
+def test_baostock_failure_summary_classifies_errors(tmp_path: Path) -> None:
+    result = BaoStockClient(baostock_module=_ClassifyingBaoStockModule()).get_daily_price(
+        start_date="20260701",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ", "000003.SZ"],
+        max_retries=0,
+    )
+
+    assert result["failure_summary"]["timeout"] == 1
+    assert result["failure_summary"]["connection_error"] == 1
+    assert result["failure_summary"]["no_data"] == 1
+
+
+def test_baostock_retry_only_for_transient_errors(tmp_path: Path) -> None:
+    module = _RetryBaoStockModule()
+
+    BaoStockClient(baostock_module=module).get_daily_price(
+        start_date="20260701",
+        end_date="20260703",
+        symbols=["000001.SZ", "000002.SZ"],
+        max_retries=1,
+    )
+
+    assert module.calls["sz.000001"] == 2
+    assert module.calls["sz.000002"] == 1
+
+
+def test_baostock_records_failure_examples(tmp_path: Path) -> None:
+    result = BaoStockClient(baostock_module=_NoDataBaoStockModule()).get_daily_price(
+        start_date="20260701",
+        end_date="20260703",
+        symbols=[f"000{index:03d}.SZ" for index in range(30)],
+        max_retries=0,
+    )
+
+    assert result["failure_summary"]["no_data"] == 30
+    assert len(result["failure_examples"]["no_data"]) == 20
+
+
+def test_progress_json_contains_failure_summary(tmp_path: Path) -> None:
+    progress_path = tmp_path / "progress.json"
+
+    update_market_data(
+        goal="history",
+        provider="baostock",
+        start_date="20260701",
+        end_date="20260703",
+        symbols=["000001.SZ"],
+        settings=_settings(tmp_path),
+        status_path=_status_path(tmp_path),
+        progress_path=progress_path,
+        baostock_client=BaoStockClient(baostock_module=_NoDataBaoStockModule()),
+    )
+    payload = read_market_data_progress(progress_path)
+
+    assert payload["failure_summary"]["no_data"] == 1
+    assert payload["failure_examples"]["no_data"] == ["000001.SZ"]
+
+
 def test_market_data_progress_finishes_on_success_or_partial(tmp_path: Path) -> None:
     progress_path = tmp_path / "progress.json"
 
@@ -827,6 +946,16 @@ def test_streamlit_progress_primary_view_hides_technical_fields() -> None:
         assert term not in progress_source
 
 
+def test_streamlit_displays_failure_summary_without_raw_traceback() -> None:
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+    progress_source = _function_source(source, "_render_market_data_update_progress")
+
+    assert "失败原因摘要" in progress_source
+    assert "_failure_type_cn" in progress_source
+    for forbidden in ["traceback", "raw_exception", "socket 原始堆栈"]:
+        assert forbidden not in progress_source
+
+
 def test_auto_provider_attempts_are_recorded_but_not_user_selected(tmp_path: Path) -> None:
     status_path = _status_path(tmp_path)
     update_market_data(
@@ -897,11 +1026,41 @@ def _button_labels(source: str) -> list[str]:
     return re.findall(r'button\("([^"]+)"', source)
 
 
-def _seed_store(tmp_path: Path) -> DuckDBStore:
+def _seed_store(tmp_path: Path, symbols: list[str] | None = None) -> DuckDBStore:
+    symbols = symbols or ["000001.SZ", "000002.SZ"]
     store = DuckDBStore(tmp_path / "market.duckdb")
     store.initialize()
-    store.upsert_dataframe("stock_basic", pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"], "symbol": ["000001", "000002"], "name": ["平安银行", "万科A"]}))
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            {
+                "ts_code": symbols,
+                "symbol": [item.split(".")[0] for item in symbols],
+                "name": [f"样本{index}" for index, _item in enumerate(symbols, start=1)],
+            }
+        ),
+    )
     return store
+
+
+def _daily_price_frame(symbol: str, trade_date: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "ts_code": symbol,
+                "trade_date": trade_date,
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.0,
+                "close": 10.5,
+                "pre_close": 10.0,
+                "change": 0.5,
+                "pct_chg": 5.0,
+                "vol": 100.0,
+                "amount": 1000.0,
+            }
+        ]
+    )
 
 
 def _settings(tmp_path: Path, tushare_token: str = "") -> SimpleNamespace:
@@ -990,6 +1149,15 @@ class _BaoStockModule:
         return _BaoStockResult([["2026-07-03", "sz.000001", "10", "11", "9", "10.5", "10", "100", "1000", "5"]])
 
 
+class _RecordingBaoStockModule(_BaoStockModule):
+    def __init__(self) -> None:
+        self.queried_codes: list[str] = []
+
+    def query_history_k_data_plus(self, code, *_args, **_kwargs):
+        self.queried_codes.append(code)
+        return _BaoStockResult([["2026-07-03", code, "10", "11", "9", "10.5", "10", "100", "1000", "5"]])
+
+
 class _PartialBaoStockModule(_BaoStockModule):
     def query_history_k_data_plus(self, code, *_args, **_kwargs):
         if code == "sz.000002":
@@ -1000,3 +1168,30 @@ class _PartialBaoStockModule(_BaoStockModule):
 class _FailBaoStockModule(_BaoStockModule):
     def login(self):
         return SimpleNamespace(error_code="1", error_msg="login failed")
+
+
+class _NoDataBaoStockModule(_BaoStockModule):
+    def query_history_k_data_plus(self, code, *_args, **_kwargs):
+        return _BaoStockResult([])
+
+
+class _ClassifyingBaoStockModule(_BaoStockModule):
+    def query_history_k_data_plus(self, code, *_args, **_kwargs):
+        if code == "sz.000001":
+            raise TimeoutError("request timeout")
+        if code == "sz.000002":
+            raise ConnectionError("socket connection reset")
+        return _BaoStockResult([])
+
+
+class _RetryBaoStockModule(_BaoStockModule):
+    def __init__(self) -> None:
+        self.calls: dict[str, int] = {}
+
+    def query_history_k_data_plus(self, code, *_args, **_kwargs):
+        self.calls[code] = self.calls.get(code, 0) + 1
+        if code == "sz.000001" and self.calls[code] == 1:
+            raise TimeoutError("request timeout")
+        if code == "sz.000002":
+            return SimpleNamespace(error_code="1", error_msg="provider rejected", fields=[], next=lambda: False)
+        return _BaoStockResult([["2026-07-03", code, "10", "11", "9", "10.5", "10", "100", "1000", "5"]])

@@ -3313,11 +3313,11 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in spot_source:
             failures.append(f"akshare_spot_snapshot.py is missing Task 57D phrase: {phrase}.")
     baostock_source = read_source(root / "core/data_sources/baostock_client.py")
-    for phrase in ["BaoStockClient", "query_history_k_data_plus", "daily_price", "adjustflag", "progress_callback"]:
+    for phrase in ["BaoStockClient", "query_history_k_data_plus", "daily_price", "adjustflag", "progress_callback", "failure_summary", "failure_examples", "max_retries"]:
         if phrase not in baostock_source:
             failures.append(f"baostock_client.py is missing Task 57D phrase: {phrase}.")
     market_progress_source = read_source(root / "core/jobs/market_data_progress.py")
-    for phrase in ["MarketDataProgressWriter", "market_data_update_progress.json", "read_market_data_progress", ".tmp", "replace"]:
+    for phrase in ["MarketDataProgressWriter", "market_data_update_progress.json", "read_market_data_progress", ".tmp", "replace", "failure_summary", "failure_examples"]:
         if phrase not in market_progress_source:
             failures.append(f"market_data_progress.py is missing Task 57E phrase: {phrase}.")
 
@@ -3451,6 +3451,13 @@ def check_task57b(root: Path) -> list[str]:
         "test_market_data_progress_finishes_on_success_or_partial",
         "test_market_data_progress_finishes_on_failure",
         "test_market_data_progress_atomic_write",
+        "test_latest_update_targets_missing_latest_symbols_first",
+        "test_latest_update_limit_applies_to_pending_symbols",
+        "test_latest_update_skips_already_latest_symbols",
+        "test_baostock_failure_summary_classifies_errors",
+        "test_baostock_retry_only_for_transient_errors",
+        "test_baostock_records_failure_examples",
+        "test_progress_json_contains_failure_summary",
         "test_streamlit_free_provider_fallback_section",
         "test_streamlit_update_page_has_only_user_level_actions",
         "test_provider_buttons_hidden_in_advanced_expander",
@@ -3464,6 +3471,7 @@ def check_task57b(root: Path) -> list[str]:
         "test_streamlit_progress_table_reads_progress_json",
         "test_streamlit_running_progress_autorefresh",
         "test_streamlit_progress_primary_view_hides_technical_fields",
+        "test_streamlit_displays_failure_summary_without_raw_traceback",
         "test_auto_provider_attempts_are_recorded_but_not_user_selected",
         "test_data_quality_snapshot_metrics_preserved",
         "test_technical_terms_not_in_primary_buttons",

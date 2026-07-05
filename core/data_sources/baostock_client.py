@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pandas as pd
@@ -26,6 +27,9 @@ class BaoStockClient:
         adjustflag: str = "2",
         limit: int = 0,
         progress_callback: Any | None = None,
+        max_retries: int = 1,
+        reconnect_after_failures: int = 20,
+        sleep_seconds: float = 0.0,
     ) -> dict[str, Any]:
         """Fetch daily bars for symbols and return a normalized frame."""
         module = self._module()
@@ -34,38 +38,91 @@ class BaoStockClient:
             raise BaoStockUnavailable(f"BaoStock login failed: {getattr(login, 'error_msg', '')}")
         frames: list[pd.DataFrame] = []
         failures: list[dict[str, str]] = []
+        failure_summary: dict[str, int] = {}
+        failure_examples: dict[str, list[str]] = {}
+        consecutive_failures = 0
         try:
             planned_symbols = symbols[: limit or None]
             total = len(planned_symbols)
             for index, symbol in enumerate(planned_symbols, start=1):
                 query_symbol = _to_baostock_code(symbol)
-                try:
-                    result = module.query_history_k_data_plus(
-                        query_symbol,
-                        "date,code,open,high,low,close,preclose,volume,amount,pctChg",
-                        start_date=_to_dash_date(start_date),
-                        end_date=_to_dash_date(end_date),
-                        frequency="d",
-                        adjustflag=adjustflag,
+                result = None
+                failure_type = ""
+                error_message = ""
+                attempts = 0
+                while attempts <= max(max_retries, 0):
+                    attempts += 1
+                    try:
+                        result = module.query_history_k_data_plus(
+                            query_symbol,
+                            "date,code,open,high,low,close,preclose,volume,amount,pctChg",
+                            start_date=_to_dash_date(start_date),
+                            end_date=_to_dash_date(end_date),
+                            frequency="d",
+                            adjustflag=adjustflag,
+                        )
+                        error_code = str(getattr(result, "error_code", "0") or "0")
+                        if error_code == "0":
+                            failure_type = ""
+                            error_message = ""
+                            break
+                        error_message = str(getattr(result, "error_msg", "") or error_code)
+                        failure_type = _classify_baostock_failure(error_message, error_code=error_code, symbol=symbol)
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as exc:
+                        error_message = f"{type(exc).__name__}: {exc}"
+                        failure_type = _classify_baostock_failure(error_message, symbol=symbol)
+                    if failure_type not in {"timeout", "connection_error"} or attempts > max(max_retries, 0):
+                        break
+                    time.sleep(min(0.5 * attempts, 2.0))
+                if failure_type:
+                    ts_code = _to_ts_code(symbol)
+                    failures.append({"symbol": ts_code, "error_message": error_message, "failure_type": failure_type})
+                    _record_failure(failure_summary, failure_examples, failure_type, ts_code)
+                    consecutive_failures += 1
+                    _emit_progress(
+                        progress_callback,
+                        symbol=symbol,
+                        status="failed",
+                        written_rows=0,
+                        processed_symbol_count=index,
+                        total_symbol_count=total,
+                        failure_type=failure_type,
                     )
-                except Exception as exc:
-                    failures.append({"symbol": _to_ts_code(symbol), "error_message": f"{type(exc).__name__}: {exc}"})
-                    _emit_progress(progress_callback, symbol=symbol, status="failed", written_rows=0, processed_symbol_count=index, total_symbol_count=total)
-                    continue
-                if getattr(result, "error_code", "0") != "0":
-                    failures.append({"symbol": _to_ts_code(symbol), "error_message": str(getattr(result, "error_msg", ""))})
-                    _emit_progress(progress_callback, symbol=symbol, status="failed", written_rows=0, processed_symbol_count=index, total_symbol_count=total)
+                    if consecutive_failures >= max(reconnect_after_failures, 1):
+                        if not _reconnect(module):
+                            remaining = planned_symbols[index:]
+                            for remaining_symbol in remaining:
+                                ts_code = _to_ts_code(remaining_symbol)
+                                failures.append({"symbol": ts_code, "error_message": "BaoStock reconnect failed.", "failure_type": "connection_error"})
+                                _record_failure(failure_summary, failure_examples, "connection_error", ts_code)
+                            break
+                        consecutive_failures = 0
                     continue
                 rows: list[list[Any]] = []
                 fields = list(getattr(result, "fields", []) or [])
                 while result.next():
                     rows.append(result.get_row_data())
                 if not rows:
-                    _emit_progress(progress_callback, symbol=symbol, status="skipped", written_rows=0, processed_symbol_count=index, total_symbol_count=total)
+                    ts_code = _to_ts_code(symbol)
+                    _record_failure(failure_summary, failure_examples, "no_data", ts_code)
+                    _emit_progress(
+                        progress_callback,
+                        symbol=symbol,
+                        status="skipped",
+                        written_rows=0,
+                        processed_symbol_count=index,
+                        total_symbol_count=total,
+                        failure_type="no_data",
+                    )
                     continue
                 frame = pd.DataFrame(rows, columns=fields)
                 frames.append(_normalize_baostock_frame(frame))
+                consecutive_failures = 0
                 _emit_progress(progress_callback, symbol=symbol, status="success", written_rows=len(rows), processed_symbol_count=index, total_symbol_count=total)
+                if sleep_seconds:
+                    time.sleep(max(sleep_seconds, 0.0))
         finally:
             logout = getattr(module, "logout", None)
             if callable(logout):
@@ -75,6 +132,8 @@ class BaoStockClient:
             "status": "success" if failures == [] else "partial_success" if not data.empty else "failed",
             "daily_price": data,
             "failure_records": failures,
+            "failure_summary": failure_summary,
+            "failure_examples": failure_examples,
             "provider": "baostock",
             "partial_update": True,
         }
@@ -143,6 +202,44 @@ def _to_dash_date(value: str) -> str:
     if "-" in text:
         return text
     return f"{text[:4]}-{text[4:6]}-{text[6:8]}" if len(text) >= 8 else text
+
+
+def _classify_baostock_failure(message: str, *, error_code: str = "", symbol: str = "") -> str:
+    text = f"{message} {error_code}".lower()
+    code = str(symbol or "").strip().upper().split(".")[0]
+    if not code.isdigit() or len(code) != 6:
+        return "unsupported_symbol"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if any(marker in text for marker in ["connection", "socket", "remote", "network", "reset", "broken pipe"]):
+        return "connection_error"
+    if error_code and str(error_code) not in {"0", ""}:
+        return "provider_error"
+    return "unknown_error"
+
+
+def _record_failure(summary: dict[str, int], examples: dict[str, list[str]], failure_type: str, symbol: str) -> None:
+    summary[failure_type] = int(summary.get(failure_type, 0) or 0) + 1
+    bucket = examples.setdefault(failure_type, [])
+    if len(bucket) < 20 and symbol not in bucket:
+        bucket.append(symbol)
+
+
+def _reconnect(module: Any) -> bool:
+    logout = getattr(module, "logout", None)
+    if callable(logout):
+        try:
+            logout()
+        except Exception:
+            pass
+    login = getattr(module, "login", None)
+    if not callable(login):
+        return False
+    try:
+        result = login()
+    except Exception:
+        return False
+    return str(getattr(result, "error_code", "0") or "0") == "0"
 
 
 def _emit_progress(callback: Any | None, **payload: Any) -> None:
