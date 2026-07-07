@@ -943,7 +943,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     _render_database_status(st, dashboard_data.get("tables", {}).get("_database_status", {}))
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
-    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "埃尔德复核", "观察池跟踪", "买入区间分析", "外部模拟持仓导入", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
+    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "观察池跟踪", "买入区间分析", "外部模拟持仓导入", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
         _render_section(st, "今日选股", _render_selection_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[1]:
@@ -953,20 +953,18 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     with tabs[3]:
         _render_section(st, "选股逻辑", _render_selection_logic_tab, st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[4]:
-        _render_section(st, "埃尔德复核", _render_elder_review_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("price", pd.DataFrame()), dashboard_data.get("watchlist_snapshot", pd.DataFrame()))
-    with tabs[5]:
         _render_section(st, "观察池跟踪", _render_watchlist_tab, st, dashboard_data.get("watchlist", pd.DataFrame()), dashboard_data.get("watchlist_snapshot", pd.DataFrame()), dashboard_data.get("tables", {}))
-    with tabs[6]:
+    with tabs[5]:
         _render_section(st, "买入区间分析", _render_entry_zone_tab, st, dashboard_data.get("tables", {}))
-    with tabs[7]:
+    with tabs[6]:
         _render_section(st, "外部模拟持仓导入", _render_external_positions_tab, st, dashboard_data.get("tables", {}))
-    with tabs[8]:
+    with tabs[7]:
         _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
-    with tabs[9]:
+    with tabs[8]:
         _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}))
-    with tabs[10]:
+    with tabs[9]:
         _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
-    with tabs[11]:
+    with tabs[10]:
         _render_section(st, "本地控制台", _render_local_console_tab, st, dashboard_data.get("tables", {}))
 
 
@@ -1044,6 +1042,13 @@ def _render_selection_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str,
                     "reward_risk_ratio": item.get("reward_risk_ratio"),
                     "chase_risk": item.get("chase_risk_cn"),
                     "entry_zone_status": item.get("entry_zone_status_cn"),
+                    "elder_score": item.get("elder_score"),
+                    "action_hint": item.get("action_hint"),
+                    "elder_reason": item.get("elder_reason"),
+                    "weekly_trend": item.get("weekly_trend"),
+                    "daily_pullback": item.get("daily_pullback"),
+                    "force_signal": item.get("force_signal"),
+                    "elder_ray_signal": item.get("elder_ray_signal"),
                     "data_quality_note": item.get("risk_note") or "需结合数据来源与字段完整性人工复核。",
                 }
             )
@@ -1082,13 +1087,14 @@ def _render_review_tab(st: Any, selection_df: pd.DataFrame, tables: dict[str, An
 
 
 def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.DataFrame | None = None, tables: dict[str, Any] | None = None) -> None:
-    st.subheader("观察池跟踪")
+    st.subheader("当前观察池")
     snapshot = snapshot_df if isinstance(snapshot_df, pd.DataFrame) else pd.DataFrame()
     if watchlist_df.empty and snapshot.empty:
         st.info("暂无 active watch 股票。人工复核导入 watch 决策后会显示在这里。")
         return
     st.caption("刷新观察池：python -m core.jobs.refresh_watchlist_from_selection；每日跟踪：python -m core.jobs.track_watchlist")
     if not snapshot.empty:
+        snapshot = _current_watchlist_for_elder_tab(snapshot).head(30)
         counts = summarize_watchlist_snapshot(snapshot)
         cols = st.columns(7)
         metrics = [
@@ -1102,21 +1108,25 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.D
         ]
         for col, (label, value) in zip(cols, metrics):
             col.metric(label, value)
-        st.write("观察池每日跟踪")
+        st.write("当前观察池")
         snapshot = enrich_with_entry_zone_fields(snapshot, tables or {})
         snapshot_columns = [
             "ts_code",
             "name",
             "trade_date",
             "current_close",
-            "today_rank",
-            "rank_change",
             "total_score",
             "total_score_change",
             "selected_count_5d",
             "selected_count_10d",
             "consecutive_selected_days",
+            "elder_score",
             "action_hint",
+            "elder_reason",
+            "weekly_trend",
+            "daily_pullback",
+            "force_signal",
+            "elder_ray_signal",
             "entry_low",
             "entry_high",
             "stop_loss",
@@ -1156,8 +1166,15 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.D
         "reward_risk_ratio",
         "chase_risk_cn",
         "entry_zone_status_cn",
+        "elder_score",
+        "action_hint",
+        "elder_reason",
+        "weekly_trend",
+        "daily_pullback",
+        "force_signal",
+        "elder_ray_signal",
     ]
-    display_dataframe(st, watchlist_df, columns=display_columns)
+    display_dataframe(st, watchlist_df.head(30), columns=display_columns)
 
 
 def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
@@ -1434,64 +1451,8 @@ def _render_core_logic_guide_download(st: Any) -> None:
 
 def _render_elder_review_tab(st: Any, selection_df: pd.DataFrame, price_df: pd.DataFrame, watchlist_snapshot: pd.DataFrame | None = None) -> None:
     st.subheader("埃尔德复核")
+    st.info("Elder 复核已作为今日候选和当前观察池的附加判断字段展示。")
     st.caption("二次技术状态 / 节奏复核层，不覆盖 total_score，不改变今日选股原始排序，也不代表买入优先级。")
-    review_df = build_elder_review(_with_review_scope_for_display(selection_df, "今日候选"), price_df)
-    watch_review = pd.DataFrame()
-    current_watch = _current_watchlist_for_elder_tab(watchlist_snapshot if isinstance(watchlist_snapshot, pd.DataFrame) else pd.DataFrame())
-    if not current_watch.empty:
-        existing_codes = set(review_df.get("ts_code", pd.Series(dtype=str)).dropna().astype(str))
-        watch_targets = current_watch[~current_watch["ts_code"].astype(str).isin(existing_codes)].copy()
-        if not watch_targets.empty:
-            watch_review = build_elder_review(_with_review_scope_for_display(watch_targets, "观察池"), price_df)
-    if review_df.empty:
-        st.info("暂无埃尔德复核结果。请先运行每日选股并确保本地 daily_price 有足够行情。")
-        return
-    display_df = pd.concat(
-        [
-            format_elder_review_display(review_df, source="今日候选"),
-            format_elder_review_display(watch_review, source="观察池") if not watch_review.empty else pd.DataFrame(),
-        ],
-        ignore_index=True,
-        sort=False,
-    )
-    if not display_df.empty:
-        display_df = display_df.reset_index(drop=True)
-        display_df["display_order"] = range(1, len(display_df) + 1)
-    st.info("埃尔德复核为二次技术状态判断，不改变 total_score 和系统内部选股结果。序号为当前页面显示顺序；来源用于区分今日候选、观察池或持仓池。")
-    display_columns = [
-        "display_order",
-        "source",
-        "review_scope",
-        "review_status",
-        "review_reason",
-        "ts_code",
-        "name",
-        "industry",
-        "total_score",
-        "elder_score",
-        "review_action",
-        "action_hint",
-        "elder_reason",
-        "weekly_trend",
-        "daily_pullback",
-        "force_signal",
-        "elder_ray_signal",
-        "ema13",
-        "ema22",
-        "macd_histogram",
-        "macd_histogram_slope",
-        "force_index_2d",
-        "force_index_13d",
-        "bull_power",
-        "bear_power",
-        "close_to_ema13_pct",
-        "close_to_ema22_pct",
-    ]
-    display_dataframe(st, display_df, columns=display_columns)
-    st.write("状态分布")
-    display_dataframe(st, review_df["action_hint"].value_counts(dropna=False).rename_axis("action_hint").reset_index(name="count"))
-    st.info("操作建议只用于人工复核流程，不改变今日选股 total_score 排序；“短线过热，不追”表示短期回撤风险偏高，不等于中期趋势一定转弱。批量导出可运行 python -m core.jobs.export_elder_review。")
-    st.caption("命令行：python -m core.jobs.run_elder_review 或 python -m core.jobs.export_elder_review --format markdown")
 
 
 def format_elder_review_display(review_df: pd.DataFrame, *, source: str = "今日候选") -> pd.DataFrame:
@@ -1543,13 +1504,17 @@ def _with_review_scope_for_display(frame: pd.DataFrame, scope: str) -> pd.DataFr
 def _current_watchlist_for_elder_tab(snapshot: pd.DataFrame) -> pd.DataFrame:
     if snapshot.empty or "watch_status" not in snapshot.columns:
         return pd.DataFrame()
+    if "trade_date" in snapshot.columns:
+        dates = snapshot["trade_date"].dropna().astype(str)
+        if not dates.empty:
+            snapshot = snapshot[snapshot["trade_date"].astype(str) == dates.max()].copy()
     current_statuses = {"active", "entry_zone", "triggered", "active_watch", "strong_watch", "wait_pullback", "near_buy_zone"}
     result = snapshot[snapshot["watch_status"].fillna("active").astype(str).isin(current_statuses)].copy()
     if "ts_code" in result.columns:
         result = result.drop_duplicates("ts_code", keep="last")
     if "trade_date" not in result.columns and "latest_trade_date" in result.columns:
         result["trade_date"] = result["latest_trade_date"]
-    return result.reset_index(drop=True)
+    return result.reset_index(drop=True).head(30)
 
 
 def _render_positions_tab(st: Any, positions_df: pd.DataFrame) -> None:

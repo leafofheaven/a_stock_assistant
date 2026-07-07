@@ -73,6 +73,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task57i": check_task57i,
         "task58": check_task58,
         "task59": check_task59,
+        "task59b": check_task59b,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -3779,7 +3780,7 @@ def check_task59(root: Path) -> list[str]:
         if phrase not in elder_source:
             failures.append(f"core/jobs/run_elder_review.py is missing Task 59 Elder scope phrase: {phrase}.")
     workbook_source = read_source(root / "core/jobs/export_daily_research_workbook.py")
-    for phrase in ["_current_watchlist_scope", "review_reason", "暂无埃尔德复核分"]:
+    for phrase in ["_current_watchlist_scope", "ELDER_DISPLAY_COLUMNS", "Elder 复核已作为今日候选和当前观察池的附加判断字段展示"]:
         if phrase not in workbook_source:
             failures.append(f"core/jobs/export_daily_research_workbook.py is missing Task 59 workbook phrase: {phrase}.")
     tests_source = read_source(root / "tests/test_watchlist_lifecycle_task59.py")
@@ -3796,6 +3797,86 @@ def check_task59(root: Path) -> list[str]:
     ]:
         if phrase not in tests_source:
             failures.append(f"tests/test_watchlist_lifecycle_task59.py is missing {phrase}.")
+    return failures
+
+
+def check_task59b(root: Path) -> list[str]:
+    """Check Task 59B Elder fields are embedded in candidate/watchlist views."""
+    failures: list[str] = []
+    required_paths = [
+        "core/jobs/export_daily_research_workbook.py",
+        "web/streamlit_app.py",
+        "tests/test_task59b_simplify_elder_review_fields.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+
+    workbook_path = root / "core/jobs/export_daily_research_workbook.py"
+    workbook_source = read_source(workbook_path)
+    for phrase in [
+        "_embedded_elder_row_count",
+        "_current_watchlist_scope",
+        "elder_score",
+        "action_hint",
+        "elder_reason",
+        "weekly_trend",
+        "daily_pullback",
+        "force_signal",
+        "elder_ray_signal",
+        "head(30)",
+    ]:
+        if phrase not in workbook_source:
+            failures.append(f"core/jobs/export_daily_research_workbook.py is missing Task 59B phrase: {phrase}.")
+
+    try:
+        tree = ast.parse(workbook_source)
+        sheet_names: list[str] = []
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "SHEET_NAMES":
+                        if isinstance(node.value, ast.List):
+                            sheet_names = [item.value for item in node.value.elts if isinstance(item, ast.Constant)]
+        forbidden_sheets = {
+            "02_埃尔德复核",
+            "05_观察池跟踪",
+            "07_风险提示",
+            "08_数据质量",
+            "09_参数配置",
+            "10_说明",
+        }
+        for sheet_name in forbidden_sheets & set(sheet_names):
+            failures.append(f"SHEET_NAMES should not include Task 59B removed sheet: {sheet_name}.")
+    except SyntaxError as exc:
+        failures.append(f"core/jobs/export_daily_research_workbook.py has syntax error: {exc}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    tabs_index = streamlit_source.find("st.tabs([")
+    tabs_end = streamlit_source.find("])", tabs_index)
+    tabs_source = streamlit_source[tabs_index:tabs_end] if tabs_index >= 0 and tabs_end >= 0 else ""
+    if "埃尔德复核" in tabs_source:
+        failures.append("web/streamlit_app.py should not include a standalone Elder review tab.")
+    for phrase in [
+        "Elder 复核已作为今日候选和当前观察池的附加判断字段展示",
+        "elder_score",
+        "action_hint",
+        "elder_reason",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 59B phrase: {phrase}.")
+
+    tests_source = read_source(root / "tests/test_task59b_simplify_elder_review_fields.py")
+    for phrase in [
+        "test_daily_research_removed_standalone_elder_and_diagnostic_sheets",
+        "test_candidate_sheet_contains_elder_fields_and_scores",
+        "test_current_watchlist_sheet_contains_elder_fields_and_scores",
+        "test_missing_elder_fields_do_not_break_daily_research",
+        "test_empty_watchlist_does_not_break_daily_research",
+        "test_current_watchlist_sheet_limits_to_30_rows",
+        "test_streamlit_no_standalone_elder_review_tab",
+        "test_candidate_order_and_total_score_unchanged",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_task59b_simplify_elder_review_fields.py is missing {phrase}.")
     return failures
 
 
@@ -3892,6 +3973,7 @@ def main(argv: list[str] | None = None) -> int:
             "task57i",
             "task58",
             "task59",
+            "task59b",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

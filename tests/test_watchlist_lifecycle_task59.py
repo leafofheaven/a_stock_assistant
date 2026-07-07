@@ -199,12 +199,14 @@ def test_daily_research_excel_elder_review_scope(tmp_path: Path) -> None:
     output = tmp_path / "daily_research.xlsx"
 
     export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
-    sheet = load_workbook(output)["02_埃尔德复核"]
-    values = _sheet_values(sheet)
+    workbook = load_workbook(output)
 
-    assert "今日候选" in values
-    assert "观察池" in values
-    assert "暂无埃尔德复核分；该行未找到可用复核结果或数据样本不足。" in values
+    assert "02_埃尔德复核" not in workbook.sheetnames
+    candidate_headers = _sheet_headers(workbook["01_今日候选"])
+    watchlist_headers = _sheet_headers(workbook["04_观察池"])
+    for header in ["埃尔德分（elder_score）", "操作提示（action_hint）", "复核原因（elder_reason）"]:
+        assert header in candidate_headers
+        assert header in watchlist_headers
 
 
 def _settings(store: DuckDBStore, top_n: int = 10) -> SimpleNamespace:
@@ -311,3 +313,7 @@ def _seed_workbook_watchlist_store(tmp_path: Path) -> DuckDBStore:
 
 def _sheet_values(sheet) -> list[object]:
     return [cell.value for row in sheet.iter_rows() for cell in row if cell.value is not None]
+
+
+def _sheet_headers(sheet) -> list[object]:
+    return [cell.value for cell in sheet[1] if cell.value is not None]

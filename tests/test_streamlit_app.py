@@ -582,7 +582,6 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
         "个股详情",
         "因子排名",
         "选股逻辑",
-        "埃尔德复核",
         "观察池跟踪",
         "买入区间分析",
         "外部模拟持仓导入",
