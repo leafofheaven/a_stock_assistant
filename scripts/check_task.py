@@ -3714,6 +3714,7 @@ def check_task57i(root: Path) -> list[str]:
     queue_source = read_source(root / "core/jobs/missing_latest_retry_queue.py")
     for phrase in [
         "missing_latest_retry_queue.json",
+        "resolve_missing_latest_queue_path",
         "skip_queue",
         "retry_queue",
         "retry_count",
@@ -3738,7 +3739,9 @@ def check_task57i(root: Path) -> list[str]:
         "test_retry_skip_queue_has_limited_attempts",
         "test_timeout_batch_does_not_mark_whole_batch_no_data",
         "test_keyboard_interrupt_cleans_child_and_progress",
-        "test_doctor_daily_run_shows_queue_counts_and_fileprovider_warning",
+        "test_resolve_queue_path_follows_data_dir",
+        "test_update_market_data_default_queue_path_follows_data_dir",
+        "test_doctor_daily_run_uses_data_dir_queue_counts_and_fileprovider_warning",
     ]:
         if phrase not in tests_source:
             failures.append(f"tests/test_task57i_gap_update_skip_retry_queue.py is missing {phrase}.")

@@ -12,10 +12,12 @@ import pandas as pd
 from core.jobs.doctor_daily_run import doctor_daily_run, render_console
 from core.jobs.market_data_progress import read_market_data_progress
 from core.jobs.missing_latest_retry_queue import (
+    DEFAULT_SKIP_QUEUE_PATH,
     excluded_symbols_for_main_scan,
     queue_counts,
     read_missing_latest_queue,
     record_failure_records,
+    resolve_missing_latest_queue_path,
     retry_symbols,
 )
 from core.jobs.update_market_data import _continue_missing_latest_symbol_plan, run_batched_update_parent, update_market_data
@@ -139,23 +141,66 @@ def test_update_market_data_records_no_data_queue(tmp_path: Path) -> None:
     assert "000024.SZ" in queue["skip_queue"]
 
 
-def test_doctor_daily_run_shows_queue_counts_and_fileprovider_warning(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_queue_path_follows_data_dir(tmp_path: Path) -> None:
+    data_dir = tmp_path / "runtime_data"
+
+    path = resolve_missing_latest_queue_path(data_dir=data_dir)
+
+    assert path == data_dir / "runtime" / "missing_latest_retry_queue.json"
+
+
+def test_resolve_queue_path_respects_explicit_path(tmp_path: Path) -> None:
+    explicit = tmp_path / "custom_queue.json"
+    data_dir = tmp_path / "runtime_data"
+
+    path = resolve_missing_latest_queue_path(explicit, data_dir=data_dir)
+
+    assert path == explicit
+
+
+def test_resolve_queue_path_falls_back_when_data_dir_empty() -> None:
+    assert resolve_missing_latest_queue_path(data_dir="") == DEFAULT_SKIP_QUEUE_PATH
+
+
+def test_doctor_daily_run_uses_data_dir_queue_counts_and_fileprovider_warning(tmp_path: Path) -> None:
     db_dir = tmp_path / "Documents" / "股票" / "data"
     db_dir.mkdir(parents=True)
     store = DuckDBStore(db_dir / "a_stock_assistant.duckdb")
     store.initialize()
     store.upsert_dataframe("stock_basic", pd.DataFrame([{"ts_code": "000024.SZ", "symbol": "000024", "name": "mock"}]))
-    queue_path = tmp_path / "queue.json"
+    queue_path = db_dir / "runtime" / "missing_latest_retry_queue.json"
     record_failure_records(queue_path, trade_date="20260706", failure_records=[{"symbol": "000024.SZ", "failure_type": "no_data"}])
-    monkeypatch.setattr("core.jobs.doctor_daily_run.DEFAULT_SKIP_QUEUE_PATH", queue_path)
 
     result = doctor_daily_run(settings=_settings(store), store=store, root=tmp_path)
     output = render_console(result)
 
     assert "本轮 no_data 冷却队列: 1" in output
     assert "待 retry 队列: 0" in output
+    assert str(queue_path) in output
     assert "duckdb_fileprovider_risk" in output
     assert "FileProvider" in output
+
+
+def test_update_market_data_default_queue_path_follows_data_dir(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path, ["000024.SZ"])
+    settings = _settings(store)
+
+    result = update_market_data(
+        goal="latest",
+        provider="baostock",
+        end_date="20260706",
+        symbols=["000024.SZ"],
+        batch_size=1,
+        continue_missing_latest=True,
+        settings=settings,
+        status_path=tmp_path / "status.json",
+        progress_path=tmp_path / "progress.json",
+        baostock_client=_NoDataClient(),
+    )
+
+    expected = Path(settings.data_dir) / "runtime" / "missing_latest_retry_queue.json"
+    assert result["skip_queue_path"] == str(expected)
+    assert expected.exists()
 
 
 def test_fileprovider_risk_path_produces_warning(tmp_path: Path) -> None:

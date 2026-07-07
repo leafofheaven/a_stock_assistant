@@ -8,9 +8,24 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_SKIP_QUEUE_PATH = Path("data/runtime/missing_latest_retry_queue.json")
+QUEUE_FILENAME = "missing_latest_retry_queue.json"
+DEFAULT_SKIP_QUEUE_PATH = Path("data/runtime") / QUEUE_FILENAME
 NO_DATA_REASONS = {"no_data", "unsupported_symbol"}
 RETRY_REASONS = {"timeout", "provider_error", "connection_error", "unknown_error"}
+
+
+def resolve_missing_latest_queue_path(
+    skip_queue_path: str | Path | None = None,
+    *,
+    data_dir: str | Path | None = None,
+) -> Path:
+    """Resolve the runtime queue path, following DATA_DIR unless explicitly overridden."""
+    if skip_queue_path and Path(skip_queue_path) != DEFAULT_SKIP_QUEUE_PATH:
+        return Path(skip_queue_path).expanduser()
+    data_dir_text = str(data_dir or "").strip()
+    if data_dir_text:
+        return Path(data_dir_text).expanduser() / "runtime" / QUEUE_FILENAME
+    return DEFAULT_SKIP_QUEUE_PATH
 
 
 def read_missing_latest_queue(path: str | Path = DEFAULT_SKIP_QUEUE_PATH) -> dict[str, Any]:

@@ -32,6 +32,7 @@ from core.jobs.missing_latest_retry_queue import (
     queue_counts,
     record_failure_records,
     reset_missing_latest_queue,
+    resolve_missing_latest_queue_path,
     retry_symbols,
 )
 from core.storage.duckdb_store import DuckDBStore
@@ -98,8 +99,7 @@ def update_market_data(
     resolved_symbols = _resolve_symbols(symbols, settings=resolved_settings)
     store = DuckDBStore(resolved_settings.duckdb_path)
     store.initialize()
-    if Path(skip_queue_path) == DEFAULT_SKIP_QUEUE_PATH and Path(status_path) != DEFAULT_STATUS_PATH:
-        skip_queue_path = Path(status_path).parent / DEFAULT_SKIP_QUEUE_PATH.name
+    skip_queue_path = resolve_missing_latest_queue_path(skip_queue_path, data_dir=getattr(resolved_settings, "data_dir", ""))
     if reset_skip_queue:
         reset_missing_latest_queue(skip_queue_path)
     selection_plan: dict[str, Any] = {}
@@ -515,7 +515,13 @@ def _run_provider(
                 )
                 mark_resolved_symbols(skip_queue_path, trade_date=end_date, symbols=resolved_symbols)
             queue_stats = queue_counts(skip_queue_path, trade_date=end_date)
-            extra = {**plan, "failure_summary": failure_summary, "failure_examples": failure_examples, "next_retry_symbol_count": sum(int(v or 0) for v in failure_summary.values())}
+            extra = {
+                **plan,
+                "skip_queue_path": str(skip_queue_path),
+                "failure_summary": failure_summary,
+                "failure_examples": failure_examples,
+                "next_retry_symbol_count": sum(int(v or 0) for v in failure_summary.values()),
+            }
             extra.update(queue_stats)
             if isinstance(failure_records, list):
                 extra["failure_records"] = failure_records[:200]
@@ -1403,9 +1409,7 @@ def run_batched_update_parent(
     store = DuckDBStore(resolved_settings.duckdb_path)
     store.initialize()
     batch_size = max(1, int(args.batch_size or args.update_limit or DEFAULT_BATCH_SIZE))
-    skip_queue_path = Path(getattr(args, "skip_queue_path", DEFAULT_SKIP_QUEUE_PATH))
-    if skip_queue_path == DEFAULT_SKIP_QUEUE_PATH and status_path != DEFAULT_STATUS_PATH:
-        skip_queue_path = status_path.parent / DEFAULT_SKIP_QUEUE_PATH.name
+    skip_queue_path = resolve_missing_latest_queue_path(getattr(args, "skip_queue_path", ""), data_dir=getattr(resolved_settings, "data_dir", ""))
     max_no_data_retries = int(getattr(args, "max_no_data_retries", 1) or 1)
     max_timeout_retries = int(getattr(args, "max_timeout_retries", 1) or 1)
     skip_cooldown_minutes = int(getattr(args, "skip_cooldown_minutes", 60) or 0)
@@ -1668,7 +1672,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--retry-skip-queue", action="store_true")
     parser.add_argument("--max-no-data-retries", type=int, default=1)
     parser.add_argument("--max-timeout-retries", type=int, default=1)
-    parser.add_argument("--skip-queue-path", default=str(DEFAULT_SKIP_QUEUE_PATH))
+    parser.add_argument("--skip-queue-path", default="")
     parser.add_argument("--reset-skip-queue", action="store_true")
     parser.add_argument("--skip-cooldown-minutes", type=int, default=60)
     parser.add_argument("--status-path", default=str(DEFAULT_STATUS_PATH))
