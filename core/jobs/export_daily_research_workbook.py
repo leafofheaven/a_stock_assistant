@@ -17,19 +17,14 @@ from openpyxl.utils import get_column_letter
 from app.config import Settings, get_settings
 from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+from core.technical.elder import build_elder_review
 
 SHEET_NAMES = [
     "00_摘要",
     "01_今日候选",
-    "02_埃尔德复核",
     "03_买入区间",
     "04_观察池",
-    "05_观察池跟踪",
     "06_外部模拟持仓",
-    "07_风险提示",
-    "08_数据质量",
-    "09_参数配置",
-    "10_说明",
     "11_自动回看摘要",
 ]
 
@@ -37,6 +32,15 @@ SENSITIVE_KEYWORDS = ("token", "key", "password", "secret", "api密钥", "smtp")
 SENSITIVE_VALUE_MARKERS = ("sk-",)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FUNDAMENTAL_SCORE_MISSING_NOTE_PREFIX = "基本面分（fundamental_score）缺失记录数"
+ELDER_DISPLAY_COLUMNS = [
+    "elder_score",
+    "action_hint",
+    "elder_reason",
+    "weekly_trend",
+    "daily_pullback",
+    "force_signal",
+    "elder_ray_signal",
+]
 
 RANK_COLUMNS = {
     "rank",
@@ -208,6 +212,7 @@ def export_daily_research_workbook(
 
     strategy = _read_table(resolved_store, "strategy_result")
     factor_scores = _read_table(resolved_store, "factor_scores")
+    daily_price = _read_table(resolved_store, "daily_price")
     entry_zones = _read_table(resolved_store, "entry_zone_snapshots")
     watchlist = _read_table(resolved_store, "watchlist_daily_snapshots")
     external_positions = (
@@ -219,36 +224,28 @@ def export_daily_research_workbook(
     selected_trade_date = trade_date or _latest_trade_date(strategy, factor_scores)
     selected_trade_date = selected_trade_date or _latest_price_date(resolved_store) or ""
 
-    strategy_sheet = _build_strategy_sheet(strategy, selected_trade_date)
-    elder_sheet = _build_elder_sheet(strategy_sheet, watchlist, selected_trade_date)
+    strategy_sheet = _build_strategy_sheet(strategy, selected_trade_date, daily_price)
     entry_sheet = _build_entry_zone_sheet(entry_zones, strategy_sheet, watchlist, selected_trade_date)
     latest_watchlist_sheet = _latest_by_date(watchlist, "trade_date", selected_trade_date)
     current_watchlist_sheet = _current_watchlist_scope(latest_watchlist_sheet)
+    current_watchlist_sheet = _attach_elder_fields(current_watchlist_sheet, daily_price, "观察池")
     watchlist_sheet = _with_display_order(_preferred_columns(current_watchlist_sheet, _watchlist_columns()))
-    watchlist_tracking_sheet = _with_display_order(_preferred_columns(latest_watchlist_sheet, _watchlist_columns()))
     external_sheet = _latest_external_positions(external_positions)
-    risk_sheet = _build_risk_sheet(entry_sheet, watchlist_sheet, external_sheet)
     data_quality_snapshot = _safe_data_quality_snapshot(resolved_store, selected_trade_date)
-    quality_sheet = (
-        _build_data_quality_sheet(resolved_store, selected_trade_date, data_quality_snapshot)
-        if include_data_quality
-        else _message_frame("数据质量导出已关闭。")
-    )
-    settings_sheet = _settings_sheet(resolved_settings)
     lookback_status = _read_lookback_status(lookback_status_path)
     lookback_sheet = _build_lookback_summary_sheet(lookback_status)
+    embedded_elder_rows = _embedded_elder_row_count(strategy_sheet, watchlist_sheet)
     summary_sheet = _build_summary_sheet(
         selected_trade_date=selected_trade_date,
         output_path=output_path,
         strategy_rows=len(strategy_sheet),
-        elder_rows=len(elder_sheet),
+        elder_rows=embedded_elder_rows,
         entry_zone_rows=len(entry_sheet),
         watchlist_rows=len(watchlist_sheet),
         external_position_rows=len(external_sheet),
         lookback_status=lookback_status,
         data_quality_snapshot=data_quality_snapshot,
     )
-    help_sheet = _help_sheet()
 
     resolved_output = _resolve_output_path(output_path, selected_trade_date)
     resolved_output.parent.mkdir(parents=True, exist_ok=True)
@@ -258,15 +255,9 @@ def export_daily_research_workbook(
     sheets = {
         "00_摘要": summary_sheet,
         "01_今日候选": strategy_sheet,
-        "02_埃尔德复核": elder_sheet,
         "03_买入区间": entry_sheet,
         "04_观察池": _empty_if_needed(watchlist_sheet, "暂无观察池跟踪数据。"),
-        "05_观察池跟踪": _empty_if_needed(watchlist_tracking_sheet, "暂无观察池跟踪数据。"),
         "06_外部模拟持仓": _empty_if_needed(external_sheet, "暂无外部模拟持仓数据。"),
-        "07_风险提示": _empty_if_needed(risk_sheet, "暂无需要特别提示的风险项。"),
-        "08_数据质量": quality_sheet,
-        "09_参数配置": settings_sheet,
-        "10_说明": help_sheet,
         "11_自动回看摘要": lookback_sheet,
     }
     for sheet_name in SHEET_NAMES:
@@ -277,7 +268,7 @@ def export_daily_research_workbook(
         output_path=resolved_output,
         trade_date=selected_trade_date,
         strategy_rows=len(strategy_sheet),
-        elder_rows=len(elder_sheet),
+        elder_rows=embedded_elder_rows,
         entry_zone_rows=len(entry_sheet),
         watchlist_rows=len(watchlist_sheet),
         external_position_rows=len(external_sheet),
@@ -332,7 +323,7 @@ def _latest_by_date(frame: pd.DataFrame, date_column: str, preferred_date: str =
     return frame[frame[date_column].astype(str) == selected_date].copy()
 
 
-def _build_strategy_sheet(strategy: pd.DataFrame, trade_date: str) -> pd.DataFrame:
+def _build_strategy_sheet(strategy: pd.DataFrame, trade_date: str, price_df: pd.DataFrame | None = None) -> pd.DataFrame:
     frame = _latest_by_date(strategy, "trade_date", trade_date)
     if frame.empty:
         return _message_frame("暂无本地选股结果。请先运行 python -m core.jobs.run_daily_workflow --doctor-before-run --skip-update --format all。")
@@ -342,6 +333,7 @@ def _build_strategy_sheet(strategy: pd.DataFrame, trade_date: str) -> pd.DataFra
         frame = frame.sort_values(["candidate_rank", "ts_code"], na_position="last")
     elif "total_score" in frame.columns:
         frame = frame.sort_values("total_score", ascending=False, na_position="last")
+    frame = _attach_elder_fields(frame, price_df, "今日候选")
     columns = [
         "display_order",
         "trade_date",
@@ -363,81 +355,50 @@ def _build_strategy_sheet(strategy: pd.DataFrame, trade_date: str) -> pd.DataFra
         "risk_score",
         "select_reason",
         "risk_note",
+        *ELDER_DISPLAY_COLUMNS,
     ]
+    frame = _ensure_columns(frame, columns)
     return _with_display_order(_preferred_columns(frame, columns))
 
 
-def _build_elder_sheet(strategy: pd.DataFrame, watchlist: pd.DataFrame, trade_date: str) -> pd.DataFrame:
-    rows: list[pd.DataFrame] = []
-    strategy_elder_columns = [
-        "display_order",
-        "source",
-        "review_scope",
-        "review_status",
-        "review_reason",
-        "trade_date",
-        "review_date",
-        "latest_trade_date",
-        "ts_code",
-        "name",
-        "industry",
-        "total_score",
-        "elder_score",
-        "action_hint",
-        "review_action",
-        "elder_reason",
-        "weekly_trend",
-        "daily_pullback",
-        "force_signal",
-        "elder_ray_signal",
-    ]
-    if not strategy.empty and {"elder_score", "action_hint", "elder_reason"}.intersection(strategy.columns):
-        strategy_frame = strategy.copy()
-        strategy_frame["source"] = "今日候选"
-        _ensure_elder_review_status(strategy_frame)
-        rows.append(_preferred_columns(strategy_frame, strategy_elder_columns))
-    elif not strategy.empty and "message" not in strategy.columns:
-        strategy_frame = strategy.copy()
-        strategy_frame["source"] = "今日候选"
-        strategy_frame["review_scope"] = "今日候选"
-        strategy_frame["review_status"] = "未复核"
-        strategy_frame["review_reason"] = "今日候选暂无持久化埃尔德复核结果，请运行 python -m core.jobs.run_elder_review。"
-        rows.append(_preferred_columns(strategy_frame, strategy_elder_columns))
-
-    watch_frame = _latest_by_date(watchlist, "trade_date", trade_date)
-    watch_frame = _current_watchlist_scope(watch_frame)
-    if not watch_frame.empty:
-        watch_frame = watch_frame.copy()
-        watch_frame["source"] = "观察池"
-        _ensure_elder_review_status(watch_frame)
-        rows.append(_preferred_columns(watch_frame, strategy_elder_columns))
-
-    if not rows:
-        return _message_frame("暂无复核结果。请先运行 python -m core.jobs.run_elder_review。")
-    return _with_display_order(pd.concat(rows, ignore_index=True, sort=False))
-
-
-def _ensure_elder_review_status(frame: pd.DataFrame) -> None:
-    if "review_scope" not in frame.columns:
-        frame["review_scope"] = frame.get("source", "今日候选")
-    if "review_status" not in frame.columns:
-        has_score = pd.to_numeric(frame.get("elder_score"), errors="coerce").notna() if "elder_score" in frame.columns else pd.Series([False] * len(frame), index=frame.index)
-        frame["review_status"] = has_score.map({True: "已复核", False: "未复核"})
-    if "review_reason" not in frame.columns:
-        frame["review_reason"] = frame.get("elder_reason", "")
-    missing_reason = frame["review_reason"].isna() | (frame["review_reason"].astype(str).str.strip() == "")
-    missing_score = pd.to_numeric(frame.get("elder_score"), errors="coerce").isna() if "elder_score" in frame.columns else pd.Series([True] * len(frame), index=frame.index)
-    frame.loc[missing_reason & missing_score, "review_reason"] = "暂无埃尔德复核分；该行未找到可用复核结果或数据样本不足。"
+def _attach_elder_fields(frame: pd.DataFrame, price_df: pd.DataFrame | None, scope: str) -> pd.DataFrame:
+    """Attach Elder display fields in memory without changing persisted tables."""
+    if frame.empty or "message" in frame.columns:
+        return frame.copy()
+    result = frame.copy()
+    for column in ELDER_DISPLAY_COLUMNS:
+        if column not in result.columns:
+            result[column] = pd.NA
+    if price_df is None or price_df.empty or "ts_code" not in result.columns:
+        return result
+    candidates = result.copy()
+    candidates["review_scope"] = scope
+    try:
+        review = build_elder_review(candidates, price_df)
+    except Exception:
+        return result
+    if review.empty or "ts_code" not in review.columns:
+        return result
+    review = review.drop_duplicates("ts_code", keep="last").set_index(review["ts_code"].astype(str))
+    codes = result["ts_code"].astype(str)
+    for column in ELDER_DISPLAY_COLUMNS:
+        if column not in review.columns:
+            continue
+        computed = codes.map(review[column])
+        existing = result[column]
+        missing = existing.isna() | existing.astype(str).str.strip().eq("")
+        result.loc[missing, column] = computed[missing]
+    return result
 
 
 def _current_watchlist_scope(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or "watch_status" not in frame.columns:
-        return frame.copy()
+        return frame.copy().head(30)
     current_statuses = {"active", "entry_zone", "triggered", "active_watch", "strong_watch", "wait_pullback", "near_buy_zone"}
     result = frame[frame["watch_status"].fillna("active").astype(str).isin(current_statuses)].copy()
     if "ts_code" in result.columns:
         result = result.drop_duplicates("ts_code", keep="last")
-    return result.reset_index(drop=True)
+    return result.reset_index(drop=True).head(30)
 
 
 def _build_entry_zone_sheet(
@@ -764,7 +725,7 @@ def _build_summary_sheet(
         {"metric": "导出时间", "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
         {"metric": "研究日期", "value": selected_trade_date or "暂无"},
         {"metric": "今日候选数量", "value": strategy_rows},
-        {"metric": "埃尔德复核记录数量", "value": elder_rows},
+        {"metric": "已嵌入埃尔德字段记录数量", "value": elder_rows},
         {"metric": "买入区间记录数量", "value": entry_zone_rows},
         {"metric": "观察池记录数量", "value": watchlist_rows},
         {"metric": "外部模拟持仓记录数量", "value": external_position_rows},
@@ -858,12 +819,13 @@ def _build_lookback_summary_sheet(status: dict[str, Any] | None) -> pd.DataFrame
 def _help_sheet() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"section": "工作簿用途", "description": "汇总今日候选、技术复核、买入区间、观察池、外部模拟持仓和数据质量。"},
+            {"section": "工作簿用途", "description": "汇总今日候选、买入区间、当前观察池、外部模拟持仓和必要摘要。"},
             {"section": "排序口径", "description": "序号只代表当前 Sheet 当前显示顺序，不代表买入优先级。"},
             {"section": "rank 字段", "description": "默认不导出 rank / 排名字段。系统已提供综合分、各因子分、埃尔德分、买入区间、风险状态等字段，用户可自行筛选和排序。"},
             {"section": "字段命名", "description": "字段命名采用“中文名称（英文名）”格式。中文名称用于理解含义，英文名用于和代码、数据库字段或导出字段对应。"},
             {"section": "观察池", "description": "04_观察池是当前观察名单，展示当前仍需跟踪的股票，不代表买入清单。"},
-            {"section": "观察池跟踪", "description": "05_观察池跟踪是观察池每日快照，用于查看观察股票在不同交易日的分数、状态和技术复核变化，不代表买入优先级。"},
+            {"section": "观察池历史", "description": "观察池历史、退出、归档和失效记录保留在后台表中，每日研究工作簿默认只展示当前观察池。"},
+            {"section": "埃尔德复核", "description": "Elder 复核已作为今日候选和当前观察池的附加判断字段展示，不再单独输出股票明细。"},
             {"section": "买入区间", "description": "买入区间、止损价、目标价、盈亏比是研究计划参考，不是交易指令。"},
             {"section": "只读原则", "description": "导出命令只读取 DuckDB，不更新行情、不重算因子、不改变 total_score。"},
             {"section": "缺失数据", "description": "某些工作表显示暂无数据时，请先运行对应本地命令生成持久化结果。"},
@@ -877,6 +839,23 @@ def _preferred_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
     available = [column for column in columns if column in frame.columns]
     return frame.loc[:, available].copy()
+
+
+def _ensure_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    result = frame.copy()
+    for column in columns:
+        if column not in result.columns:
+            result[column] = pd.NA
+    return result
+
+
+def _embedded_elder_row_count(strategy: pd.DataFrame, watchlist: pd.DataFrame) -> int:
+    total = 0
+    for frame in [strategy, watchlist]:
+        if frame.empty or "message" in frame.columns or "elder_score" not in frame.columns:
+            continue
+        total += int(pd.to_numeric(frame["elder_score"], errors="coerce").notna().sum())
+    return total
 
 
 def _with_display_order(frame: pd.DataFrame) -> pd.DataFrame:

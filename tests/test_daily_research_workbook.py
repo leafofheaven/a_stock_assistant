@@ -12,8 +12,11 @@ import pandas as pd
 from core.factors.scoring import DEFAULT_WEIGHTS
 from core.jobs.export_daily_research_workbook import (
     SHEET_NAMES,
+    _build_data_quality_sheet,
+    _help_sheet,
     export_daily_research_workbook,
     _resolve_output_path,
+    _settings_sheet,
 )
 from core.storage.duckdb_store import DuckDBStore
 
@@ -178,24 +181,18 @@ def test_lookback_report_path_is_recorded_in_daily_workbook_summary(tmp_path: Pa
     assert ("完整回看报告路径", "/tmp/lookback.xlsx") in rows
 
 
-def test_elder_review_sheet_fields(tmp_path: Path) -> None:
-    """Elder review sheet should expose review fields without candidate rank."""
+def test_elder_review_sheet_removed(tmp_path: Path) -> None:
+    """Elder review should be embedded into candidate/watchlist sheets, not a standalone sheet."""
     store = _seed_store(tmp_path)
     output = tmp_path / "daily_research.xlsx"
 
     export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
 
-    headers = _headers(load_workbook(output)["02_埃尔德复核"])
-    for header in [
-        "埃尔德分（elder_score）",
-        "操作提示（action_hint）",
-        "复核原因（elder_reason）",
-        "周线趋势（weekly_trend）",
-        "日线回调（daily_pullback）",
-    ]:
-        assert header in headers
-    assert "candidate_rank" not in headers
-    assert "rank" not in headers
+    workbook = load_workbook(output)
+    assert "02_埃尔德复核" not in workbook.sheetnames
+    candidate_headers = _headers(workbook["01_今日候选"])
+    for header in ["埃尔德分（elder_score）", "操作提示（action_hint）", "复核原因（elder_reason）"]:
+        assert header in candidate_headers
 
 
 def test_watchlist_sheet_hides_rank_fields(tmp_path: Path) -> None:
@@ -211,23 +208,14 @@ def test_watchlist_sheet_hides_rank_fields(tmp_path: Path) -> None:
     assert not (FORBIDDEN_RANK_HEADERS & set(headers))
 
 
-def test_watchlist_tracking_sheet_hides_rank_fields(tmp_path: Path) -> None:
-    """Watchlist tracking should keep non-rank tracking fields and hide rank changes."""
+def test_watchlist_tracking_sheet_removed(tmp_path: Path) -> None:
+    """Watchlist tracking details should not be exported as a main daily sheet."""
     store = _seed_store(tmp_path)
     output = tmp_path / "daily_research.xlsx"
 
     export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
 
-    headers = _headers(load_workbook(output)["05_观察池跟踪"])
-    for header in [
-        "综合分（total_score）",
-        "综合分变化（total_score_change）",
-        "近5日入选次数（selected_count_5d）",
-        "近10日入选次数（selected_count_10d）",
-        "连续入选天数（consecutive_selected_days）",
-    ]:
-        assert header in headers
-    assert not (FORBIDDEN_RANK_HEADERS & set(headers))
+    assert "05_观察池跟踪" not in load_workbook(output).sheetnames
 
 
 def test_workbook_export_is_read_only_for_duckdb(tmp_path: Path) -> None:
@@ -245,7 +233,7 @@ def test_workbook_export_is_read_only_for_duckdb(tmp_path: Path) -> None:
 
 
 def test_workbook_filters_sensitive_settings(tmp_path: Path) -> None:
-    """Settings sheet must not expose token/key/password/secret values."""
+    """Settings helper must not expose token/key/password/secret values."""
     store = _seed_store(tmp_path)
     settings = SimpleNamespace(
         duckdb_path=store.db_path,
@@ -256,51 +244,32 @@ def test_workbook_filters_sensitive_settings(tmp_path: Path) -> None:
         password="SECRET_PASSWORD",
         extra_value="sk-proj-SECRET",
     )
-    output = tmp_path / "daily_research.xlsx"
-
-    export_daily_research_workbook(output_path=output, settings=settings, store=store)
-
-    values = [
-        cell.value
-        for row in load_workbook(output)["09_参数配置"].iter_rows()
-        for cell in row
-        if cell.value is not None
-    ]
-    joined = "\n".join(str(value) for value in values)
+    sheet = _settings_sheet(settings)
+    joined = "\n".join(str(value) for value in sheet.to_numpy().flatten().tolist())
     assert "SECRET" not in joined
-    assert "配置项（config_key）" in joined
     assert "duckdb_path" in joined
     assert "real_universe_preset" in joined
 
 
 def test_data_quality_missing_values_wording(tmp_path: Path) -> None:
-    """Missing values should not be described as missing fields."""
+    """Data-quality helper should not describe missing values as missing fields."""
     store = _seed_store(tmp_path)
-    output = tmp_path / "daily_research.xlsx"
 
-    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
-
-    values = _sheet_values(load_workbook(output)["08_数据质量"])
-    joined = "\n".join(str(value) for value in values)
+    frame = _build_data_quality_sheet(store, "20260630")
+    joined = "\n".join(str(value) for value in frame.to_numpy().flatten().tolist())
     assert "基本面分（fundamental_score）缺失记录数" in joined
     assert "字段缺失：fundamental_score" not in joined
     assert "字段缺失：{'fundamental_score'" not in joined
 
 
 def test_explanation_sheet_defines_no_rank_policy(tmp_path: Path) -> None:
-    """Explanation sheet should explain sequence, field naming, and no-rank policy."""
-    store = _seed_store(tmp_path)
-    output = tmp_path / "daily_research.xlsx"
-
-    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
-
-    values = _sheet_values(load_workbook(output)["10_说明"])
+    """Explanation helper should explain sequence, field naming, and no-rank policy."""
+    values = _help_sheet().to_numpy().flatten().tolist()
     joined = "\n".join(str(value) for value in values)
     assert "默认不导出 rank / 排名字段" in joined
     assert "序号只代表当前 Sheet 当前显示顺序，不代表买入优先级" in joined
     assert "中文名称（英文名）" in joined
     assert "04_观察池是当前观察名单" in joined
-    assert "05_观察池跟踪是观察池每日快照" in joined
     assert "不是交易指令" in joined
 
 
@@ -437,6 +406,10 @@ def _seed_store(tmp_path: Path) -> DuckDBStore:
                     "elder_score": 62.0,
                     "action_hint": "趋势尚可，等待回调",
                     "elder_reason": "节奏复核",
+                    "weekly_trend": "改善",
+                    "daily_pullback": "接近均线",
+                    "force_signal": "转强",
+                    "elder_ray_signal": "多头改善",
                 }
             ]
         ),
