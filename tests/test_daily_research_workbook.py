@@ -12,9 +12,11 @@ import pandas as pd
 from core.factors.scoring import DEFAULT_WEIGHTS
 from core.jobs.export_daily_research_workbook import (
     SHEET_NAMES,
+    WorkbookExportResult,
     _build_data_quality_sheet,
     _help_sheet,
     export_daily_research_workbook,
+    main as export_workbook_main,
     _resolve_output_path,
     _settings_sheet,
 )
@@ -30,6 +32,7 @@ def test_export_daily_research_workbook_writes_required_sheets(tmp_path: Path) -
         output_path=output,
         settings=_settings(store),
         store=store,
+        lookback_status_path=tmp_path / "missing_lookback.json",
     )
 
     workbook = load_workbook(output)
@@ -151,8 +154,10 @@ def test_daily_research_workbook_handles_missing_lookback_status(tmp_path: Path)
 
     export_daily_research_workbook(output_path=output, settings=_settings(store), store=store, lookback_status_path=tmp_path / "missing.json")
 
-    sheet = load_workbook(output)["11_自动回看摘要"]
-    assert sheet["A2"].value == "尚无自动回看记录。"
+    workbook = load_workbook(output)
+    assert "11_自动回看摘要" not in workbook.sheetnames
+    summary_values = _sheet_values(workbook["00_摘要"])
+    assert "尚无自动回看记录。" in summary_values
 
 
 def test_daily_research_workbook_does_not_embed_full_lookback_detail(tmp_path: Path) -> None:
@@ -179,6 +184,104 @@ def test_lookback_report_path_is_recorded_in_daily_workbook_summary(tmp_path: Pa
     sheet = load_workbook(output)["00_摘要"]
     rows = {(sheet.cell(row=i, column=1).value, sheet.cell(row=i, column=2).value) for i in range(2, sheet.max_row + 1)}
     assert ("完整回看报告路径", "/tmp/lookback.xlsx") in rows
+
+
+def test_entry_zone_sheet_does_not_fallback_to_stale_trade_date(tmp_path: Path) -> None:
+    """Entry zone rows must align to the workbook research date."""
+    store = _seed_store(tmp_path)
+    store.upsert_dataframe(
+        "entry_zone_snapshots",
+        pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "name": "平安银行",
+                    "trade_date": "20260703",
+                    "close": 10.5,
+                    "entry_low": 9.8,
+                    "entry_high": 10.2,
+                    "entry_mid": 10.0,
+                    "stop_loss": 9.2,
+                    "target_price": 11.6,
+                    "reward_risk_ratio": 2.0,
+                    "entry_zone_status": "near_zone",
+                    "source": "selection",
+                }
+            ]
+        ),
+    )
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(trade_date="20260706", output_path=output, settings=_settings(store), store=store)
+
+    sheet = load_workbook(output)["03_买入区间"]
+    assert "交易日期（trade_date）" in _headers(sheet)
+    assert "20260703" not in _sheet_values(sheet)
+    assert sheet.max_row == 1
+
+
+def test_stale_lookback_status_is_not_expanded(tmp_path: Path) -> None:
+    """Old lookback summaries should be skipped for a newer daily workbook."""
+    store = _seed_store(tmp_path)
+    status_path = _write_lookback_status(tmp_path, as_of_trade_date="20260703")
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(trade_date="20260706", output_path=output, settings=_settings(store), store=store, lookback_status_path=status_path)
+
+    workbook = load_workbook(output)
+    assert "11_自动回看摘要" not in workbook.sheetnames
+    summary_values = _sheet_values(workbook["00_摘要"])
+    assert "自动回看：最近回看截止 20260703，早于当前研究日期 20260706，本日报未展开旧回看摘要。" in summary_values
+
+
+def test_uninformative_lookback_status_is_not_expanded(tmp_path: Path) -> None:
+    """Lookback statuses with no usable samples should stay out of the daily workbook."""
+    store = _seed_store(tmp_path)
+    status_path = _write_lookback_status(
+        tmp_path,
+        as_of_trade_date="20260630",
+        candidate_sample_count=0,
+        valid_sample_count=0,
+        total_score_group_summary="暂无可统计样本",
+        elder_review_summary="暂无可统计样本",
+        entry_zone_summary="暂无可统计样本",
+        watchlist_summary="暂无可统计样本",
+        key_findings="暂无可统计样本",
+    )
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store, lookback_status_path=status_path)
+
+    workbook = load_workbook(output)
+    assert "11_自动回看摘要" not in workbook.sheetnames
+    assert "自动回看：最近回看有效样本不足，本日报未展开回看摘要。" in _sheet_values(workbook["00_摘要"])
+
+
+def test_export_log_uses_elder_field_wording(tmp_path: Path, capsys, monkeypatch) -> None:
+    """CLI output should not imply a standalone Elder review sheet still exists."""
+    output = tmp_path / "daily_research.xlsx"
+    import core.jobs.export_daily_research_workbook as export_module
+
+    def fake_export(**_: object) -> WorkbookExportResult:
+        return WorkbookExportResult(
+            output_path=output,
+            trade_date="20260706",
+            strategy_rows=10,
+            elder_rows=40,
+            entry_zone_rows=0,
+            watchlist_rows=30,
+            external_position_rows=0,
+            lookback_summary_rows=0,
+        )
+
+    monkeypatch.setattr(export_module, "export_daily_research_workbook", fake_export)
+
+    exit_code = export_workbook_main(["--output", str(output), "--lookback-status-path", str(tmp_path / "missing.json")])
+
+    captured = capsys.readouterr().out
+    assert exit_code == 0
+    assert "埃尔德复核:" not in captured
+    assert "Elder 字段补充:" in captured
 
 
 def test_elder_review_sheet_removed(tmp_path: Path) -> None:
@@ -449,24 +552,35 @@ def _settings(store: DuckDBStore) -> SimpleNamespace:
     )
 
 
-def _write_lookback_status(tmp_path: Path) -> Path:
+def _write_lookback_status(
+    tmp_path: Path,
+    *,
+    as_of_trade_date: str = "20260630",
+    candidate_sample_count: int = 30,
+    valid_sample_count: int = 24,
+    total_score_group_summary: str = "综合分分组摘要",
+    elder_review_summary: str = "埃尔德复核摘要",
+    entry_zone_summary: str = "买入区间摘要",
+    watchlist_summary: str = "观察池状态摘要",
+    key_findings: str = "主要发现",
+) -> Path:
     status_path = tmp_path / "lookback_status.json"
     status_path.write_text(
         json.dumps(
             {
                 "status": "success",
-                "as_of_trade_date": "20260630",
+                "as_of_trade_date": as_of_trade_date,
                 "start_date": "20260601",
-                "end_date": "20260630",
+                "end_date": as_of_trade_date,
                 "horizons": [1, 3, 5, 10, 20],
-                "candidate_sample_count": 30,
-                "valid_sample_count": 24,
+                "candidate_sample_count": candidate_sample_count,
+                "valid_sample_count": valid_sample_count,
                 "insufficient_forward_data_count": 6,
-                "total_score_group_summary": "综合分分组摘要",
-                "elder_review_summary": "埃尔德复核摘要",
-                "entry_zone_summary": "买入区间摘要",
-                "watchlist_summary": "观察池状态摘要",
-                "key_findings": "主要发现",
+                "total_score_group_summary": total_score_group_summary,
+                "elder_review_summary": elder_review_summary,
+                "entry_zone_summary": entry_zone_summary,
+                "watchlist_summary": watchlist_summary,
+                "key_findings": key_findings,
                 "data_quality_summary": "数据质量提示",
                 "generated_report_path": "/tmp/lookback.xlsx",
             },

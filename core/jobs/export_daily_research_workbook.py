@@ -25,7 +25,6 @@ SHEET_NAMES = [
     "03_买入区间",
     "04_观察池",
     "06_外部模拟持仓",
-    "11_自动回看摘要",
 ]
 
 SENSITIVE_KEYWORDS = ("token", "key", "password", "secret", "api密钥", "smtp")
@@ -233,7 +232,8 @@ def export_daily_research_workbook(
     external_sheet = _latest_external_positions(external_positions)
     data_quality_snapshot = _safe_data_quality_snapshot(resolved_store, selected_trade_date)
     lookback_status = _read_lookback_status(lookback_status_path)
-    lookback_sheet = _build_lookback_summary_sheet(lookback_status)
+    include_lookback_summary, lookback_note = _lookback_summary_decision(lookback_status, selected_trade_date)
+    lookback_sheet = _build_lookback_summary_sheet(lookback_status) if include_lookback_summary else pd.DataFrame()
     embedded_elder_rows = _embedded_elder_row_count(strategy_sheet, watchlist_sheet)
     summary_sheet = _build_summary_sheet(
         selected_trade_date=selected_trade_date,
@@ -243,7 +243,8 @@ def export_daily_research_workbook(
         entry_zone_rows=len(entry_sheet),
         watchlist_rows=len(watchlist_sheet),
         external_position_rows=len(external_sheet),
-        lookback_status=lookback_status,
+        lookback_status=lookback_status if include_lookback_summary else None,
+        lookback_note=lookback_note,
         data_quality_snapshot=data_quality_snapshot,
     )
 
@@ -258,9 +259,12 @@ def export_daily_research_workbook(
         "03_买入区间": entry_sheet,
         "04_观察池": _empty_if_needed(watchlist_sheet, "暂无观察池跟踪数据。"),
         "06_外部模拟持仓": _empty_if_needed(external_sheet, "暂无外部模拟持仓数据。"),
-        "11_自动回看摘要": lookback_sheet,
     }
-    for sheet_name in SHEET_NAMES:
+    ordered_sheet_names = [*SHEET_NAMES]
+    if include_lookback_summary:
+        sheets["11_自动回看摘要"] = lookback_sheet
+        ordered_sheet_names.append("11_自动回看摘要")
+    for sheet_name in ordered_sheet_names:
         _write_sheet(workbook, sheet_name, sheets[sheet_name])
     workbook.save(resolved_output)
 
@@ -321,6 +325,25 @@ def _latest_by_date(frame: pd.DataFrame, date_column: str, preferred_date: str =
         return pd.DataFrame()
     selected_date = preferred_date if preferred_date and preferred_date in set(dates) else dates.max()
     return frame[frame[date_column].astype(str) == selected_date].copy()
+
+
+def _rows_at_date(frame: pd.DataFrame, date_column: str, trade_date: str) -> pd.DataFrame:
+    if frame.empty or date_column not in frame.columns or not trade_date:
+        return pd.DataFrame()
+    normalized_target = _normalize_trade_date(trade_date)
+    normalized_dates = frame[date_column].map(_normalize_trade_date)
+    return frame[normalized_dates == normalized_target].copy()
+
+
+def _normalize_trade_date(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return value.strftime("%Y%m%d")
+    text = str(value).strip()
+    if not text:
+        return ""
+    return text.replace("-", "")[:8]
 
 
 def _build_strategy_sheet(strategy: pd.DataFrame, trade_date: str, price_df: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -407,11 +430,6 @@ def _build_entry_zone_sheet(
     watchlist: pd.DataFrame,
     trade_date: str,
 ) -> pd.DataFrame:
-    frame = _latest_by_date(entry_zones, "trade_date", trade_date)
-    if frame.empty:
-        return _message_frame("暂无买入区间结果。请先运行 python -m core.jobs.calculate_entry_zones。")
-    if "source" not in frame.columns:
-        frame["source"] = ""
     columns = [
         "display_order",
         "source",
@@ -445,6 +463,13 @@ def _build_entry_zone_sheet(
         "entry_reason",
         "risk_note",
     ]
+    frame = _rows_at_date(entry_zones, "trade_date", trade_date)
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    if "source" not in frame.columns:
+        frame["source"] = ""
+    if "source" in frame.columns:
+        frame = frame[frame["source"].fillna("").astype(str).isin({"selection", "watchlist", ""})].copy()
     return _with_display_order(_preferred_columns(frame, columns))
 
 
@@ -719,6 +744,7 @@ def _build_summary_sheet(
     watchlist_rows: int,
     external_position_rows: int,
     lookback_status: dict[str, Any] | None = None,
+    lookback_note: str = "",
     data_quality_snapshot: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     rows = [
@@ -751,7 +777,7 @@ def _build_summary_sheet(
             ]
         )
     else:
-        rows.append({"metric": "最近一次自动回看状态", "value": "尚无自动回看记录。"})
+        rows.append({"metric": "最近一次自动回看状态", "value": lookback_note or "尚无自动回看记录。"})
     rows.extend(
         [
             {"metric": "输出文件", "value": str(output_path or "默认 reports/daily_research_*.xlsx")},
@@ -783,6 +809,47 @@ def _read_lookback_status(status_path: str | Path | None = None) -> dict[str, An
     except Exception:
         return {"status": "failed", "summary": "自动回看状态文件不可读。"}
     return payload if isinstance(payload, dict) else None
+
+
+def _lookback_summary_decision(status: dict[str, Any] | None, trade_date: str) -> tuple[bool, str]:
+    """Decide whether a lookback status should be expanded in this workbook."""
+    if not status:
+        return False, "尚无自动回看记录。"
+    status_date = _normalize_trade_date(status.get("as_of_trade_date") or status.get("end_date") or "")
+    workbook_date = _normalize_trade_date(trade_date)
+    if workbook_date and status_date and status_date < workbook_date:
+        return False, f"自动回看：最近回看截止 {status_date}，早于当前研究日期 {workbook_date}，本日报未展开旧回看摘要。"
+    valid_count = _safe_int(status.get("valid_sample_count"))
+    candidate_count = _safe_int(status.get("candidate_sample_count"))
+    if valid_count <= 0 or candidate_count <= 0:
+        return False, "自动回看：最近回看有效样本不足，本日报未展开回看摘要。"
+    if _lookback_summary_is_uninformative(status):
+        return False, "自动回看：最近回看暂无可统计样本，本日报未展开回看摘要。"
+    return True, ""
+
+
+def _lookback_summary_is_uninformative(status: dict[str, Any]) -> bool:
+    fields = [
+        "total_score_group_summary",
+        "elder_review_summary",
+        "entry_zone_summary",
+        "watchlist_summary",
+        "key_findings",
+    ]
+    values = [str(status.get(field) or "").strip() for field in fields]
+    non_empty = [value for value in values if value]
+    if not non_empty:
+        return True
+    return all(("暂无可统计样本" in value or "无样本" in value) for value in non_empty)
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        if pd.isna(value):
+            return 0
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _build_lookback_summary_sheet(status: dict[str, Any] | None) -> pd.DataFrame:
@@ -889,7 +956,7 @@ def _resolve_output_path(output_path: str | Path | None, trade_date: str) -> Pat
 def _write_sheet(workbook: Workbook, sheet_name: str, frame: pd.DataFrame) -> None:
     worksheet = workbook.create_sheet(sheet_name)
     frame = _prepare_for_excel(frame)
-    if frame.empty:
+    if frame.empty and len(frame.columns) == 0:
         frame = _prepare_for_excel(_message_frame("暂无数据。"))
     worksheet.append(list(frame.columns))
     for row in frame.itertuples(index=False):
@@ -1003,7 +1070,7 @@ def main(argv: list[str] | None = None) -> int:
     print("每日研究工作簿导出完成")
     print(f"研究日期: {result.trade_date or '暂无'}")
     print(f"今日候选: {result.strategy_rows}")
-    print(f"埃尔德复核: {result.elder_rows}")
+    print(f"Elder 字段补充: {result.elder_rows}")
     print(f"买入区间: {result.entry_zone_rows}")
     print(f"观察池: {result.watchlist_rows}")
     print(f"外部模拟持仓: {result.external_position_rows}")
