@@ -74,6 +74,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task58": check_task58,
         "task59": check_task59,
         "task59b": check_task59b,
+        "task59c": check_task59c,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -3880,6 +3881,61 @@ def check_task59b(root: Path) -> list[str]:
     return failures
 
 
+def check_task59c(root: Path) -> list[str]:
+    """Check Task 59C report buy-zone and lookback status alignment."""
+    failures: list[str] = []
+    required_paths = [
+        "core/jobs/export_daily_research_workbook.py",
+        "web/streamlit_app.py",
+        "tests/test_task59c_report_buyzone_lookback_repair.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+
+    workbook_source = read_source(root / "core/jobs/export_daily_research_workbook.py")
+    for phrase in [
+        "build_daily_research_view_from_frames",
+        "_ensure_entry_zones_for_trade_date",
+        "calculate_entry_zones",
+        "_build_entry_zone_sheet",
+        "_visible_research_codes",
+        "drop_duplicates(\"ts_code\"",
+        "selection",
+        "watchlist",
+        "_build_lookback_status_sheet",
+        "需要刷新当日回看",
+        "Elder 字段补充",
+    ]:
+        if phrase not in workbook_source:
+            failures.append(f"core/jobs/export_daily_research_workbook.py is missing Task 59C phrase: {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "build_daily_research_view_from_frames",
+        "_daily_research_selection",
+        "_daily_research_watchlist",
+        "_daily_research_entry_zones",
+        "planned_update_trade_date",
+        "current_research_trade_date",
+        "latest_local_trade_date",
+        "Task 60 TODO",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 59C phrase: {phrase}.")
+
+    tests_source = read_source(root / "tests/test_task59c_report_buyzone_lookback_repair.py")
+    for phrase in [
+        "test_export_autocalculates_same_day_entry_zones_when_missing",
+        "test_entry_zone_sheet_uses_visible_candidate_and_watchlist_scope",
+        "test_entry_zone_duplicate_prefers_selection_source",
+        "test_stale_lookback_creates_refresh_status_sheet",
+        "test_same_day_valid_lookback_keeps_summary_sheet",
+        "test_status_page_uses_latest_local_research_date_when_planned_date_has_zero_coverage",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_task59c_report_buyzone_lookback_repair.py is missing {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -3974,6 +4030,7 @@ def main(argv: list[str] | None = None) -> int:
             "task58",
             "task59",
             "task59b",
+            "task59c",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

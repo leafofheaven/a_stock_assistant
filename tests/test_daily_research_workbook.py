@@ -36,7 +36,7 @@ def test_export_daily_research_workbook_writes_required_sheets(tmp_path: Path) -
     )
 
     workbook = load_workbook(output)
-    assert workbook.sheetnames == SHEET_NAMES
+    assert workbook.sheetnames == [*SHEET_NAMES, "11_自动回看状态"]
     assert result.strategy_rows == 2
     assert result.entry_zone_rows == 2
     assert result.watchlist_rows == 1
@@ -155,9 +155,8 @@ def test_daily_research_workbook_handles_missing_lookback_status(tmp_path: Path)
     export_daily_research_workbook(output_path=output, settings=_settings(store), store=store, lookback_status_path=tmp_path / "missing.json")
 
     workbook = load_workbook(output)
-    assert "11_自动回看摘要" not in workbook.sheetnames
-    summary_values = _sheet_values(workbook["00_摘要"])
-    assert "尚无自动回看记录。" in summary_values
+    assert "11_自动回看状态" in workbook.sheetnames
+    assert "尚无自动回看记录。" in _sheet_values(workbook["00_摘要"])
 
 
 def test_daily_research_workbook_does_not_embed_full_lookback_detail(tmp_path: Path) -> None:
@@ -229,9 +228,10 @@ def test_stale_lookback_status_is_not_expanded(tmp_path: Path) -> None:
     export_daily_research_workbook(trade_date="20260706", output_path=output, settings=_settings(store), store=store, lookback_status_path=status_path)
 
     workbook = load_workbook(output)
-    assert "11_自动回看摘要" not in workbook.sheetnames
+    assert "11_自动回看状态" in workbook.sheetnames
     summary_values = _sheet_values(workbook["00_摘要"])
-    assert "自动回看：最近回看截止 20260703，早于当前研究日期 20260706，本日报未展开旧回看摘要。" in summary_values
+    assert "自动回看：最近回看截止 20260703，当前研究日期 20260706 需要刷新当日回看；本日报不把旧回看冒充当日结果。" in "\n".join(str(value) for value in summary_values)
+    assert "需要刷新当日回看" in "\n".join(str(value) for value in _sheet_values(workbook["11_自动回看状态"]))
 
 
 def test_uninformative_lookback_status_is_not_expanded(tmp_path: Path) -> None:
@@ -253,7 +253,7 @@ def test_uninformative_lookback_status_is_not_expanded(tmp_path: Path) -> None:
     export_daily_research_workbook(output_path=output, settings=_settings(store), store=store, lookback_status_path=status_path)
 
     workbook = load_workbook(output)
-    assert "11_自动回看摘要" not in workbook.sheetnames
+    assert "11_自动回看状态" in workbook.sheetnames
     assert "自动回看：最近回看有效样本不足，本日报未展开回看摘要。" in _sheet_values(workbook["00_摘要"])
 
 

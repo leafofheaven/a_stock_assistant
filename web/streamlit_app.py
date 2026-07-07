@@ -37,6 +37,7 @@ from core.config.env_file import masked_env_values, parse_stock_symbols, read_en
 from core.runtime.command_runner import ALLOWED_COMMANDS, open_project_path, run_command_streaming
 from core.jobs.market_data_progress import DEFAULT_PROGRESS_PATH, read_market_data_progress
 from core.jobs.run_scheduled_daily_update import DEFAULT_STATUS_PATH, read_scheduled_status
+from core.jobs.export_daily_research_workbook import build_daily_research_view_from_frames
 from core.runtime.progress import parse_progress_line
 from core.technical.elder import build_elder_review
 from core.external_positions.importer import position_template_frame, trade_template_frame
@@ -237,7 +238,12 @@ def enrich_with_entry_zone_fields(df: pd.DataFrame, tables: dict[str, Any]) -> p
     """Attach latest entry zone fields by ts_code without changing row order."""
     if df.empty or "ts_code" not in df.columns:
         return df.copy()
-    entry_zones = _latest_entry_zone_snapshot(tables.get("entry_zone_snapshots", pd.DataFrame()))
+    if "_daily_research_entry_zones" in tables:
+        entry_zones = tables.get("_daily_research_entry_zones", pd.DataFrame())
+        if not isinstance(entry_zones, pd.DataFrame):
+            entry_zones = pd.DataFrame()
+    else:
+        entry_zones = _latest_entry_zone_snapshot(tables.get("entry_zone_snapshots", pd.DataFrame()))
     if entry_zones.empty or "ts_code" not in entry_zones.columns:
         return df.copy()
     fields = [
@@ -567,6 +573,8 @@ def load_dashboard_data() -> dict[str, Any]:
         tables["_watchlist_snapshot"] = watchlist_snapshot
         dashboard_price = _safe_read_dashboard_price_history(store, tables, watchlist=watchlist, positions=positions)
         tables["_dashboard_price_history"] = dashboard_price
+        research_view = _build_dashboard_daily_research_view(tables, dashboard_price)
+        _apply_daily_research_view_to_tables(tables, research_view)
         return {
             "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据（尚未生成本地选股结果）",
             "selection": pd.DataFrame(columns=SELECTION_COLUMNS),
@@ -576,7 +584,7 @@ def load_dashboard_data() -> dict[str, Any]:
             "factor_scores": tables["factor_scores"],
             "backtest": {},
             "watchlist": watchlist,
-            "watchlist_snapshot": watchlist_snapshot,
+            "watchlist_snapshot": research_view.watchlist_sheet if research_view is not None else watchlist_snapshot,
             "positions": positions,
             "tables": tables,
         }
@@ -595,16 +603,18 @@ def load_dashboard_data() -> dict[str, Any]:
     tables["_watchlist_snapshot"] = watchlist_snapshot
     dashboard_price = _safe_read_dashboard_price_history(store, tables, watchlist=watchlist, positions=positions)
     tables["_dashboard_price_history"] = dashboard_price
+    research_view = _build_dashboard_daily_research_view(tables, dashboard_price)
+    _apply_daily_research_view_to_tables(tables, research_view)
     return {
         "data_source": f"{settings.data_provider} 本地 DuckDB 真实数据",
-        "selection": tables["strategy_result"],
+        "selection": research_view.strategy_sheet if research_view is not None else tables["strategy_result"],
         "stock_basic": tables["stock_basic"],
         "price": dashboard_price,
         "daily_basic": tables["daily_basic"],
         "factor_scores": tables["factor_scores"],
         "backtest": {},
         "watchlist": watchlist,
-        "watchlist_snapshot": watchlist_snapshot,
+        "watchlist_snapshot": research_view.watchlist_sheet if research_view is not None else watchlist_snapshot,
         "positions": positions,
         "tables": tables,
     }
@@ -627,6 +637,32 @@ def _safe_load_dashboard_tables(store: Any) -> dict[str, pd.DataFrame]:
         "external_trades": _safe_read_store_table(store, "external_trades", limit=10000),
     }
     return tables
+
+
+def _build_dashboard_daily_research_view(tables: dict[str, pd.DataFrame], price_df: pd.DataFrame):
+    """Build Streamlit-visible research tables using the workbook display scope."""
+    trade_date = _latest_date(tables.get("strategy_result", pd.DataFrame()), "trade_date") or _latest_date(tables.get("daily_price", pd.DataFrame()), "trade_date") or ""
+    try:
+        return build_daily_research_view_from_frames(
+            strategy=tables.get("strategy_result", pd.DataFrame()),
+            entry_zones=tables.get("entry_zone_snapshots", pd.DataFrame()),
+            watchlist=tables.get("_watchlist_snapshot", pd.DataFrame()),
+            external_positions=tables.get("external_position_snapshots", pd.DataFrame()),
+            daily_price=price_df,
+            trade_date=trade_date,
+            lookback_status=_read_lookback_status(),
+        )
+    except Exception:
+        return None
+
+
+def _apply_daily_research_view_to_tables(tables: dict[str, Any], view: Any | None) -> None:
+    if view is None:
+        return
+    tables["_daily_research_trade_date"] = view.trade_date
+    tables["_daily_research_selection"] = view.strategy_sheet
+    tables["_daily_research_watchlist"] = view.watchlist_sheet
+    tables["_daily_research_entry_zones"] = view.entry_sheet
 
 
 def _safe_read_dashboard_price_history(
@@ -1180,7 +1216,12 @@ def _render_watchlist_tab(st: Any, watchlist_df: pd.DataFrame, snapshot_df: pd.D
 def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
     st.subheader("买入区间分析")
     st.caption("仅供个人研究使用，不自动交易。")
-    entry_zones = _latest_entry_zone_snapshot(tables.get("entry_zone_snapshots", pd.DataFrame()))
+    if "_daily_research_entry_zones" in tables:
+        entry_zones = tables.get("_daily_research_entry_zones", pd.DataFrame())
+        if not isinstance(entry_zones, pd.DataFrame):
+            entry_zones = pd.DataFrame()
+    else:
+        entry_zones = _latest_entry_zone_snapshot(tables.get("entry_zone_snapshots", pd.DataFrame()))
     if entry_zones.empty:
         st.info("暂无买入区间快照。请运行 python -m core.jobs.calculate_entry_zones。")
         return
@@ -1605,23 +1646,41 @@ def _safe_render_status_block(st: Any, label: str, func: Any, *args: Any) -> Non
 
 def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: dict[str, Any], legacy_status: dict[str, Any]) -> dict[str, Any]:
     """Return the authoritative quality snapshot for the status page."""
-    if scheduled.get("data_quality_snapshot_source") and scheduled.get("latest_daily_price_symbol_count") is not None:
-        return dict(scheduled)
-    db_path = str(tables.get("_duckdb_path") or legacy_status.get("duckdb_path") or "")
-    target_date = str(
-        scheduled.get("latest_completed_trade_date")
-        or scheduled.get("research_trade_date")
+    # Task 60 TODO: replace this lightweight split with exchange-calendar and intraday/after-close target-date logic.
+    planned_date = _compact_date(scheduled.get("latest_completed_trade_date") or scheduled.get("research_trade_date") or "")
+    current_research_date = _compact_date(
+        legacy_status.get("latest_selection_date")
         or legacy_status.get("latest_trade_date")
         or legacy_status.get("latest_price_date")
         or ""
     )
+    if scheduled.get("data_quality_snapshot_source") and scheduled.get("latest_daily_price_symbol_count") is not None:
+        scheduled_date = _compact_date(scheduled.get("latest_completed_trade_date") or scheduled.get("research_trade_date") or "")
+        latest_count = int(scheduled.get("latest_daily_price_symbol_count", 0) or 0)
+        if not (current_research_date and scheduled_date > current_research_date and latest_count == 0):
+            result = dict(scheduled)
+            result.setdefault("planned_update_trade_date", planned_date or scheduled_date)
+            result.setdefault("current_research_trade_date", current_research_date or scheduled_date)
+            result.setdefault("latest_local_trade_date", current_research_date or scheduled_date)
+            return result
+    db_path = str(tables.get("_duckdb_path") or legacy_status.get("duckdb_path") or "")
+    target_date = current_research_date or planned_date
     if db_path and target_date:
         try:
-            return build_data_quality_snapshot(
+            result = build_data_quality_snapshot(
                 db_path=db_path,
                 research_trade_date=target_date,
                 latest_completed_trade_date=target_date,
             )
+            result["planned_update_trade_date"] = planned_date or target_date
+            result["current_research_trade_date"] = target_date
+            result["latest_local_trade_date"] = current_research_date or target_date
+            if planned_date and planned_date != target_date:
+                result["formal_result_warning_reason"] = (
+                    f"当前研究展示日期为 {target_date}；计划更新目标交易日为 {planned_date}，"
+                    "其覆盖情况不代表当前研究结果。"
+                )
+            return result
         except Exception:
             pass
     return {
@@ -1631,7 +1690,15 @@ def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: di
         "configured_symbol_count": int(legacy_status.get("configured_symbol_count", 0) or 0),
         "research_trade_date": target_date,
         "latest_completed_trade_date": target_date,
+        "planned_update_trade_date": planned_date or target_date,
+        "current_research_trade_date": target_date,
+        "latest_local_trade_date": current_research_date or target_date,
     }
+
+
+def _compact_date(value: Any) -> str:
+    text = str(value or "").strip()
+    return text.replace("-", "")[:8] if text else ""
 
 
 def _render_status_quality_main(st: Any, scheduled: dict[str, Any], status: dict[str, Any]) -> None:
@@ -1662,7 +1729,9 @@ def _status_conclusion_row(scheduled: dict[str, Any], status: dict[str, Any]) ->
     return {
         "流程状态": scheduled.get("status") or "暂无",
         "当前阶段": scheduled.get("stage") or "暂无",
-        "研究交易日": status.get("latest_completed_trade_date") or status.get("research_trade_date") or scheduled.get("research_trade_date") or "暂无",
+        "最新本地可用交易日": status.get("latest_local_trade_date") or "暂无",
+        "计划更新目标交易日": status.get("planned_update_trade_date") or "暂无",
+        "当前研究展示日期": status.get("current_research_trade_date") or status.get("latest_completed_trade_date") or status.get("research_trade_date") or "暂无",
         "数据质量": status.get("data_quality_status") or "unknown",
         "核心价格行情": "可用" if status.get("core_price_data_usable") is True else "不足",
         "技术指标研究": "可用" if status.get("technical_research_usable") is True else "不足",

@@ -191,6 +191,20 @@ class WorkbookExportResult:
     lookback_summary_rows: int = 0
 
 
+@dataclass(frozen=True)
+class DailyResearchView:
+    """User-visible daily research tables shared by Excel and Streamlit."""
+
+    trade_date: str
+    strategy_sheet: pd.DataFrame
+    entry_sheet: pd.DataFrame
+    watchlist_sheet: pd.DataFrame
+    external_sheet: pd.DataFrame
+    lookback_sheet: pd.DataFrame
+    include_lookback_summary: bool
+    lookback_note: str
+
+
 def export_daily_research_workbook(
     *,
     trade_date: str | None = None,
@@ -223,28 +237,34 @@ def export_daily_research_workbook(
     selected_trade_date = trade_date or _latest_trade_date(strategy, factor_scores)
     selected_trade_date = selected_trade_date or _latest_price_date(resolved_store) or ""
 
-    strategy_sheet = _build_strategy_sheet(strategy, selected_trade_date, daily_price)
-    entry_sheet = _build_entry_zone_sheet(entry_zones, strategy_sheet, watchlist, selected_trade_date)
-    latest_watchlist_sheet = _latest_by_date(watchlist, "trade_date", selected_trade_date)
-    current_watchlist_sheet = _current_watchlist_scope(latest_watchlist_sheet)
-    current_watchlist_sheet = _attach_elder_fields(current_watchlist_sheet, daily_price, "观察池")
-    watchlist_sheet = _with_display_order(_preferred_columns(current_watchlist_sheet, _watchlist_columns()))
-    external_sheet = _latest_external_positions(external_positions)
+    entry_zones, entry_zone_auto_note = _ensure_entry_zones_for_trade_date(
+        resolved_store,
+        resolved_settings,
+        entry_zones,
+        selected_trade_date,
+    )
     data_quality_snapshot = _safe_data_quality_snapshot(resolved_store, selected_trade_date)
     lookback_status = _read_lookback_status(lookback_status_path)
-    include_lookback_summary, lookback_note = _lookback_summary_decision(lookback_status, selected_trade_date)
-    lookback_sheet = _build_lookback_summary_sheet(lookback_status) if include_lookback_summary else pd.DataFrame()
-    embedded_elder_rows = _embedded_elder_row_count(strategy_sheet, watchlist_sheet)
+    view = build_daily_research_view_from_frames(
+        strategy=strategy,
+        entry_zones=entry_zones,
+        watchlist=watchlist,
+        external_positions=external_positions,
+        daily_price=daily_price,
+        trade_date=selected_trade_date,
+        lookback_status=lookback_status,
+    )
+    embedded_elder_rows = _embedded_elder_row_count(view.strategy_sheet, view.watchlist_sheet)
     summary_sheet = _build_summary_sheet(
         selected_trade_date=selected_trade_date,
         output_path=output_path,
-        strategy_rows=len(strategy_sheet),
+        strategy_rows=len(view.strategy_sheet),
         elder_rows=embedded_elder_rows,
-        entry_zone_rows=len(entry_sheet),
-        watchlist_rows=len(watchlist_sheet),
-        external_position_rows=len(external_sheet),
-        lookback_status=lookback_status if include_lookback_summary else None,
-        lookback_note=lookback_note,
+        entry_zone_rows=len(view.entry_sheet),
+        watchlist_rows=len(view.watchlist_sheet),
+        external_position_rows=len(view.external_sheet),
+        lookback_status=lookback_status if view.include_lookback_summary else None,
+        lookback_note=_join_notes(view.lookback_note, entry_zone_auto_note),
         data_quality_snapshot=data_quality_snapshot,
     )
 
@@ -255,15 +275,18 @@ def export_daily_research_workbook(
     workbook.remove(workbook.active)
     sheets = {
         "00_摘要": summary_sheet,
-        "01_今日候选": strategy_sheet,
-        "03_买入区间": entry_sheet,
-        "04_观察池": _empty_if_needed(watchlist_sheet, "暂无观察池跟踪数据。"),
-        "06_外部模拟持仓": _empty_if_needed(external_sheet, "暂无外部模拟持仓数据。"),
+        "01_今日候选": view.strategy_sheet,
+        "03_买入区间": view.entry_sheet,
+        "04_观察池": _empty_if_needed(view.watchlist_sheet, "暂无观察池跟踪数据。"),
+        "06_外部模拟持仓": _empty_if_needed(view.external_sheet, "暂无外部模拟持仓数据。"),
     }
     ordered_sheet_names = [*SHEET_NAMES]
-    if include_lookback_summary:
-        sheets["11_自动回看摘要"] = lookback_sheet
+    if view.include_lookback_summary:
+        sheets["11_自动回看摘要"] = view.lookback_sheet
         ordered_sheet_names.append("11_自动回看摘要")
+    elif view.lookback_note:
+        sheets["11_自动回看状态"] = _build_lookback_status_sheet(lookback_status, selected_trade_date, view.lookback_note)
+        ordered_sheet_names.append("11_自动回看状态")
     for sheet_name in ordered_sheet_names:
         _write_sheet(workbook, sheet_name, sheets[sheet_name])
     workbook.save(resolved_output)
@@ -271,12 +294,12 @@ def export_daily_research_workbook(
     return WorkbookExportResult(
         output_path=resolved_output,
         trade_date=selected_trade_date,
-        strategy_rows=len(strategy_sheet),
+        strategy_rows=len(view.strategy_sheet),
         elder_rows=embedded_elder_rows,
-        entry_zone_rows=len(entry_sheet),
-        watchlist_rows=len(watchlist_sheet),
-        external_position_rows=len(external_sheet),
-        lookback_summary_rows=len(lookback_sheet),
+        entry_zone_rows=len(view.entry_sheet),
+        watchlist_rows=len(view.watchlist_sheet),
+        external_position_rows=len(view.external_sheet),
+        lookback_summary_rows=len(view.lookback_sheet),
     )
 
 
@@ -297,6 +320,60 @@ def _read_query(store: DuckDBStore, sql: str) -> pd.DataFrame:
             return connection.execute(sql).fetchdf()
     except Exception:
         return pd.DataFrame()
+
+
+def build_daily_research_view_from_frames(
+    *,
+    strategy: pd.DataFrame,
+    entry_zones: pd.DataFrame,
+    watchlist: pd.DataFrame,
+    external_positions: pd.DataFrame | None = None,
+    daily_price: pd.DataFrame | None = None,
+    trade_date: str,
+    lookback_status: dict[str, Any] | None = None,
+) -> DailyResearchView:
+    """Build the visible daily research tables from already-loaded frames."""
+    strategy_sheet = _build_strategy_sheet(strategy, trade_date, daily_price)
+    latest_watchlist_sheet = _latest_by_date(watchlist, "trade_date", trade_date)
+    current_watchlist_sheet = _current_watchlist_scope(latest_watchlist_sheet)
+    current_watchlist_sheet = _attach_elder_fields(current_watchlist_sheet, daily_price, "观察池")
+    watchlist_sheet = _with_display_order(_preferred_columns(current_watchlist_sheet, _watchlist_columns()))
+    entry_sheet = _build_entry_zone_sheet(entry_zones, strategy_sheet, watchlist_sheet, trade_date)
+    external_sheet = _latest_external_positions(external_positions if isinstance(external_positions, pd.DataFrame) else pd.DataFrame())
+    include_lookback_summary, lookback_note = _lookback_summary_decision(lookback_status, trade_date)
+    lookback_sheet = _build_lookback_summary_sheet(lookback_status) if include_lookback_summary else pd.DataFrame()
+    return DailyResearchView(
+        trade_date=trade_date,
+        strategy_sheet=strategy_sheet,
+        entry_sheet=entry_sheet,
+        watchlist_sheet=watchlist_sheet,
+        external_sheet=external_sheet,
+        lookback_sheet=lookback_sheet,
+        include_lookback_summary=include_lookback_summary,
+        lookback_note=lookback_note,
+    )
+
+
+def _ensure_entry_zones_for_trade_date(
+    store: DuckDBStore,
+    settings: Settings | Any,
+    entry_zones: pd.DataFrame,
+    trade_date: str,
+) -> tuple[pd.DataFrame, str]:
+    """Use the existing entry-zone job to fill missing same-day snapshots."""
+    if not trade_date or not _rows_at_date(entry_zones, "trade_date", trade_date).empty:
+        return entry_zones, ""
+    try:
+        from core.jobs.calculate_entry_zones import calculate_entry_zones
+
+        result = calculate_entry_zones(settings=settings, store=store, quiet=True)
+    except Exception:
+        return entry_zones, "买入区间：当日快照缺失，自动补算未完成；可运行 .venv/bin/python -m core.jobs.calculate_entry_zones。"
+    refreshed = _read_table(store, "entry_zone_snapshots")
+    result_date = _normalize_trade_date(result.get("trade_date") if isinstance(result, dict) else "")
+    if result_date == _normalize_trade_date(trade_date) and not _rows_at_date(refreshed, "trade_date", trade_date).empty:
+        return refreshed, "买入区间：导出前已补算当日买入区间。"
+    return refreshed if not refreshed.empty else entry_zones, "买入区间：当日快照仍缺失；可运行 .venv/bin/python -m core.jobs.calculate_entry_zones 后重新导出。"
 
 
 def _latest_trade_date(strategy: pd.DataFrame, factor_scores: pd.DataFrame) -> str:
@@ -356,6 +433,8 @@ def _build_strategy_sheet(strategy: pd.DataFrame, trade_date: str, price_df: pd.
         frame = frame.sort_values(["candidate_rank", "ts_code"], na_position="last")
     elif "total_score" in frame.columns:
         frame = frame.sort_values("total_score", ascending=False, na_position="last")
+    if "ts_code" in frame.columns:
+        frame = frame.drop_duplicates("ts_code", keep="first")
     frame = _attach_elder_fields(frame, price_df, "今日候选")
     columns = [
         "display_order",
@@ -470,7 +549,32 @@ def _build_entry_zone_sheet(
         frame["source"] = ""
     if "source" in frame.columns:
         frame = frame[frame["source"].fillna("").astype(str).isin({"selection", "watchlist", ""})].copy()
+    selection_codes = _frame_codes(strategy)
+    watchlist_codes = _frame_codes(watchlist)
+    visible_codes = selection_codes | watchlist_codes
+    if visible_codes and "ts_code" in frame.columns:
+        frame = frame[frame["ts_code"].astype(str).isin(visible_codes)].copy()
+    if not frame.empty and "ts_code" in frame.columns:
+        frame["source"] = frame["ts_code"].astype(str).map(
+            lambda code: "selection" if code in selection_codes else ("watchlist" if code in watchlist_codes else "")
+        )
+        source_priority = {"selection": 0, "": 1, "watchlist": 2}
+        frame["_source_priority"] = frame["source"].fillna("").astype(str).map(source_priority).fillna(3)
+        frame = frame.sort_values(["_source_priority", "ts_code"]).drop_duplicates("ts_code", keep="first")
+        frame = frame.drop(columns=["_source_priority"])
     return _with_display_order(_preferred_columns(frame, columns))
+
+
+def _visible_research_codes(strategy: pd.DataFrame, watchlist: pd.DataFrame) -> set[str]:
+    return _frame_codes(strategy) | _frame_codes(watchlist)
+
+
+def _frame_codes(frame: pd.DataFrame) -> set[str]:
+    codes: list[str] = []
+    if frame.empty or "message" in frame.columns or "ts_code" not in frame.columns:
+        return set()
+    codes.extend(frame["ts_code"].dropna().astype(str).tolist())
+    return set(dict.fromkeys(code for code in codes if code))
 
 
 def _watchlist_columns() -> list[str]:
@@ -818,7 +922,7 @@ def _lookback_summary_decision(status: dict[str, Any] | None, trade_date: str) -
     status_date = _normalize_trade_date(status.get("as_of_trade_date") or status.get("end_date") or "")
     workbook_date = _normalize_trade_date(trade_date)
     if workbook_date and status_date and status_date < workbook_date:
-        return False, f"自动回看：最近回看截止 {status_date}，早于当前研究日期 {workbook_date}，本日报未展开旧回看摘要。"
+        return False, f"自动回看：最近回看截止 {status_date}，当前研究日期 {workbook_date} 需要刷新当日回看；本日报不把旧回看冒充当日结果。"
     valid_count = _safe_int(status.get("valid_sample_count"))
     candidate_count = _safe_int(status.get("candidate_sample_count"))
     if valid_count <= 0 or candidate_count <= 0:
@@ -826,6 +930,20 @@ def _lookback_summary_decision(status: dict[str, Any] | None, trade_date: str) -
     if _lookback_summary_is_uninformative(status):
         return False, "自动回看：最近回看暂无可统计样本，本日报未展开回看摘要。"
     return True, ""
+
+
+def _build_lookback_status_sheet(status: dict[str, Any] | None, trade_date: str, note: str) -> pd.DataFrame:
+    status_date = _normalize_trade_date((status or {}).get("as_of_trade_date") or (status or {}).get("end_date") or "")
+    return pd.DataFrame(
+        [
+            {"metric": "当前研究日期", "value": _normalize_trade_date(trade_date) or "暂无"},
+            {"metric": "最近回看截止日期", "value": status_date or "暂无"},
+            {"metric": "最近回看有效样本数", "value": (status or {}).get("valid_sample_count", 0) if status else 0},
+            {"metric": "最近回看数据不足数", "value": (status or {}).get("insufficient_forward_data_count", 0) if status else 0},
+            {"metric": "状态", "value": note or "需要刷新当日回看。"},
+            {"metric": "建议命令", "value": f".venv/bin/python -m core.jobs.run_lookback_analysis --as-of {_normalize_trade_date(trade_date) or 'YYYYMMDD'} --format text"},
+        ]
+    )
 
 
 def _lookback_summary_is_uninformative(status: dict[str, Any]) -> bool:
@@ -850,6 +968,10 @@ def _safe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _join_notes(*notes: str) -> str:
+    return "；".join(note for note in notes if note)
 
 
 def _build_lookback_summary_sheet(status: dict[str, Any] | None) -> pd.DataFrame:
