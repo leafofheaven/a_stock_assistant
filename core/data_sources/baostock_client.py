@@ -107,6 +107,7 @@ class BaoStockClient:
                     rows.append(result.get_row_data())
                 if not rows:
                     ts_code = _to_ts_code(symbol)
+                    failures.append({"symbol": ts_code, "error_message": "BaoStock returned no data.", "failure_type": "no_data"})
                     _record_failure(failure_summary, failure_examples, "no_data", ts_code)
                     _emit_progress(
                         progress_callback,

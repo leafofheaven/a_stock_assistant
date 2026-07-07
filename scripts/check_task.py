@@ -70,6 +70,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task57a": check_task57a,
         "task57b": check_task57b,
         "task57h": check_task57h,
+        "task57i": check_task57i,
         "task58": check_task58,
         "task59": check_task59,
     }
@@ -3684,6 +3685,66 @@ def check_task57h(root: Path) -> list[str]:
     return failures
 
 
+def check_task57i(root: Path) -> list[str]:
+    """Check Task 57I missing-latest skip/retry queue support."""
+    failures: list[str] = []
+    required_paths = [
+        "core/jobs/update_market_data.py",
+        "core/jobs/missing_latest_retry_queue.py",
+        "core/jobs/market_data_progress.py",
+        "core/jobs/doctor_daily_run.py",
+        "tests/test_task57i_gap_update_skip_retry_queue.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+    update_source = read_source(root / "core/jobs/update_market_data.py")
+    for phrase in [
+        "--respect-skip-queue",
+        "--retry-skip-queue",
+        "--max-no-data-retries",
+        "--max-timeout-retries",
+        "--skip-queue-path",
+        "--reset-skip-queue",
+        "--skip-cooldown-minutes",
+        "record_failure_records",
+        "mark_resolved_symbols",
+        "KeyboardInterrupt",
+    ]:
+        if phrase not in update_source:
+            failures.append(f"core/jobs/update_market_data.py is missing Task 57I phrase: {phrase}.")
+    queue_source = read_source(root / "core/jobs/missing_latest_retry_queue.py")
+    for phrase in [
+        "missing_latest_retry_queue.json",
+        "skip_queue",
+        "retry_queue",
+        "retry_count",
+        "next_retry_after",
+        "excluded_symbols_for_main_scan",
+        "retry_symbols",
+    ]:
+        if phrase not in queue_source:
+            failures.append(f"core/jobs/missing_latest_retry_queue.py is missing Task 57I phrase: {phrase}.")
+    progress_source = read_source(root / "core/jobs/market_data_progress.py")
+    for phrase in ["skip_queue_count", "retry_queue_count", "cooldown_symbol_count", "retry_round", "interrupted_by_user", "timeout_symbol"]:
+        if phrase not in progress_source:
+            failures.append(f"core/jobs/market_data_progress.py is missing Task 57I progress field: {phrase}.")
+    doctor_source = read_source(root / "core/jobs/doctor_daily_run.py")
+    for phrase in ["本轮 no_data 冷却队列", "待 retry 队列", "duckdb_fileprovider_risk", "FileProvider"]:
+        if phrase not in doctor_source:
+            failures.append(f"core/jobs/doctor_daily_run.py is missing Task 57I doctor phrase: {phrase}.")
+    tests_source = read_source(root / "tests/test_task57i_gap_update_skip_retry_queue.py")
+    for phrase in [
+        "test_no_data_stock_enters_skip_queue",
+        "test_continue_missing_latest_skips_skip_queue_and_moves_forward",
+        "test_retry_skip_queue_has_limited_attempts",
+        "test_timeout_batch_does_not_mark_whole_batch_no_data",
+        "test_keyboard_interrupt_cleans_child_and_progress",
+        "test_doctor_daily_run_shows_queue_counts_and_fileprovider_warning",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_task57i_gap_update_skip_retry_queue.py is missing {phrase}.")
+    return failures
+
+
 def check_task59(root: Path) -> list[str]:
     """Check Task 59 watchlist lifecycle and Elder review scope support."""
     failures: list[str] = []
@@ -3825,6 +3886,7 @@ def main(argv: list[str] | None = None) -> int:
             "task57a",
             "task57b",
             "task57h",
+            "task57i",
             "task58",
             "task59",
         ],
