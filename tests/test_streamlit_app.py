@@ -218,6 +218,38 @@ def test_streamlit_status_page_does_not_use_full_batch_for_latest_coverage() -> 
     assert history.iloc[0]["数量"] == "4995 / 5055"
 
 
+def test_status_coverage_uses_current_research_date_not_planned_zero_snapshot() -> None:
+    """A future planned-date zero snapshot must not become the current research coverage table."""
+    tables = {
+        "daily_price": pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000002.SZ", "000003.SZ"],
+                "trade_date": ["20260706", "20260706", "20260705"],
+            }
+        ),
+        "daily_basic": pd.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20260706"]}),
+        "adj_factor": pd.DataFrame({"ts_code": [], "trade_date": []}),
+    }
+    scheduled = {
+        "data_quality_snapshot_source": "scheduled",
+        "latest_completed_trade_date": "20260707",
+        "configured_symbol_count": 5055,
+        "latest_daily_price_symbol_count": 0,
+        "latest_daily_basic_symbol_count": 0,
+        "latest_adj_factor_symbol_count": 0,
+    }
+    legacy = {"latest_trade_date": "20260706", "latest_selection_date": "20260706", "configured_symbol_count": 5055}
+
+    snapshot = _status_page_quality_snapshot(tables, scheduled, legacy)
+    frame = _status_latest_coverage_frame(snapshot)
+
+    assert snapshot["current_research_trade_date"] == "20260706"
+    assert snapshot["planned_update_target_date"] == "20260707"
+    assert snapshot["latest_daily_price_symbol_count"] == 2
+    assert frame.iloc[0]["已覆盖"] == "2 / 5055"
+    assert "计划目标日期 20260707 尚未完成更新，当前研究仍使用 20260706。" in snapshot["formal_result_warning_reason"]
+
+
 def test_missing_quality_fields_fallbacks_to_readonly_snapshot(monkeypatch) -> None:
     """Missing scheduled fields should trigger a read-only snapshot when possible."""
     calls = []

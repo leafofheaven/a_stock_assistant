@@ -556,6 +556,7 @@ def load_dashboard_data() -> dict[str, Any]:
         data.setdefault("positions", pd.DataFrame())
         return data
 
+    tables["_duckdb_path"] = str(store.db_path)
     if tables["strategy_result"].empty:
         tables["_data_source"] = f"{settings.data_provider} 本地 DuckDB 真实数据"
         tables["_database_status"] = {**database_status, "status": "ok", "message": "DuckDB 可访问，但尚未生成本地选股结果。"}
@@ -1680,6 +1681,10 @@ def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: di
             return result
         except Exception:
             pass
+    if target_date:
+        fallback = _status_snapshot_from_loaded_tables(tables, target_date, scheduled, legacy_status, dates)
+        if fallback:
+            return fallback
     return {
         "data_quality_status": "unknown",
         "formal_result_usable": False,
@@ -1693,6 +1698,57 @@ def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: di
         "latest_local_trade_date": latest_local_date or current_research_date or target_date,
         "formal_result_warning_reason": dates["date_status_note"] or "当前缺少数据质量快照，请运行刷新数据状态或检查 DuckDB。",
     }
+
+
+def _status_snapshot_from_loaded_tables(
+    tables: dict[str, Any],
+    trade_date: str,
+    scheduled: dict[str, Any],
+    legacy_status: dict[str, Any],
+    dates: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a current-date coverage snapshot from already loaded dashboard tables."""
+    total = int(scheduled.get("configured_symbol_count") or legacy_status.get("configured_symbol_count") or tables.get("_configured_symbol_count", 0) or 0)
+    if not total:
+        return {}
+    snapshot: dict[str, Any] = {
+        "data_quality_snapshot_source": "streamlit_loaded_tables",
+        "configured_symbol_count": total,
+        "research_trade_date": trade_date,
+        "latest_completed_trade_date": trade_date,
+        "planned_update_target_date": dates.get("planned_update_target_date") or trade_date,
+        "planned_update_trade_date": dates.get("planned_update_trade_date") or dates.get("planned_update_target_date") or trade_date,
+        "current_research_trade_date": trade_date,
+        "latest_local_trade_date": dates.get("latest_local_trade_date") or trade_date,
+        "formal_result_usable": False,
+        "formal_result_warning_reason": dates.get("date_status_note") or "当前使用页面已加载表估算覆盖率，请运行刷新数据状态获取完整快照。",
+    }
+    table_specs = [
+        ("daily_price", "latest_daily_price_symbol_count", "missing_latest_daily_price_symbol_count", "latest_daily_price_coverage_rate"),
+        ("daily_basic", "latest_daily_basic_symbol_count", "missing_latest_daily_basic_symbol_count", "latest_daily_basic_coverage_rate"),
+        ("adj_factor", "latest_adj_factor_symbol_count", "missing_latest_adj_factor_symbol_count", "latest_adj_factor_coverage_rate"),
+    ]
+    counts = {}
+    for table_name, count_key, missing_key, rate_key in table_specs:
+        count = _count_distinct_symbols_at_trade_date(tables.get(table_name, pd.DataFrame()), trade_date)
+        counts[count_key] = count
+        snapshot[count_key] = count
+        snapshot[missing_key] = max(total - count, 0)
+        snapshot[rate_key] = float(count / total) if total else 0.0
+    all_required = min(counts.values()) if counts else 0
+    snapshot["latest_all_required_tables_symbol_count"] = all_required
+    snapshot["missing_latest_all_required_tables_symbol_count"] = max(total - all_required, 0)
+    snapshot["latest_all_required_tables_coverage_rate"] = float(all_required / total) if total else 0.0
+    snapshot["data_quality_status"] = "ok" if snapshot["latest_daily_price_coverage_rate"] >= 0.8 else "poor"
+    return snapshot
+
+
+def _count_distinct_symbols_at_trade_date(frame: Any, trade_date: str) -> int:
+    if not isinstance(frame, pd.DataFrame) or frame.empty or "ts_code" not in frame.columns or "trade_date" not in frame.columns:
+        return 0
+    target = _compact_date(trade_date)
+    dates = frame["trade_date"].map(_compact_date)
+    return int(frame.loc[dates == target, "ts_code"].dropna().astype(str).nunique())
 
 
 def resolve_streamlit_research_dates(
@@ -1764,7 +1820,7 @@ def _render_status_quality_main(st: Any, scheduled: dict[str, Any], status: dict
         st.success("最新交易日数据覆盖满足正式研究使用口径。")
     st.write("顶部结论卡片")
     display_dataframe(st, pd.DataFrame([_status_conclusion_row(scheduled, status)]))
-    st.write("最新交易日覆盖")
+    st.write("当前研究展示日期覆盖")
     display_dataframe(st, _status_latest_coverage_frame(status))
     st.write("复权语义")
     display_dataframe(st, pd.DataFrame([_status_adjustment_semantics_row(status)]))

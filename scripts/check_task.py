@@ -3527,7 +3527,7 @@ def check_task57b(root: Path) -> list[str]:
         if phrase not in diagnose_source:
             failures.append(f"diagnose_update_batch.py is missing latest/history coverage field: {phrase}.")
     streamlit_source = read_source(root / "web/streamlit_app.py")
-    for phrase in ["顶部结论卡片", "最新交易日覆盖", "历史数据完整度", "模块可用性", "本次运行结果", "按钮区", "全市场批量补数据"]:
+    for phrase in ["顶部结论卡片", "当前研究展示日期覆盖", "历史数据完整度", "模块可用性", "本次运行结果", "按钮区", "全市场批量补数据"]:
         if phrase not in streamlit_source:
             failures.append(f"web/streamlit_app.py is missing data update status section: {phrase}.")
     env_source = read_source(root / ".env.example")
