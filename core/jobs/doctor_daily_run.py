@@ -9,6 +9,7 @@ import subprocess
 from typing import Any
 
 from app.config import Settings, get_settings
+from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.data_sources.real_universe import is_full_universe_preset
 from core.jobs.diagnose_data_quality import diagnose_data_quality
 from core.jobs.local_backup_utils import PROJECT_ROOT, tracked_local_data_paths
@@ -158,15 +159,45 @@ def _quality_checks(settings: Settings, store: DuckDBStore, db_path: Path) -> li
             _check("sample_fallback_risk", "WARNING", "本地真实数据不可用，run_daily_selection 可能回退 sample。", "先运行 update_real_data 或 restore_local_data。"),
         ]
     result = diagnose_data_quality(settings=settings, store=store)
+    snapshot = _safe_quality_snapshot(store)
     latest_date = result.get("latest_trade_date")
     pe_rate = float(result.get("latest_date_pe_non_null_rate") or 0.0)
     pb_rate = float(result.get("latest_date_pb_non_null_rate") or 0.0)
     enough = bool(latest_date and int(result.get("latest_date_stock_count") or 0) > 0)
-    return [
+    checks = [
         _check("latest_trade_date", "OK" if latest_date else "WARNING", f"最新行情日期: {latest_date or '暂无'}", "python -m core.jobs.update_real_data"),
         _check("latest_pe_pb", "OK" if pe_rate > 0 and pb_rate > 0 else "WARNING", f"最新交易日 PE/PB 完整率: {pe_rate:.2%} / {pb_rate:.2%}", "python -m core.jobs.diagnose_data_quality"),
         _check("sample_fallback_risk", "OK" if enough and settings.data_provider != "sample" else "WARNING", "真实数据链路具备本地数据。" if enough else "真实数据不足，run_daily_selection 可能回退 sample。", "python -m core.jobs.update_real_data"),
     ]
+    if snapshot:
+        configured = int(snapshot.get("configured_symbol_count", 0) or 0)
+        price_count = int(snapshot.get("latest_daily_price_symbol_count", 0) or 0)
+        basic_count = int(snapshot.get("latest_daily_basic_symbol_count", 0) or 0)
+        missing_price = int(snapshot.get("missing_latest_daily_price_symbol_count", 0) or 0)
+        examples = ", ".join(str(item) for item in list(snapshot.get("missing_latest_daily_price_examples") or [])[:8])
+        checks.append(
+            _check(
+                "latest_coverage_counts",
+                "OK" if configured and price_count >= configured else "WARNING",
+                (
+                    f"最新交易日: {snapshot.get('latest_completed_trade_date') or latest_date or '暂无'}; "
+                    f"股票池总数: {configured}; "
+                    f"daily_price 覆盖数: {price_count} / {configured}; "
+                    f"daily_basic 覆盖数: {basic_count} / {configured}; "
+                    f"缺口数量: {missing_price}; "
+                    f"缺口示例: {examples or '暂无'}"
+                ),
+                "python -m core.jobs.update_market_data --goal latest --provider baostock --batch-size 100 --continue-missing-latest --format text",
+            )
+        )
+    return checks
+
+
+def _safe_quality_snapshot(store: DuckDBStore) -> dict[str, Any]:
+    try:
+        return build_data_quality_snapshot(db_path=store.db_path)
+    except Exception:
+        return {}
 
 
 def _apply_safe_fixes(root: Path, store: DuckDBStore, enabled: bool) -> list[str]:

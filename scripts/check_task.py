@@ -69,6 +69,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task56": check_task56,
         "task57a": check_task57a,
         "task57b": check_task57b,
+        "task57h": check_task57h,
         "task58": check_task58,
         "task59": check_task59,
     }
@@ -3633,6 +3634,56 @@ def check_task58(root: Path) -> list[str]:
     return failures
 
 
+def check_task57h(root: Path) -> list[str]:
+    """Check Task 57H batched update timeout and recovery support."""
+    failures: list[str] = []
+    required_paths = [
+        "core/jobs/update_market_data.py",
+        "core/jobs/market_data_progress.py",
+        "core/jobs/doctor_daily_run.py",
+        "web/streamlit_app.py",
+        "tests/test_task57h_batched_update_timeout.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+    update_source = read_source(root / "core/jobs/update_market_data.py")
+    for phrase in [
+        "--batch-size",
+        "--batch-timeout-seconds",
+        "--symbol-timeout-seconds",
+        "--continue-missing-latest",
+        "run_batched_update_parent",
+        "_continue_missing_latest_symbol_plan",
+        "subprocess.Popen",
+        "os.killpg",
+        "stale_detected",
+    ]:
+        if phrase not in update_source:
+            failures.append(f"core/jobs/update_market_data.py is missing Task 57H phrase: {phrase}.")
+    progress_source = read_source(root / "core/jobs/market_data_progress.py")
+    for phrase in ["batch_id", "batch_timeout_seconds", "symbol_timeout_seconds", "stale_detected", "timeout"]:
+        if phrase not in progress_source:
+            failures.append(f"core/jobs/market_data_progress.py is missing Task 57H progress field: {phrase}.")
+    doctor_source = read_source(root / "core/jobs/doctor_daily_run.py")
+    for phrase in ["latest_coverage_counts", "daily_price 覆盖数", "daily_basic 覆盖数", "缺口数量"]:
+        if phrase not in doctor_source:
+            failures.append(f"core/jobs/doctor_daily_run.py is missing Task 57H coverage phrase: {phrase}.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["--batch-size", "--batch-timeout-seconds", "--continue-missing-latest", "stale_detected"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 57H minimal UI phrase: {phrase}.")
+    tests_source = read_source(root / "tests/test_task57h_batched_update_timeout.py")
+    for phrase in [
+        "test_continue_missing_latest_selects_missing_price_or_basic_only",
+        "test_parent_timeout_writes_interrupted_progress",
+        "test_progress_finish_clears_running_provider",
+        "test_doctor_daily_run_reports_latest_coverage_counts",
+        "test_streamlit_latest_update_uses_batched_continue_missing",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_task57h_batched_update_timeout.py is missing {phrase}.")
+    return failures
+
+
 def check_task59(root: Path) -> list[str]:
     """Check Task 59 watchlist lifecycle and Elder review scope support."""
     failures: list[str] = []
@@ -3773,6 +3824,7 @@ def main(argv: list[str] | None = None) -> int:
             "task56",
             "task57a",
             "task57b",
+            "task57h",
             "task58",
             "task59",
         ],

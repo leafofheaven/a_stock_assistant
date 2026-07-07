@@ -18,13 +18,30 @@ class MarketDataProgressWriter:
         self.path = Path(path)
         self.state: dict[str, Any] = {}
 
-    def start(self, *, goal: str, provider: str, total_symbol_count: int) -> None:
+    def start(
+        self,
+        *,
+        goal: str,
+        provider: str,
+        total_symbol_count: int,
+        batch_id: str = "",
+        batch_size: int = 0,
+        batch_timeout_seconds: int = 0,
+        symbol_timeout_seconds: int = 0,
+        stale_detected: bool = False,
+    ) -> None:
         now = _now()
         self.state = {
             "running": True,
             "status": "running",
             "goal": goal,
             "provider": provider,
+            "batch_id": batch_id,
+            "batch_size": int(batch_size or total_symbol_count or 0),
+            "batch_timeout_seconds": int(batch_timeout_seconds or 0),
+            "symbol_timeout_seconds": int(symbol_timeout_seconds or 0),
+            "stale_detected": bool(stale_detected),
+            "timeout": False,
             "started_at": now,
             "last_heartbeat_at": now,
             "finished_at": "",
@@ -145,17 +162,23 @@ class MarketDataProgressWriter:
         self._sync_totals(provider_state, self.state.get("current_symbol", ""))
         self.write()
 
-    def finish(self, *, status: str, suggested_action: str = "") -> None:
+    def finish(self, *, status: str, suggested_action: str = "", stale_detected: bool | None = None, timeout: bool | None = None) -> None:
         now = _now()
-        self.state.update(
-            {
-                "running": False,
-                "status": status,
-                "last_heartbeat_at": now,
-                "finished_at": now,
-                "suggested_action": suggested_action,
-            }
-        )
+        for item in self.state.get("provider_progress") or []:
+            if item.get("status") == "running":
+                item["status"] = status
+        update = {
+            "running": False,
+            "status": status,
+            "last_heartbeat_at": now,
+            "finished_at": now,
+            "suggested_action": suggested_action,
+        }
+        if stale_detected is not None:
+            update["stale_detected"] = bool(stale_detected)
+        if timeout is not None:
+            update["timeout"] = bool(timeout)
+        self.state.update(update)
         self.write()
 
     def write(self) -> None:
