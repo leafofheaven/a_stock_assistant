@@ -933,17 +933,46 @@ def _lookback_summary_decision(status: dict[str, Any] | None, trade_date: str) -
 
 
 def _build_lookback_status_sheet(status: dict[str, Any] | None, trade_date: str, note: str) -> pd.DataFrame:
-    status_date = _normalize_trade_date((status or {}).get("as_of_trade_date") or (status or {}).get("end_date") or "")
+    display = build_lookback_status_display(status, trade_date)
+    status_date = str(display["summary"].get("回看截止交易日") or "")
     return pd.DataFrame(
         [
-            {"metric": "当前研究日期", "value": _normalize_trade_date(trade_date) or "暂无"},
+            {"metric": "当前研究日期", "value": str(display["summary"].get("当前研究日期") or _normalize_trade_date(trade_date) or "暂无")},
             {"metric": "最近回看截止日期", "value": status_date or "暂无"},
             {"metric": "最近回看有效样本数", "value": (status or {}).get("valid_sample_count", 0) if status else 0},
             {"metric": "最近回看数据不足数", "value": (status or {}).get("insufficient_forward_data_count", 0) if status else 0},
             {"metric": "状态", "value": note or "需要刷新当日回看。"},
-            {"metric": "建议命令", "value": f".venv/bin/python -m core.jobs.run_lookback_analysis --as-of {_normalize_trade_date(trade_date) or 'YYYYMMDD'} --format text"},
+            {"metric": "建议命令", "value": str(display["summary"].get("建议命令") or f".venv/bin/python -m core.jobs.run_lookback_analysis --as-of {_normalize_trade_date(trade_date) or 'YYYYMMDD'} --format text")},
         ]
     )
+
+
+def build_lookback_status_display(status: dict[str, Any] | None, current_research_trade_date: str) -> dict[str, Any]:
+    """Return shared user-facing lookback status semantics for Excel and Streamlit."""
+    status = status or {}
+    lookback_date = _normalize_trade_date(status.get("as_of_trade_date") or status.get("end_date") or "")
+    current_date = _normalize_trade_date(current_research_trade_date)
+    is_current = bool(current_date and lookback_date and lookback_date == current_date)
+    report_path_text = str(status.get("generated_report_path") or "")
+    report_exists = bool(report_path_text and Path(report_path_text).exists())
+    summary: dict[str, Any] = {
+        "回看状态": "当前有效回看" if is_current else "需要刷新当日回看",
+        "当前研究日期": current_date or "暂无",
+        "回看截止交易日": lookback_date or "暂无",
+        "样本区间": f"{status.get('start_date') or '暂无'} - {status.get('end_date') or '暂无'}",
+        "回看周期": ",".join(str(item) for item in status.get("horizons", [])) if isinstance(status.get("horizons"), list) else status.get("horizons"),
+        "候选样本数量": status.get("candidate_sample_count", 0),
+        "有效样本数量": status.get("valid_sample_count", 0),
+        "数据不足数量": status.get("insufficient_forward_data_count", 0),
+        "主要发现": status.get("key_findings") or "暂无",
+        "数据质量提示": status.get("data_quality_summary") or "暂无",
+        "报告路径": report_path_text or "暂无",
+        "报告文件状态": "存在" if report_exists else ("文件不存在，可能已清理" if report_path_text else "暂无"),
+    }
+    if not is_current and lookback_date:
+        summary["说明"] = f"最近回看截止 {lookback_date}，当前研究日期 {current_date or '暂无'} 需要刷新当日回看。"
+        summary["建议命令"] = f".venv/bin/python -m core.jobs.run_lookback_analysis --as-of {current_date or 'YYYYMMDD'} --format text"
+    return {"is_current": is_current, "summary": summary, "report_exists": report_exists}
 
 
 def _lookback_summary_is_uninformative(status: dict[str, Any]) -> bool:

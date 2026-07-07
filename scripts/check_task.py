@@ -3902,6 +3902,7 @@ def check_task59c(root: Path) -> list[str]:
         "selection",
         "watchlist",
         "_build_lookback_status_sheet",
+        "build_lookback_status_display",
         "需要刷新当日回看",
         "Elder 字段补充",
     ]:
@@ -3917,6 +3918,8 @@ def check_task59c(root: Path) -> list[str]:
         "planned_update_trade_date",
         "current_research_trade_date",
         "latest_local_trade_date",
+        "resolve_streamlit_research_dates",
+        "build_lookback_status_display",
         "Task 60 TODO",
     ]:
         if phrase not in streamlit_source:
@@ -3930,6 +3933,8 @@ def check_task59c(root: Path) -> list[str]:
         "test_stale_lookback_creates_refresh_status_sheet",
         "test_same_day_valid_lookback_keeps_summary_sheet",
         "test_status_page_uses_latest_local_research_date_when_planned_date_has_zero_coverage",
+        "test_streamlit_daily_research_frames_match_excel_scope",
+        "test_streamlit_lookback_status_uses_shared_display_function",
     ]:
         if phrase not in tests_source:
             failures.append(f"tests/test_task59c_report_buyzone_lookback_repair.py is missing {phrase}.")
