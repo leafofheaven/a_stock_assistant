@@ -13,7 +13,7 @@ from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.data_sources.real_universe import is_full_universe_preset
 from core.jobs.diagnose_data_quality import diagnose_data_quality
 from core.jobs.local_backup_utils import PROJECT_ROOT, tracked_local_data_paths
-from core.jobs.missing_latest_retry_queue import DEFAULT_SKIP_QUEUE_PATH, queue_counts
+from core.jobs.missing_latest_retry_queue import queue_counts, resolve_missing_latest_queue_path
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 CORE_TABLES = [
@@ -176,7 +176,8 @@ def _quality_checks(settings: Settings, store: DuckDBStore, db_path: Path) -> li
         price_count = int(snapshot.get("latest_daily_price_symbol_count", 0) or 0)
         basic_count = int(snapshot.get("latest_daily_basic_symbol_count", 0) or 0)
         missing_price = int(snapshot.get("missing_latest_daily_price_symbol_count", 0) or 0)
-        queue = queue_counts(DEFAULT_SKIP_QUEUE_PATH, trade_date=str(snapshot.get("latest_completed_trade_date") or latest_date or ""))
+        queue_path = resolve_missing_latest_queue_path(data_dir=getattr(settings, "data_dir", ""))
+        queue = queue_counts(queue_path, trade_date=str(snapshot.get("latest_completed_trade_date") or latest_date or ""))
         examples = ", ".join(str(item) for item in list(snapshot.get("missing_latest_daily_price_examples") or [])[:8])
         checks.append(
             _check(
@@ -190,6 +191,7 @@ def _quality_checks(settings: Settings, store: DuckDBStore, db_path: Path) -> li
                     f"缺口数量: {missing_price}; "
                     f"本轮 no_data 冷却队列: {queue.get('skip_queue_count', 0)}; "
                     f"待 retry 队列: {queue.get('retry_queue_count', 0)}; "
+                    f"队列文件: {queue_path}; "
                     f"缺口示例: {examples or '暂无'}"
                 ),
                 "python -m core.jobs.update_market_data --goal latest --provider baostock --batch-size 100 --continue-missing-latest --format text",
