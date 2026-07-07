@@ -13,6 +13,7 @@ from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.data_sources.real_universe import is_full_universe_preset
 from core.jobs.diagnose_data_quality import diagnose_data_quality
 from core.jobs.local_backup_utils import PROJECT_ROOT, tracked_local_data_paths
+from core.jobs.missing_latest_retry_queue import DEFAULT_SKIP_QUEUE_PATH, queue_counts
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 
 CORE_TABLES = [
@@ -127,6 +128,7 @@ def _build_checks(
     checks.append(_check("enrichment_flags", "OK", f"ENABLE_REAL_BASIC_ENRICHMENT={settings.enable_real_basic_enrichment}; ENABLE_REAL_VALUATION_ENRICHMENT={settings.enable_real_valuation_enrichment}", "无需处理。"))
     checks.append(_check("data_dir", "OK" if data_dir.exists() else "WARNING", f"DATA_DIR={data_dir}; {'存在' if data_dir.exists() else '不存在'}", "python -m core.jobs.doctor_daily_run --fix-safe"))
     checks.append(_check("duckdb_path", "OK" if db_path.exists() else "FAILED", f"DUCKDB_PATH={db_path}; {'存在' if db_path.exists() else '不存在'}", "python -m core.jobs.update_real_data 或 python -m core.jobs.restore_local_data"))
+    checks.append(_fileprovider_path_check(db_path))
     checks.extend(_table_checks(store, db_path))
     checks.extend(_quality_checks(settings, store, db_path))
     checks.append(_check("reports_gitkeep", "OK" if (reports_dir / ".gitkeep").exists() else "WARNING", "reports/.gitkeep 已存在。" if (reports_dir / ".gitkeep").exists() else "reports/.gitkeep 缺失。", "python -m core.jobs.doctor_daily_run --fix-safe"))
@@ -174,6 +176,7 @@ def _quality_checks(settings: Settings, store: DuckDBStore, db_path: Path) -> li
         price_count = int(snapshot.get("latest_daily_price_symbol_count", 0) or 0)
         basic_count = int(snapshot.get("latest_daily_basic_symbol_count", 0) or 0)
         missing_price = int(snapshot.get("missing_latest_daily_price_symbol_count", 0) or 0)
+        queue = queue_counts(DEFAULT_SKIP_QUEUE_PATH, trade_date=str(snapshot.get("latest_completed_trade_date") or latest_date or ""))
         examples = ", ".join(str(item) for item in list(snapshot.get("missing_latest_daily_price_examples") or [])[:8])
         checks.append(
             _check(
@@ -185,6 +188,8 @@ def _quality_checks(settings: Settings, store: DuckDBStore, db_path: Path) -> li
                     f"daily_price 覆盖数: {price_count} / {configured}; "
                     f"daily_basic 覆盖数: {basic_count} / {configured}; "
                     f"缺口数量: {missing_price}; "
+                    f"本轮 no_data 冷却队列: {queue.get('skip_queue_count', 0)}; "
+                    f"待 retry 队列: {queue.get('retry_queue_count', 0)}; "
                     f"缺口示例: {examples or '暂无'}"
                 ),
                 "python -m core.jobs.update_market_data --goal latest --provider baostock --batch-size 100 --continue-missing-latest --format text",
@@ -198,6 +203,18 @@ def _safe_quality_snapshot(store: DuckDBStore) -> dict[str, Any]:
         return build_data_quality_snapshot(db_path=store.db_path)
     except Exception:
         return {}
+
+
+def _fileprovider_path_check(db_path: Path) -> dict[str, Any]:
+    text = str(db_path.expanduser())
+    risky_markers = ["/Documents/", "/Desktop/", "Mobile Documents", "iCloud"]
+    risky = any(marker in text for marker in risky_markers)
+    return _check(
+        "duckdb_fileprovider_risk",
+        "WARNING" if risky else "OK",
+        "DuckDB 位于可能被 macOS FileProvider / 云同步扫描的目录。" if risky else "DuckDB 路径未发现明显 FileProvider 风险。",
+        "建议迁移到 ~/.local/share/a_stock_assistant/data/a_stock_assistant.duckdb；不要在未确认前自动移动数据库。",
+    )
 
 
 def _apply_safe_fixes(root: Path, store: DuckDBStore, enabled: bool) -> list[str]:

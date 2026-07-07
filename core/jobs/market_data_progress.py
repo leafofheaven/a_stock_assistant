@@ -29,6 +29,10 @@ class MarketDataProgressWriter:
         batch_timeout_seconds: int = 0,
         symbol_timeout_seconds: int = 0,
         stale_detected: bool = False,
+        skip_queue_count: int = 0,
+        retry_queue_count: int = 0,
+        cooldown_symbol_count: int = 0,
+        retry_round: int = 0,
     ) -> None:
         now = _now()
         self.state = {
@@ -42,6 +46,12 @@ class MarketDataProgressWriter:
             "symbol_timeout_seconds": int(symbol_timeout_seconds or 0),
             "stale_detected": bool(stale_detected),
             "timeout": False,
+            "interrupted_by_user": False,
+            "timeout_symbol": "",
+            "skip_queue_count": int(skip_queue_count or 0),
+            "retry_queue_count": int(retry_queue_count or 0),
+            "cooldown_symbol_count": int(cooldown_symbol_count or 0),
+            "retry_round": int(retry_round or 0),
             "started_at": now,
             "last_heartbeat_at": now,
             "finished_at": "",
@@ -162,7 +172,16 @@ class MarketDataProgressWriter:
         self._sync_totals(provider_state, self.state.get("current_symbol", ""))
         self.write()
 
-    def finish(self, *, status: str, suggested_action: str = "", stale_detected: bool | None = None, timeout: bool | None = None) -> None:
+    def finish(
+        self,
+        *,
+        status: str,
+        suggested_action: str = "",
+        stale_detected: bool | None = None,
+        timeout: bool | None = None,
+        interrupted_by_user: bool | None = None,
+        timeout_symbol: str = "",
+    ) -> None:
         now = _now()
         for item in self.state.get("provider_progress") or []:
             if item.get("status") == "running":
@@ -178,6 +197,10 @@ class MarketDataProgressWriter:
             update["stale_detected"] = bool(stale_detected)
         if timeout is not None:
             update["timeout"] = bool(timeout)
+        if interrupted_by_user is not None:
+            update["interrupted_by_user"] = bool(interrupted_by_user)
+        if timeout_symbol:
+            update["timeout_symbol"] = timeout_symbol
         self.state.update(update)
         self.write()
 

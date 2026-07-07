@@ -22,8 +22,18 @@ from app.config import Settings, get_settings
 from core.data_sources.akshare_client import AKShareClient
 from core.data_sources.akshare_spot_snapshot import AKShareSpotSnapshotClient
 from core.data_sources.baostock_client import BaoStockClient, BaoStockUnavailable
-from core.jobs.market_data_progress import DEFAULT_PROGRESS_PATH, MarketDataProgressWriter
+from core.jobs.market_data_progress import DEFAULT_PROGRESS_PATH, MarketDataProgressWriter, read_market_data_progress
 from core.jobs.market_data_status import DEFAULT_STATUS_PATH, read_market_status, record_provider_attempt
+from core.jobs.missing_latest_retry_queue import (
+    DEFAULT_SKIP_QUEUE_PATH,
+    excluded_symbols_for_main_scan,
+    mark_resolved_symbols,
+    mark_retry_attempts,
+    queue_counts,
+    record_failure_records,
+    reset_missing_latest_queue,
+    retry_symbols,
+)
 from core.storage.duckdb_store import DuckDBStore
 
 
@@ -57,6 +67,13 @@ def update_market_data(
     batch_timeout_seconds: int = 0,
     symbol_timeout_seconds: int = 0,
     continue_missing_latest: bool = False,
+    respect_skip_queue: bool = True,
+    retry_skip_queue: bool = False,
+    max_no_data_retries: int = 1,
+    max_timeout_retries: int = 1,
+    skip_queue_path: str | Path = DEFAULT_SKIP_QUEUE_PATH,
+    reset_skip_queue: bool = False,
+    skip_cooldown_minutes: int = 60,
     batch_id: str = "",
     dry_run: bool = False,
     force_snapshot: bool = False,
@@ -81,13 +98,42 @@ def update_market_data(
     resolved_symbols = _resolve_symbols(symbols, settings=resolved_settings)
     store = DuckDBStore(resolved_settings.duckdb_path)
     store.initialize()
+    if Path(skip_queue_path) == DEFAULT_SKIP_QUEUE_PATH and Path(status_path) != DEFAULT_STATUS_PATH:
+        skip_queue_path = Path(status_path).parent / DEFAULT_SKIP_QUEUE_PATH.name
+    if reset_skip_queue:
+        reset_missing_latest_queue(skip_queue_path)
     selection_plan: dict[str, Any] = {}
-    if continue_missing_latest:
+    if retry_skip_queue:
+        retry_batch = retry_symbols(
+            skip_queue_path,
+            trade_date=end,
+            batch_size=batch_size or update_limit or DEFAULT_BATCH_SIZE,
+            max_no_data_retries=max_no_data_retries,
+            max_timeout_retries=max_timeout_retries,
+            skip_cooldown_minutes=skip_cooldown_minutes,
+        )
+        mark_retry_attempts(skip_queue_path, trade_date=end, symbols=retry_batch)
+        queue_stats = queue_counts(skip_queue_path, trade_date=end)
+        selection_plan = {
+            "symbols": retry_batch,
+            "pending_symbol_count": len(retry_batch),
+            "already_latest_symbol_count": 0,
+            "retry_round": 1,
+            "skip_queue_path": str(skip_queue_path),
+            **queue_stats,
+        }
+        resolved_symbols = retry_batch
+    elif continue_missing_latest:
         selection_plan = _continue_missing_latest_symbol_plan(
             end_date=end,
             symbols=resolved_symbols,
             store=store,
             batch_size=batch_size or update_limit or DEFAULT_BATCH_SIZE,
+            respect_skip_queue=respect_skip_queue,
+            skip_queue_path=skip_queue_path,
+            max_no_data_retries=max_no_data_retries,
+            max_timeout_retries=max_timeout_retries,
+            skip_cooldown_minutes=skip_cooldown_minutes,
         )
         resolved_symbols = list(selection_plan.get("symbols") or [])
     elif batch_size and not update_limit and not symbols:
@@ -117,6 +163,10 @@ def update_market_data(
         batch_size=batch_size or len(resolved_symbols),
         batch_timeout_seconds=batch_timeout_seconds,
         symbol_timeout_seconds=symbol_timeout_seconds,
+        skip_queue_count=int(selection_plan.get("skip_queue_count", 0) or 0),
+        retry_queue_count=int(selection_plan.get("retry_queue_count", 0) or 0),
+        cooldown_symbol_count=int(selection_plan.get("cooldown_symbol_count", 0) or 0),
+        retry_round=int(selection_plan.get("retry_round", 0) or 0),
     )
     attempts: list[dict[str, Any]] = []
     provider_order = _provider_order(provider, resolved_settings, resolved_goal)
@@ -140,6 +190,10 @@ def update_market_data(
                 now=current_dt,
                 progress=progress,
                 update_limit=update_limit,
+                skip_queue_path=skip_queue_path,
+                max_no_data_retries=max_no_data_retries,
+                max_timeout_retries=max_timeout_retries,
+                skip_cooldown_minutes=skip_cooldown_minutes,
                 )
             attempts.append(result)
             if provider != "auto":
@@ -245,7 +299,7 @@ def update_market_data(
         progress.finish(status="failed", suggested_action=str(final.get("suggested_action") or ""))
         return final
     except KeyboardInterrupt:
-        progress.finish(status="interrupted", suggested_action="本次更新被中断，可重新运行。")
+        progress.finish(status="interrupted", interrupted_by_user=True, suggested_action="本次更新被中断，可重新运行。")
         raise
     except Exception:
         progress.finish(status="failed")
@@ -271,6 +325,10 @@ def _run_provider(
     now: datetime,
     progress: MarketDataProgressWriter,
     update_limit: int = 0,
+    skip_queue_path: str | Path = DEFAULT_SKIP_QUEUE_PATH,
+    max_no_data_retries: int = 1,
+    max_timeout_retries: int = 1,
+    skip_cooldown_minutes: int = 60,
 ) -> dict[str, Any]:
     try:
         plan = _provider_symbol_plan(provider, goal=goal, end_date=end_date, symbols=symbols, store=store, update_limit=update_limit)
@@ -437,7 +495,30 @@ def _run_provider(
             status = "success" if written else "failed"
             failure_summary = payload.get("failure_summary", {}) if isinstance(payload, dict) else {}
             failure_examples = payload.get("failure_examples", {}) if isinstance(payload, dict) else {}
+            failure_records = payload.get("failure_records", []) if isinstance(payload, dict) else []
+            if isinstance(failure_records, list) and failure_records:
+                record_failure_records(
+                    skip_queue_path,
+                    trade_date=end_date,
+                    failure_records=failure_records,
+                    max_no_data_retries=max_no_data_retries,
+                    max_timeout_retries=max_timeout_retries,
+                    skip_cooldown_minutes=skip_cooldown_minutes,
+                )
+            if written and isinstance(price, pd.DataFrame) and not price.empty:
+                resolved_symbols = (
+                    price.loc[price["trade_date"].astype(str).str.replace("-", "", regex=False) == end_date, "ts_code"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+                mark_resolved_symbols(skip_queue_path, trade_date=end_date, symbols=resolved_symbols)
+            queue_stats = queue_counts(skip_queue_path, trade_date=end_date)
             extra = {**plan, "failure_summary": failure_summary, "failure_examples": failure_examples, "next_retry_symbol_count": sum(int(v or 0) for v in failure_summary.values())}
+            extra.update(queue_stats)
+            if isinstance(failure_records, list):
+                extra["failure_records"] = failure_records[:200]
             extra.update(
                 {
                     "adj_factor_source": "baostock_adjusted_price_identity",
@@ -805,6 +886,17 @@ def _finalize_result(
     latest_success = next((item for item in attempts if item.get("status") == "success" and int(item.get("written_row_count", 0) or 0) > 0), None)
     written_tables = sorted({table for item in attempts for table in item.get("written_table_names", [])})
     written_rows = sum(int(item.get("written_row_count", 0) or 0) for item in attempts)
+    aggregate_failure_summary: dict[str, int] = {}
+    aggregate_failure_examples: dict[str, list[str]] = {}
+    for item in attempts:
+        for key, value in dict(item.get("failure_summary") or {}).items():
+            aggregate_failure_summary[str(key)] = aggregate_failure_summary.get(str(key), 0) + int(value or 0)
+        for key, values in dict(item.get("failure_examples") or {}).items():
+            bucket = aggregate_failure_examples.setdefault(str(key), [])
+            for symbol in list(values or []):
+                text = str(symbol)
+                if text not in bucket and len(bucket) < 20:
+                    bucket.append(text)
     partial = any(bool(item.get("partial_update")) for item in attempts if item.get("status") == "success") or status == "partial"
     quality = read_market_status(status_path)
     if quality.get("data_quality_snapshot_source") != "readonly_duckdb_sql":
@@ -838,6 +930,8 @@ def _finalize_result(
         "message": message,
         "user_summary": message,
         "suggested_action": _suggested_action(status, quality, latest_success),
+        "failure_summary": aggregate_failure_summary,
+        "failure_examples": aggregate_failure_examples,
         "core_price_data_usable": core_price_usable,
         "core_price_data_status": "可用" if core_price_usable else "不足",
         "enhanced_data_status": "完整" if enhanced_complete else "不完整",
@@ -846,6 +940,10 @@ def _finalize_result(
     if partial:
         result["formal_result_usable"] = False
         result["formal_result_warning_reason"] = result.get("formal_result_warning_reason") or "本次仅完成部分更新，当前结果不可作为正式全市场研究结果。"
+    for key in ["skip_queue_count", "retry_queue_count", "cooldown_symbol_count", "today_no_data_count", "timeout_retry_count", "queue_excluded_symbol_count", "skip_queue_path"]:
+        value = next((item.get(key) for item in attempts if item.get(key) is not None), None)
+        if value is not None:
+            result[key] = value
     path = Path(status_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -984,9 +1082,28 @@ def _continue_missing_latest_symbol_plan(
     symbols: list[str],
     store: DuckDBStore,
     batch_size: int,
+    respect_skip_queue: bool = True,
+    skip_queue_path: str | Path = DEFAULT_SKIP_QUEUE_PATH,
+    max_no_data_retries: int = 1,
+    max_timeout_retries: int = 1,
+    skip_cooldown_minutes: int = 60,
 ) -> dict[str, Any]:
     """Select one bounded batch of symbols missing latest daily_price or daily_basic."""
     universe = [_to_ts_code(symbol) for symbol in symbols]
+    queue_stats = queue_counts(skip_queue_path, trade_date=end_date) if respect_skip_queue else {
+        "skip_queue_count": 0,
+        "retry_queue_count": 0,
+        "cooldown_symbol_count": 0,
+        "today_no_data_count": 0,
+        "timeout_retry_count": 0,
+    }
+    excluded = excluded_symbols_for_main_scan(
+        skip_queue_path,
+        trade_date=end_date,
+        max_no_data_retries=max_no_data_retries,
+        max_timeout_retries=max_timeout_retries,
+        skip_cooldown_minutes=skip_cooldown_minutes,
+    ) if respect_skip_queue else set()
     if not universe:
         return {
             "symbols": [],
@@ -994,6 +1111,9 @@ def _continue_missing_latest_symbol_plan(
             "already_latest_symbol_count": 0,
             "missing_latest_price_symbol_count": 0,
             "missing_latest_basic_symbol_count": 0,
+            "queue_excluded_symbol_count": 0,
+            "skip_queue_path": str(skip_queue_path),
+            **queue_stats,
         }
     symbol_frame = pd.DataFrame({"ts_code": universe, "position": range(len(universe))})
     try:
@@ -1031,6 +1151,9 @@ def _continue_missing_latest_symbol_plan(
             "already_latest_symbol_count": 0,
             "missing_latest_price_symbol_count": len(universe),
             "missing_latest_basic_symbol_count": len(universe),
+            "queue_excluded_symbol_count": 0,
+            "skip_queue_path": str(skip_queue_path),
+            **queue_stats,
         }
     if frame.empty:
         return {
@@ -1039,18 +1162,28 @@ def _continue_missing_latest_symbol_plan(
             "already_latest_symbol_count": 0,
             "missing_latest_price_symbol_count": 0,
             "missing_latest_basic_symbol_count": 0,
+            "queue_excluded_symbol_count": 0,
+            "skip_queue_path": str(skip_queue_path),
+            **queue_stats,
         }
     frame["missing_price"] = pd.to_numeric(frame["missing_price"], errors="coerce").fillna(1).astype(int)
     frame["missing_basic"] = pd.to_numeric(frame["missing_basic"], errors="coerce").fillna(1).astype(int)
     pending = frame[(frame["missing_price"] > 0) | (frame["missing_basic"] > 0)].copy()
+    pending_before_queue = int(len(pending))
+    if excluded:
+        pending = pending[~pending["ts_code"].astype(str).isin(excluded)].copy()
     planned = pending["ts_code"].astype(str).head(max(1, int(batch_size or DEFAULT_BATCH_SIZE))).tolist()
     latest_ready = frame[(frame["missing_price"] == 0) & (frame["missing_basic"] == 0)]
     return {
         "symbols": planned,
         "pending_symbol_count": int(len(pending)),
+        "pending_symbol_count_before_queue": pending_before_queue,
         "already_latest_symbol_count": int(len(latest_ready)),
         "missing_latest_price_symbol_count": int(frame["missing_price"].sum()),
         "missing_latest_basic_symbol_count": int(frame["missing_basic"].sum()),
+        "queue_excluded_symbol_count": int(len(excluded)),
+        "skip_queue_path": str(skip_queue_path),
+        **queue_stats,
     }
 
 
@@ -1270,14 +1403,50 @@ def run_batched_update_parent(
     store = DuckDBStore(resolved_settings.duckdb_path)
     store.initialize()
     batch_size = max(1, int(args.batch_size or args.update_limit or DEFAULT_BATCH_SIZE))
-    if args.continue_missing_latest:
-        plan = _continue_missing_latest_symbol_plan(end_date=end, symbols=resolved_symbols, store=store, batch_size=batch_size)
+    skip_queue_path = Path(getattr(args, "skip_queue_path", DEFAULT_SKIP_QUEUE_PATH))
+    if skip_queue_path == DEFAULT_SKIP_QUEUE_PATH and status_path != DEFAULT_STATUS_PATH:
+        skip_queue_path = status_path.parent / DEFAULT_SKIP_QUEUE_PATH.name
+    max_no_data_retries = int(getattr(args, "max_no_data_retries", 1) or 1)
+    max_timeout_retries = int(getattr(args, "max_timeout_retries", 1) or 1)
+    skip_cooldown_minutes = int(getattr(args, "skip_cooldown_minutes", 60) or 0)
+    if getattr(args, "reset_skip_queue", False):
+        reset_missing_latest_queue(skip_queue_path)
+    if getattr(args, "retry_skip_queue", False):
+        planned_symbols = retry_symbols(
+            skip_queue_path,
+            trade_date=end,
+            batch_size=batch_size,
+            max_no_data_retries=max_no_data_retries,
+            max_timeout_retries=max_timeout_retries,
+            skip_cooldown_minutes=skip_cooldown_minutes,
+        )
+        mark_retry_attempts(skip_queue_path, trade_date=end, symbols=planned_symbols)
+        plan = {
+            "pending_symbol_count": len(planned_symbols),
+            "already_latest_symbol_count": 0,
+            "retry_round": 1,
+            "skip_queue_path": str(skip_queue_path),
+            **queue_counts(skip_queue_path, trade_date=end),
+        }
+    elif args.continue_missing_latest:
+        plan = _continue_missing_latest_symbol_plan(
+            end_date=end,
+            symbols=resolved_symbols,
+            store=store,
+            batch_size=batch_size,
+            respect_skip_queue=True if getattr(args, "respect_skip_queue", True) else True,
+            skip_queue_path=skip_queue_path,
+            max_no_data_retries=max_no_data_retries,
+            max_timeout_retries=max_timeout_retries,
+            skip_cooldown_minutes=skip_cooldown_minutes,
+        )
         planned_symbols = list(plan.get("symbols") or [])
     else:
         planned_symbols = resolved_symbols[:batch_size]
         plan = {
             "pending_symbol_count": len(resolved_symbols),
             "already_latest_symbol_count": max(len(resolved_symbols) - len(planned_symbols), 0),
+            **queue_counts(skip_queue_path, trade_date=end),
         }
     batch_id = str(uuid.uuid4())
     progress = MarketDataProgressWriter(args.progress_path)
@@ -1289,6 +1458,10 @@ def run_batched_update_parent(
         batch_size=batch_size,
         batch_timeout_seconds=int(args.batch_timeout_seconds or DEFAULT_BATCH_TIMEOUT_SECONDS),
         symbol_timeout_seconds=int(args.symbol_timeout_seconds or DEFAULT_SYMBOL_TIMEOUT_SECONDS),
+        skip_queue_count=int(plan.get("skip_queue_count", 0) or 0),
+        retry_queue_count=int(plan.get("retry_queue_count", 0) or 0),
+        cooldown_symbol_count=int(plan.get("cooldown_symbol_count", 0) or 0),
+        retry_round=int(plan.get("retry_round", 0) or 0),
     )
     if not planned_symbols:
         progress.finish(status="skipped", suggested_action="最新交易日已无待补缺口。")
@@ -1331,9 +1504,21 @@ def run_batched_update_parent(
         str(args.symbol_timeout_seconds or DEFAULT_SYMBOL_TIMEOUT_SECONDS),
         "--batch-id",
         batch_id,
+        "--skip-queue-path",
+        str(skip_queue_path),
+        "--max-no-data-retries",
+        str(max_no_data_retries),
+        "--max-timeout-retries",
+        str(max_timeout_retries),
+        "--skip-cooldown-minutes",
+        str(skip_cooldown_minutes),
         "--format",
         "json",
     ]
+    if getattr(args, "retry_skip_queue", False):
+        command.append("--retry-skip-queue")
+    if getattr(args, "respect_skip_queue", True):
+        command.append("--respect-skip-queue")
     if args.force_snapshot:
         command.append("--force-snapshot")
     child_env = os.environ.copy()
@@ -1353,10 +1538,12 @@ def run_batched_update_parent(
     except subprocess.TimeoutExpired:
         _terminate_process_group(process)
         stdout, stderr = process.communicate(timeout=5)
+        timeout_symbol = str(read_market_data_progress(args.progress_path).get("current_symbol") or "")
         progress.finish(
             status="interrupted",
             stale_detected=True,
             timeout=True,
+            timeout_symbol=timeout_symbol,
             suggested_action="本批更新已中断，可稍后继续补缺口。",
         )
         return {
@@ -1374,6 +1561,30 @@ def run_batched_update_parent(
             "stderr": stderr,
             "message": "本批更新超时，已中断，可稍后继续补缺口。",
             "suggested_action": "本批更新已中断，可稍后继续补缺口。",
+            **plan,
+        }
+    except KeyboardInterrupt:
+        _terminate_process_group(process)
+        timeout_symbol = str(read_market_data_progress(args.progress_path).get("current_symbol") or "")
+        progress.finish(
+            status="interrupted",
+            stale_detected=True,
+            interrupted_by_user=True,
+            timeout_symbol=timeout_symbol,
+            suggested_action="用户中断，本批已停止，可稍后继续补缺口。",
+        )
+        return {
+            "status": "interrupted",
+            "goal": resolved_goal,
+            "provider": args.provider,
+            "batch_id": batch_id,
+            "batch_size": batch_size,
+            "planned_symbols": len(planned_symbols),
+            "stale_detected": True,
+            "interrupted_by_user": True,
+            "timeout_symbol": timeout_symbol,
+            "message": "用户中断，本批已停止，可稍后继续补缺口。",
+            "suggested_action": "用户中断，本批已停止，可稍后继续补缺口。",
             **plan,
         }
     elapsed = round(time.monotonic() - start_time, 2)
@@ -1453,6 +1664,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--batch-timeout-seconds", type=int, default=DEFAULT_BATCH_TIMEOUT_SECONDS)
     parser.add_argument("--symbol-timeout-seconds", type=int, default=DEFAULT_SYMBOL_TIMEOUT_SECONDS)
     parser.add_argument("--continue-missing-latest", action="store_true")
+    parser.add_argument("--respect-skip-queue", action="store_true", default=True)
+    parser.add_argument("--retry-skip-queue", action="store_true")
+    parser.add_argument("--max-no-data-retries", type=int, default=1)
+    parser.add_argument("--max-timeout-retries", type=int, default=1)
+    parser.add_argument("--skip-queue-path", default=str(DEFAULT_SKIP_QUEUE_PATH))
+    parser.add_argument("--reset-skip-queue", action="store_true")
+    parser.add_argument("--skip-cooldown-minutes", type=int, default=60)
     parser.add_argument("--status-path", default=str(DEFAULT_STATUS_PATH))
     parser.add_argument("--force-snapshot", action="store_true")
     parser.add_argument("--progress-path", default=str(DEFAULT_PROGRESS_PATH))
@@ -1477,6 +1695,13 @@ def main(argv: list[str] | None = None) -> None:
             batch_timeout_seconds=args.batch_timeout_seconds,
             symbol_timeout_seconds=args.symbol_timeout_seconds,
             continue_missing_latest=args.continue_missing_latest,
+            respect_skip_queue=args.respect_skip_queue,
+            retry_skip_queue=args.retry_skip_queue,
+            max_no_data_retries=args.max_no_data_retries,
+            max_timeout_retries=args.max_timeout_retries,
+            skip_queue_path=args.skip_queue_path,
+            reset_skip_queue=args.reset_skip_queue,
+            skip_cooldown_minutes=args.skip_cooldown_minutes,
             batch_id=args.batch_id,
             force_snapshot=args.force_snapshot,
             dry_run=args.dry_run,
@@ -1499,6 +1724,11 @@ def main(argv: list[str] | None = None) -> None:
             print(f"- 本批计划股票数: {result.get('planned_symbols', result.get('total_symbol_count', 0))}")
             print(f"- batch_timeout_seconds: {result.get('batch_timeout_seconds', '')}")
             print(f"- symbol_timeout_seconds: {result.get('symbol_timeout_seconds', '')}")
+        if result.get("skip_queue_count") is not None:
+            print("- 补缺口队列:")
+            print(f"  - no_data 冷却队列: {result.get('skip_queue_count', 0)}")
+            print(f"  - 待 retry 队列: {result.get('retry_queue_count', 0)}")
+            print(f"  - 本次队列排除: {result.get('queue_excluded_symbol_count', 0)}")
         if result.get("enhanced_pending_symbol_count") is not None:
             print("- 增强数据补齐:")
             print(f"  - 待补 daily_basic: {result.get('missing_daily_basic_symbol_count', 0)}")
