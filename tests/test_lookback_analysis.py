@@ -167,7 +167,7 @@ def test_strategy_backtest_tab_renders_lookback_entry() -> None:
     start = source.index("def _render_backtest_tab")
     end = source.index("def _render_status_tab", start)
     backtest_source = source[start:end]
-    assert "_render_lookback_analysis_section(st)" in backtest_source
+    assert "_render_lookback_analysis_section(st, tables or {})" in backtest_source
     assert "暂无回测结果。请先运行回测诊断；真实数据不足时不会生成结果。" not in backtest_source
 
 

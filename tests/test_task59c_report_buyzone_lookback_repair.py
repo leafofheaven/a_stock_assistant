@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 import pandas as pd
 
 from core.jobs.export_daily_research_workbook import export_daily_research_workbook
+from core.jobs.export_daily_research_workbook import build_lookback_status_display
 from core.storage.duckdb_store import DuckDBStore
 from core.review.decisions import REVIEW_COLUMNS
 
@@ -111,7 +112,89 @@ def test_status_page_uses_latest_local_research_date_when_planned_date_has_zero_
 
     assert captured["research_trade_date"] == "20260706"
     assert status["current_research_trade_date"] == "20260706"
-    assert status["planned_update_trade_date"] == "20260707"
+    assert status["planned_update_target_date"] == "20260707"
+    assert status["latest_daily_price_symbol_count"] == 4994
+    assert "计划目标日期 20260707 尚未完成更新" in status["formal_result_warning_reason"]
+
+
+def test_status_page_uses_current_research_date_even_when_planned_snapshot_has_rows(monkeypatch) -> None:
+    import web.streamlit_app as app
+
+    captured: dict[str, str] = {}
+
+    def fake_snapshot(*, db_path: str, research_trade_date: str, latest_completed_trade_date: str) -> dict[str, object]:
+        captured["research_trade_date"] = research_trade_date
+        return {
+            "data_quality_status": "ok",
+            "configured_symbol_count": 5055,
+            "latest_daily_price_symbol_count": 4994,
+            "latest_completed_trade_date": latest_completed_trade_date,
+        }
+
+    monkeypatch.setattr(app, "build_data_quality_snapshot", fake_snapshot)
+    scheduled = {
+        "data_quality_snapshot_source": "scheduled",
+        "latest_completed_trade_date": "20260707",
+        "latest_daily_price_symbol_count": 68,
+    }
+    legacy = {"latest_trade_date": "20260706", "latest_selection_date": "20260706", "duckdb_path": "/tmp/test.duckdb"}
+
+    status = app._status_page_quality_snapshot({"_duckdb_path": "/tmp/test.duckdb"}, scheduled, legacy)
+
+    assert captured["research_trade_date"] == "20260706"
+    assert status["latest_daily_price_symbol_count"] == 4994
+    assert status["current_research_trade_date"] == "20260706"
+    assert status["planned_update_target_date"] == "20260707"
+
+
+def test_streamlit_daily_research_frames_match_excel_scope(tmp_path: Path) -> None:
+    import web.streamlit_app as app
+
+    store = _seed_research_scope_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+    export_daily_research_workbook(trade_date="20260706", output_path=output, settings=_settings(store), store=store, lookback_status_path=tmp_path / "missing.json")
+
+    tables = {
+        "strategy_result": store.read_table("strategy_result"),
+        "entry_zone_snapshots": store.read_table("entry_zone_snapshots"),
+        "_watchlist_snapshot": store.read_table("watchlist_daily_snapshots"),
+        "external_position_snapshots": pd.DataFrame(),
+        "daily_price": store.read_table("daily_price"),
+    }
+    view = app._build_dashboard_daily_research_view(tables, tables["daily_price"])
+    workbook = load_workbook(output)
+
+    excel_candidates = {row["股票代码（ts_code）"] for row in _sheet_records(workbook["01_今日候选"])}
+    excel_watchlist = {row["股票代码（ts_code）"] for row in _sheet_records(workbook["04_观察池"])}
+    excel_entry = {row["股票代码（ts_code）"] for row in _sheet_records(workbook["03_买入区间"])}
+
+    assert view is not None
+    assert set(view.strategy_sheet["ts_code"]) == excel_candidates
+    assert set(view.watchlist_sheet["ts_code"]) == excel_watchlist
+    assert set(view.entry_sheet["ts_code"]) == excel_entry
+    assert view.strategy_sheet["ts_code"].is_unique
+    assert len(view.watchlist_sheet) == 30
+    assert len(view.entry_sheet) == len(excel_entry)
+    assert len(view.entry_sheet) <= 40
+
+
+def test_streamlit_lookback_status_uses_shared_display_function() -> None:
+    import web.streamlit_app as app
+
+    status = {
+        "as_of_trade_date": "20260703",
+        "end_date": "20260703",
+        "candidate_sample_count": 30,
+        "valid_sample_count": 18,
+        "insufficient_forward_data_count": 232,
+        "generated_report_path": "/tmp/missing_lookback.xlsx",
+    }
+
+    assert app.build_lookback_status_display is build_lookback_status_display
+    display = app.build_lookback_status_display(status, "20260706")
+    assert display["is_current"] is False
+    assert display["summary"]["回看状态"] == "需要刷新当日回看"
+    assert display["summary"]["报告文件状态"] == "文件不存在，可能已清理"
 
 
 def _seed_research_scope_store(tmp_path: Path) -> DuckDBStore:

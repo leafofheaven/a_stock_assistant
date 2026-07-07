@@ -37,7 +37,7 @@ from core.config.env_file import masked_env_values, parse_stock_symbols, read_en
 from core.runtime.command_runner import ALLOWED_COMMANDS, open_project_path, run_command_streaming
 from core.jobs.market_data_progress import DEFAULT_PROGRESS_PATH, read_market_data_progress
 from core.jobs.run_scheduled_daily_update import DEFAULT_STATUS_PATH, read_scheduled_status
-from core.jobs.export_daily_research_workbook import build_daily_research_view_from_frames
+from core.jobs.export_daily_research_workbook import build_daily_research_view_from_frames, build_lookback_status_display
 from core.runtime.progress import parse_progress_line
 from core.technical.elder import build_elder_review
 from core.external_positions.importer import position_template_frame, trade_template_frame
@@ -641,7 +641,8 @@ def _safe_load_dashboard_tables(store: Any) -> dict[str, pd.DataFrame]:
 
 def _build_dashboard_daily_research_view(tables: dict[str, pd.DataFrame], price_df: pd.DataFrame):
     """Build Streamlit-visible research tables using the workbook display scope."""
-    trade_date = _latest_date(tables.get("strategy_result", pd.DataFrame()), "trade_date") or _latest_date(tables.get("daily_price", pd.DataFrame()), "trade_date") or ""
+    dates = resolve_streamlit_research_dates(tables, read_scheduled_status(DEFAULT_STATUS_PATH), summarize_update_status(tables))
+    trade_date = str(dates.get("current_research_trade_date") or "")
     try:
         return build_daily_research_view_from_frames(
             strategy=tables.get("strategy_result", pd.DataFrame()),
@@ -997,7 +998,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     with tabs[7]:
         _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
     with tabs[8]:
-        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}))
+        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}), dashboard_data.get("tables", {}))
     with tabs[9]:
         _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
     with tabs[10]:
@@ -1597,9 +1598,9 @@ def _render_positions_tab(st: Any, positions_df: pd.DataFrame) -> None:
     st.caption("导出：python -m core.jobs.export_positions 或 python -m core.jobs.export_positions --format markdown")
 
 
-def _render_backtest_tab(st: Any, backtest: dict[str, Any]) -> None:
+def _render_backtest_tab(st: Any, backtest: dict[str, Any], tables: dict[str, pd.DataFrame] | None = None) -> None:
     st.subheader("策略回测")
-    _render_lookback_analysis_section(st)
+    _render_lookback_analysis_section(st, tables or {})
     st.divider()
     st.write("传统回测诊断")
     if not backtest:
@@ -1646,22 +1647,20 @@ def _safe_render_status_block(st: Any, label: str, func: Any, *args: Any) -> Non
 
 def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: dict[str, Any], legacy_status: dict[str, Any]) -> dict[str, Any]:
     """Return the authoritative quality snapshot for the status page."""
-    # Task 60 TODO: replace this lightweight split with exchange-calendar and intraday/after-close target-date logic.
-    planned_date = _compact_date(scheduled.get("latest_completed_trade_date") or scheduled.get("research_trade_date") or "")
-    current_research_date = _compact_date(
-        legacy_status.get("latest_selection_date")
-        or legacy_status.get("latest_trade_date")
-        or legacy_status.get("latest_price_date")
-        or ""
-    )
-    if scheduled.get("data_quality_snapshot_source") and scheduled.get("latest_daily_price_symbol_count") is not None:
+    dates = resolve_streamlit_research_dates(tables, scheduled, legacy_status)
+    planned_date = dates["planned_update_target_date"]
+    current_research_date = dates["current_research_trade_date"]
+    latest_local_date = dates["latest_local_trade_date"]
+    if scheduled.get("latest_daily_price_symbol_count") is not None:
         scheduled_date = _compact_date(scheduled.get("latest_completed_trade_date") or scheduled.get("research_trade_date") or "")
-        latest_count = int(scheduled.get("latest_daily_price_symbol_count", 0) or 0)
-        if not (current_research_date and scheduled_date > current_research_date and latest_count == 0):
+        if not (current_research_date and scheduled_date > current_research_date):
             result = dict(scheduled)
+            result.setdefault("planned_update_target_date", planned_date or scheduled_date)
             result.setdefault("planned_update_trade_date", planned_date or scheduled_date)
             result.setdefault("current_research_trade_date", current_research_date or scheduled_date)
-            result.setdefault("latest_local_trade_date", current_research_date or scheduled_date)
+            result.setdefault("latest_local_trade_date", latest_local_date or current_research_date or scheduled_date)
+            if dates["date_status_note"]:
+                result.setdefault("formal_result_warning_reason", dates["date_status_note"])
             return result
     db_path = str(tables.get("_duckdb_path") or legacy_status.get("duckdb_path") or "")
     target_date = current_research_date or planned_date
@@ -1672,14 +1671,12 @@ def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: di
                 research_trade_date=target_date,
                 latest_completed_trade_date=target_date,
             )
+            result["planned_update_target_date"] = planned_date or target_date
             result["planned_update_trade_date"] = planned_date or target_date
             result["current_research_trade_date"] = target_date
-            result["latest_local_trade_date"] = current_research_date or target_date
-            if planned_date and planned_date != target_date:
-                result["formal_result_warning_reason"] = (
-                    f"当前研究展示日期为 {target_date}；计划更新目标交易日为 {planned_date}，"
-                    "其覆盖情况不代表当前研究结果。"
-                )
+            result["latest_local_trade_date"] = latest_local_date or current_research_date or target_date
+            if dates["date_status_note"]:
+                result["formal_result_warning_reason"] = dates["date_status_note"]
             return result
         except Exception:
             pass
@@ -1690,10 +1687,65 @@ def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: di
         "configured_symbol_count": int(legacy_status.get("configured_symbol_count", 0) or 0),
         "research_trade_date": target_date,
         "latest_completed_trade_date": target_date,
+        "planned_update_target_date": planned_date or target_date,
         "planned_update_trade_date": planned_date or target_date,
         "current_research_trade_date": target_date,
-        "latest_local_trade_date": current_research_date or target_date,
+        "latest_local_trade_date": latest_local_date or current_research_date or target_date,
+        "formal_result_warning_reason": dates["date_status_note"] or "当前缺少数据质量快照，请运行刷新数据状态或检查 DuckDB。",
     }
+
+
+def resolve_streamlit_research_dates(
+    tables: dict[str, Any] | None = None,
+    scheduled: dict[str, Any] | None = None,
+    legacy_status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve the dates Streamlit should use for research views and update status.
+
+    Task 60 TODO: replace this lightweight split with exchange-calendar and
+    intraday/after-close target-date logic.
+    """
+    tables = tables or {}
+    scheduled = scheduled or {}
+    legacy_status = legacy_status or {}
+    latest_local_trade_date = _first_compact_date(
+        legacy_status.get("latest_trade_date"),
+        legacy_status.get("latest_price_date"),
+        tables.get("_latest_trade_date"),
+        tables.get("_latest_price_date"),
+        _latest_date(tables.get("daily_price", pd.DataFrame()), "trade_date") if isinstance(tables.get("daily_price"), pd.DataFrame) else "",
+    )
+    current_research_trade_date = _first_compact_date(
+        tables.get("_daily_research_trade_date"),
+        legacy_status.get("latest_selection_date"),
+        _latest_date(tables.get("strategy_result", pd.DataFrame()), "trade_date") if isinstance(tables.get("strategy_result"), pd.DataFrame) else "",
+        latest_local_trade_date,
+    )
+    planned_update_target_date = _first_compact_date(
+        scheduled.get("latest_completed_trade_date"),
+        scheduled.get("research_trade_date"),
+        scheduled.get("planned_update_target_date"),
+        scheduled.get("planned_update_trade_date"),
+    )
+    note = ""
+    if planned_update_target_date and current_research_trade_date and planned_update_target_date > current_research_trade_date:
+        note = f"计划目标日期 {planned_update_target_date} 尚未完成更新，当前研究仍使用 {current_research_trade_date}。"
+    return {
+        "latest_local_trade_date": latest_local_trade_date,
+        "current_research_trade_date": current_research_trade_date,
+        "planned_update_target_date": planned_update_target_date,
+        "planned_update_trade_date": planned_update_target_date,
+        "planned_target_is_current": bool(planned_update_target_date and planned_update_target_date == current_research_trade_date),
+        "date_status_note": note,
+    }
+
+
+def _first_compact_date(*values: Any) -> str:
+    for value in values:
+        compact = _compact_date(value)
+        if compact:
+            return compact
+    return ""
 
 
 def _compact_date(value: Any) -> str:
@@ -1730,7 +1782,7 @@ def _status_conclusion_row(scheduled: dict[str, Any], status: dict[str, Any]) ->
         "流程状态": scheduled.get("status") or "暂无",
         "当前阶段": scheduled.get("stage") or "暂无",
         "最新本地可用交易日": status.get("latest_local_trade_date") or "暂无",
-        "计划更新目标交易日": status.get("planned_update_trade_date") or "暂无",
+        "计划更新目标日期": status.get("planned_update_target_date") or status.get("planned_update_trade_date") or "暂无",
         "当前研究展示日期": status.get("current_research_trade_date") or status.get("latest_completed_trade_date") or status.get("research_trade_date") or "暂无",
         "数据质量": status.get("data_quality_status") or "unknown",
         "核心价格行情": "可用" if status.get("core_price_data_usable") is True else "不足",
@@ -2214,30 +2266,30 @@ def _render_scheduled_update_section(st: Any) -> None:
         )
 
 
-def _render_lookback_analysis_section(st: Any) -> None:
+def _render_lookback_analysis_section(st: Any, tables: dict[str, Any] | None = None) -> None:
     """Render automatic lookback analysis status and controls."""
     st.subheader("自动回看分析")
     st.write("自动回看状态摘要")
+    tables = tables or {}
+    legacy_status = summarize_update_status(tables) if tables else {}
+    dates = resolve_streamlit_research_dates(tables, read_scheduled_status(DEFAULT_STATUS_PATH), legacy_status)
+    current_research_date = dates.get("current_research_trade_date") or ""
+    if current_research_date:
+        st.caption(f"当前研究日期：{current_research_date}")
+    if dates.get("date_status_note"):
+        st.info(str(dates["date_status_note"]))
     status = _read_lookback_status()
     if not status:
         st.info("尚无自动回看记录。可以点击运行自动回看分析生成结果。")
     else:
-        st.write(
-            {
-                "最近一次状态": status.get("status"),
-                "回看截止交易日": status.get("as_of_trade_date") or "暂无",
-                "样本区间": f"{status.get('start_date') or '暂无'} - {status.get('end_date') or '暂无'}",
-                "回看周期": ",".join(str(item) for item in status.get("horizons", [])) if isinstance(status.get("horizons"), list) else status.get("horizons"),
-                "候选样本数量": status.get("candidate_sample_count", 0),
-                "有效样本数量": status.get("valid_sample_count", 0),
-                "数据不足数量": status.get("insufficient_forward_data_count", 0),
-                "主要发现": status.get("key_findings") or "暂无",
-                "数据质量提示": status.get("data_quality_summary") or "暂无",
-                "报告路径": status.get("generated_report_path") or "暂无",
-            }
-        )
+        display = build_lookback_status_display(status, current_research_date)
+        if display["is_current"]:
+            st.success("当前研究日期已有有效自动回看摘要。")
+        else:
+            st.warning("需要刷新当日回看。最近回看仅作为历史参考，不代表当前研究日期。")
+        st.write(display["summary"])
         report_path = Path(str(status.get("generated_report_path") or ""))
-        if status.get("generated_report_path") and report_path.exists():
+        if display["is_current"] and status.get("generated_report_path") and report_path.exists():
             with report_path.open("rb") as handle:
                 st.download_button(
                     "下载最新回看报告",
@@ -2248,7 +2300,10 @@ def _render_lookback_analysis_section(st: Any) -> None:
                     width="stretch",
                 )
         elif status.get("generated_report_path"):
-            st.warning("最新回看报告文件不存在，可能已被清理。")
+            if display["is_current"]:
+                st.warning("最近回看报告文件不存在，可能已清理。")
+            elif not report_path.exists():
+                st.warning("最近历史回看报告文件不存在，可能已清理。")
     st.caption("回看分析只验证历史样本表现，不改变 total_score、因子权重或今日候选排序。")
     col1, col2 = st.columns(2)
     if col1.button("运行自动回看分析", key="run_lookback_analysis_button"):
