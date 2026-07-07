@@ -7,8 +7,14 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 import json
 import logging
+import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
 from typing import Any
+import uuid
 
 import pandas as pd
 
@@ -33,6 +39,9 @@ PROVIDER_DISPLAY_NAMES = {
     "auto": "后台自动判断",
     "enhanced_backfill": "增强数据补齐",
 }
+DEFAULT_BATCH_SIZE = 100
+DEFAULT_BATCH_TIMEOUT_SECONDS = 600
+DEFAULT_SYMBOL_TIMEOUT_SECONDS = 60
 
 
 def update_market_data(
@@ -44,6 +53,11 @@ def update_market_data(
     end_date: str = "",
     symbols: list[str] | None = None,
     update_limit: int = 0,
+    batch_size: int = 0,
+    batch_timeout_seconds: int = 0,
+    symbol_timeout_seconds: int = 0,
+    continue_missing_latest: bool = False,
+    batch_id: str = "",
     dry_run: bool = False,
     force_snapshot: bool = False,
     status_path: str | Path = DEFAULT_STATUS_PATH,
@@ -65,6 +79,19 @@ def update_market_data(
     end = _normalize_date(end_date) or _default_end_date(resolved_settings, status_path=status_path, now=current_dt)
     start = _normalize_date(start_date) or _start_from_end(end, int(getattr(resolved_settings, "full_update_lookback_days", 250) or 250))
     resolved_symbols = _resolve_symbols(symbols, settings=resolved_settings)
+    store = DuckDBStore(resolved_settings.duckdb_path)
+    store.initialize()
+    selection_plan: dict[str, Any] = {}
+    if continue_missing_latest:
+        selection_plan = _continue_missing_latest_symbol_plan(
+            end_date=end,
+            symbols=resolved_symbols,
+            store=store,
+            batch_size=batch_size or update_limit or DEFAULT_BATCH_SIZE,
+        )
+        resolved_symbols = list(selection_plan.get("symbols") or [])
+    elif batch_size and not update_limit and not symbols:
+        resolved_symbols = resolved_symbols[: max(1, int(batch_size))]
     if dry_run:
         return {
             "status": "success",
@@ -72,6 +99,9 @@ def update_market_data(
             "mode": mode,
             "provider": provider,
             "planned_symbols": len(resolved_symbols),
+            "batch_size": int(batch_size or 0),
+            "continue_missing_latest": bool(continue_missing_latest),
+            **selection_plan,
             "start_date": start,
             "end_date": end,
             "message": "dry-run：未联网、未写 DuckDB。",
@@ -79,9 +109,15 @@ def update_market_data(
     if resolved_goal == "diagnosis":
         return _diagnosis_result(provider=provider, mode=mode, goal=resolved_goal)
     progress = MarketDataProgressWriter(progress_path)
-    progress.start(goal=resolved_goal, provider=provider, total_symbol_count=len(resolved_symbols))
-    store = DuckDBStore(resolved_settings.duckdb_path)
-    store.initialize()
+    progress.start(
+        goal=resolved_goal,
+        provider=provider,
+        total_symbol_count=len(resolved_symbols),
+        batch_id=batch_id,
+        batch_size=batch_size or len(resolved_symbols),
+        batch_timeout_seconds=batch_timeout_seconds,
+        symbol_timeout_seconds=symbol_timeout_seconds,
+    )
     attempts: list[dict[str, Any]] = []
     provider_order = _provider_order(provider, resolved_settings, resolved_goal)
     try:
@@ -942,6 +978,82 @@ def _latest_baostock_symbol_plan(*, end_date: str, symbols: list[str], store: Du
     }
 
 
+def _continue_missing_latest_symbol_plan(
+    *,
+    end_date: str,
+    symbols: list[str],
+    store: DuckDBStore,
+    batch_size: int,
+) -> dict[str, Any]:
+    """Select one bounded batch of symbols missing latest daily_price or daily_basic."""
+    universe = [_to_ts_code(symbol) for symbol in symbols]
+    if not universe:
+        return {
+            "symbols": [],
+            "pending_symbol_count": 0,
+            "already_latest_symbol_count": 0,
+            "missing_latest_price_symbol_count": 0,
+            "missing_latest_basic_symbol_count": 0,
+        }
+    symbol_frame = pd.DataFrame({"ts_code": universe, "position": range(len(universe))})
+    try:
+        with store.connect(read_only=True) as connection:
+            connection.register("missing_latest_plan", symbol_frame)
+            frame = connection.execute(
+                """
+                WITH price AS (
+                  SELECT DISTINCT ts_code
+                  FROM daily_price
+                  WHERE replace(CAST(trade_date AS VARCHAR), '-', '') = ?
+                ),
+                basic AS (
+                  SELECT DISTINCT ts_code
+                  FROM daily_basic
+                  WHERE replace(CAST(trade_date AS VARCHAR), '-', '') = ?
+                )
+                SELECT s.ts_code,
+                       s.position,
+                       CASE WHEN p.ts_code IS NULL THEN 1 ELSE 0 END AS missing_price,
+                       CASE WHEN b.ts_code IS NULL THEN 1 ELSE 0 END AS missing_basic
+                FROM missing_latest_plan AS s
+                LEFT JOIN price AS p ON p.ts_code = s.ts_code
+                LEFT JOIN basic AS b ON b.ts_code = s.ts_code
+                ORDER BY missing_price DESC, missing_basic DESC, s.position
+                """,
+                [end_date, end_date],
+            ).fetchdf()
+            connection.unregister("missing_latest_plan")
+    except Exception:
+        planned = universe[: max(1, int(batch_size or DEFAULT_BATCH_SIZE))]
+        return {
+            "symbols": planned,
+            "pending_symbol_count": len(universe),
+            "already_latest_symbol_count": 0,
+            "missing_latest_price_symbol_count": len(universe),
+            "missing_latest_basic_symbol_count": len(universe),
+        }
+    if frame.empty:
+        return {
+            "symbols": [],
+            "pending_symbol_count": 0,
+            "already_latest_symbol_count": 0,
+            "missing_latest_price_symbol_count": 0,
+            "missing_latest_basic_symbol_count": 0,
+        }
+    frame["missing_price"] = pd.to_numeric(frame["missing_price"], errors="coerce").fillna(1).astype(int)
+    frame["missing_basic"] = pd.to_numeric(frame["missing_basic"], errors="coerce").fillna(1).astype(int)
+    pending = frame[(frame["missing_price"] > 0) | (frame["missing_basic"] > 0)].copy()
+    planned = pending["ts_code"].astype(str).head(max(1, int(batch_size or DEFAULT_BATCH_SIZE))).tolist()
+    latest_ready = frame[(frame["missing_price"] == 0) & (frame["missing_basic"] == 0)]
+    return {
+        "symbols": planned,
+        "pending_symbol_count": int(len(pending)),
+        "already_latest_symbol_count": int(len(latest_ready)),
+        "missing_latest_price_symbol_count": int(frame["missing_price"].sum()),
+        "missing_latest_basic_symbol_count": int(frame["missing_basic"].sum()),
+    }
+
+
 def _enhanced_symbol_plan(*, end_date: str, symbols: list[str], store: DuckDBStore, update_limit: int) -> dict[str, Any]:
     universe = [_to_ts_code(symbol) for symbol in symbols]
     if not universe:
@@ -1141,6 +1253,193 @@ def _to_ts_code(symbol: str) -> str:
     return f"{code}.SH" if code.startswith("6") else f"{code}.SZ"
 
 
+def run_batched_update_parent(
+    *,
+    args: argparse.Namespace,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Run one bounded update batch in a child process with a hard timeout."""
+    resolved_settings = settings or get_settings()
+    current_dt = datetime.now()
+    resolved_goal = _resolve_goal(args.goal, args.mode)
+    status_path = Path(getattr(args, "status_path", DEFAULT_STATUS_PATH))
+    end = _normalize_date(args.end_date) or _default_end_date(resolved_settings, status_path=status_path, now=current_dt)
+    start = _normalize_date(args.start_date) or _start_from_end(end, int(getattr(resolved_settings, "full_update_lookback_days", 250) or 250))
+    symbols = [item.strip() for item in str(args.symbols or "").split(",") if item.strip()]
+    resolved_symbols = _resolve_symbols(symbols or None, settings=resolved_settings)
+    store = DuckDBStore(resolved_settings.duckdb_path)
+    store.initialize()
+    batch_size = max(1, int(args.batch_size or args.update_limit or DEFAULT_BATCH_SIZE))
+    if args.continue_missing_latest:
+        plan = _continue_missing_latest_symbol_plan(end_date=end, symbols=resolved_symbols, store=store, batch_size=batch_size)
+        planned_symbols = list(plan.get("symbols") or [])
+    else:
+        planned_symbols = resolved_symbols[:batch_size]
+        plan = {
+            "pending_symbol_count": len(resolved_symbols),
+            "already_latest_symbol_count": max(len(resolved_symbols) - len(planned_symbols), 0),
+        }
+    batch_id = str(uuid.uuid4())
+    progress = MarketDataProgressWriter(args.progress_path)
+    progress.start(
+        goal=resolved_goal,
+        provider=args.provider,
+        total_symbol_count=len(planned_symbols),
+        batch_id=batch_id,
+        batch_size=batch_size,
+        batch_timeout_seconds=int(args.batch_timeout_seconds or DEFAULT_BATCH_TIMEOUT_SECONDS),
+        symbol_timeout_seconds=int(args.symbol_timeout_seconds or DEFAULT_SYMBOL_TIMEOUT_SECONDS),
+    )
+    if not planned_symbols:
+        progress.finish(status="skipped", suggested_action="最新交易日已无待补缺口。")
+        return {
+            "status": "skipped",
+            "goal": resolved_goal,
+            "provider": args.provider,
+            "batch_id": batch_id,
+            "batch_size": batch_size,
+            "planned_symbols": 0,
+            **plan,
+            "message": "最新交易日已无待补缺口。",
+            "provider_attempts": [],
+            "written_row_count": 0,
+        }
+    command = [
+        sys.executable,
+        "-m",
+        "core.jobs.update_market_data",
+        "--child-run",
+        "--goal",
+        resolved_goal,
+        "--mode",
+        args.mode,
+        "--provider",
+        args.provider,
+        "--start-date",
+        start,
+        "--end-date",
+        end,
+        "--symbols",
+        ",".join(planned_symbols),
+        "--progress-path",
+        str(args.progress_path),
+        "--status-path",
+        str(status_path),
+        "--batch-size",
+        str(batch_size),
+        "--symbol-timeout-seconds",
+        str(args.symbol_timeout_seconds or DEFAULT_SYMBOL_TIMEOUT_SECONDS),
+        "--batch-id",
+        batch_id,
+        "--format",
+        "json",
+    ]
+    if args.force_snapshot:
+        command.append("--force-snapshot")
+    child_env = os.environ.copy()
+    start_time = time.monotonic()
+    timeout_seconds = int(args.batch_timeout_seconds or DEFAULT_BATCH_TIMEOUT_SECONDS)
+    process = subprocess.Popen(
+        command,
+        cwd=Path.cwd(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=child_env,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _terminate_process_group(process)
+        stdout, stderr = process.communicate(timeout=5)
+        progress.finish(
+            status="interrupted",
+            stale_detected=True,
+            timeout=True,
+            suggested_action="本批更新已中断，可稍后继续补缺口。",
+        )
+        return {
+            "status": "interrupted",
+            "goal": resolved_goal,
+            "provider": args.provider,
+            "batch_id": batch_id,
+            "batch_size": batch_size,
+            "batch_timeout_seconds": timeout_seconds,
+            "symbol_timeout_seconds": int(args.symbol_timeout_seconds or DEFAULT_SYMBOL_TIMEOUT_SECONDS),
+            "planned_symbols": len(planned_symbols),
+            "stale_detected": True,
+            "timeout": True,
+            "stdout": stdout,
+            "stderr": stderr,
+            "message": "本批更新超时，已中断，可稍后继续补缺口。",
+            "suggested_action": "本批更新已中断，可稍后继续补缺口。",
+            **plan,
+        }
+    elapsed = round(time.monotonic() - start_time, 2)
+    payload = _extract_child_json(stdout)
+    if process.returncode != 0 and not payload:
+        progress.finish(status="failed", suggested_action="子进程失败，请查看输出后重试。")
+        return {
+            "status": "failed",
+            "goal": resolved_goal,
+            "provider": args.provider,
+            "batch_id": batch_id,
+            "batch_size": batch_size,
+            "planned_symbols": len(planned_symbols),
+            "elapsed_seconds": elapsed,
+            "stdout": stdout,
+            "stderr": stderr,
+            "message": "子进程失败。",
+            **plan,
+        }
+    result = payload or {"status": "success"}
+    result.update(
+        {
+            "batch_id": batch_id,
+            "batch_size": batch_size,
+            "batch_timeout_seconds": timeout_seconds,
+            "symbol_timeout_seconds": int(args.symbol_timeout_seconds or DEFAULT_SYMBOL_TIMEOUT_SECONDS),
+            "planned_symbols": len(planned_symbols),
+            "elapsed_seconds": elapsed,
+            **plan,
+        }
+    )
+    return result
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except Exception:
+        process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except Exception:
+            process.kill()
+
+
+def _extract_child_json(stdout: str) -> dict[str, Any]:
+    text = str(stdout or "").strip()
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        try:
+            payload = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Update market data through free fallback providers.")
     parser.add_argument("--goal", choices=GOALS, default="")
@@ -1150,24 +1449,40 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--end-date", default="")
     parser.add_argument("--symbols", default="")
     parser.add_argument("--update-limit", type=int, default=0)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--batch-timeout-seconds", type=int, default=DEFAULT_BATCH_TIMEOUT_SECONDS)
+    parser.add_argument("--symbol-timeout-seconds", type=int, default=DEFAULT_SYMBOL_TIMEOUT_SECONDS)
+    parser.add_argument("--continue-missing-latest", action="store_true")
+    parser.add_argument("--status-path", default=str(DEFAULT_STATUS_PATH))
     parser.add_argument("--force-snapshot", action="store_true")
     parser.add_argument("--progress-path", default=str(DEFAULT_PROGRESS_PATH))
+    parser.add_argument("--batch-id", default="")
+    parser.add_argument("--child-run", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--format", choices=["text", "json"], default="text")
     args = parser.parse_args(argv)
     symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]
-    result = update_market_data(
-        goal=args.goal,
-        mode=args.mode,
-        provider=args.provider,
-        start_date=args.start_date,
-        end_date=args.end_date,
-        symbols=symbols or None,
-        update_limit=args.update_limit,
-        force_snapshot=args.force_snapshot,
-        dry_run=args.dry_run,
-        progress_path=args.progress_path,
-    )
+    if not args.child_run and not args.dry_run and int(args.batch_timeout_seconds or 0) > 0:
+        result = run_batched_update_parent(args=args)
+    else:
+        result = update_market_data(
+            goal=args.goal,
+            mode=args.mode,
+            provider=args.provider,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            symbols=symbols or None,
+            update_limit=args.update_limit,
+            batch_size=args.batch_size,
+            batch_timeout_seconds=args.batch_timeout_seconds,
+            symbol_timeout_seconds=args.symbol_timeout_seconds,
+            continue_missing_latest=args.continue_missing_latest,
+            batch_id=args.batch_id,
+            force_snapshot=args.force_snapshot,
+            dry_run=args.dry_run,
+            status_path=args.status_path,
+            progress_path=args.progress_path,
+        )
     if args.format == "json":
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     else:
@@ -1179,6 +1494,11 @@ def main(argv: list[str] | None = None) -> None:
             print(_format_attempt_line(index, attempt))
         print(f"- 后台选择: {result.get('latest_success_provider') or '暂无成功数据源'}")
         print(f"- 写入行数: {result.get('written_row_count', 0)}")
+        if result.get("batch_size"):
+            print(f"- 本批大小: {result.get('batch_size')}")
+            print(f"- 本批计划股票数: {result.get('planned_symbols', result.get('total_symbol_count', 0))}")
+            print(f"- batch_timeout_seconds: {result.get('batch_timeout_seconds', '')}")
+            print(f"- symbol_timeout_seconds: {result.get('symbol_timeout_seconds', '')}")
         if result.get("enhanced_pending_symbol_count") is not None:
             print("- 增强数据补齐:")
             print(f"  - 待补 daily_basic: {result.get('missing_daily_basic_symbol_count', 0)}")

@@ -1808,12 +1808,13 @@ def _render_user_level_data_update_actions(st: Any, scheduled: dict[str, Any], s
     st.write("下一步建议")
     st.info(scheduled.get("suggested_action") or _next_data_update_suggestion(status))
     col1, col2, col3, col4 = st.columns(4)
+    latest_update_args = ["--goal", "latest", "--provider", "auto", "--batch-size", "100", "--batch-timeout-seconds", "600", "--symbol-timeout-seconds", "60", "--continue-missing-latest", "--format", "text"]
     if col1.button("一键更新最新交易日数据", key="auto_update_latest_trade_date"):
         _run_streaming_console_action(
             st,
             "一键更新最新交易日数据",
             "update_market_data",
-            ["--goal", "latest", "--provider", "auto", "--format", "text"],
+            latest_update_args,
             success_message="最新交易日数据更新完成。请刷新页面查看数据质量。",
         )
     if col2.button("补历史行情缺口", key="auto_repair_history_gap"):
@@ -1821,7 +1822,7 @@ def _render_user_level_data_update_actions(st: Any, scheduled: dict[str, Any], s
             st,
             "补历史行情缺口",
             "update_market_data",
-            ["--goal", "history", "--provider", "auto", "--format", "text"],
+            ["--goal", "history", "--provider", "auto", "--batch-size", "100", "--batch-timeout-seconds", "600", "--symbol-timeout-seconds", "60", "--format", "text"],
             success_message="历史行情缺口补齐命令执行完成。请刷新页面查看数据质量。",
         )
     if col3.button("运行数据源诊断", key="run_user_level_data_source_diagnosis"):
@@ -1898,10 +1899,16 @@ def _render_market_data_update_progress(st: Any, progress: dict[str, Any]) -> No
                     "写入行数": int(progress.get("written_row_count", 0) or 0),
                     "已耗时": f"{elapsed} 秒" if elapsed is not None else "暂无",
                     "最近更新时间": progress.get("last_heartbeat_at") or "暂无",
+                    "批次编号": progress.get("batch_id") or "暂无",
+                    "批次大小": int(progress.get("batch_size", 0) or 0),
+                    "批次超时": int(progress.get("batch_timeout_seconds", 0) or 0),
+                    "单股超时": int(progress.get("symbol_timeout_seconds", 0) or 0),
                 }
             ]
         ),
     )
+    if progress.get("stale_detected") or progress.get("timeout") or str(progress.get("status") or "") == "interrupted":
+        st.warning(progress.get("suggested_action") or "本批更新已中断，可稍后继续补缺口。")
     provider_rows = []
     for item in progress.get("provider_progress") or []:
         provider_rows.append(
