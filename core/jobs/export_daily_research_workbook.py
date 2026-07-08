@@ -15,6 +15,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.config import Settings, get_settings
+from core.advice.simulated_trading_advice import build_simulated_trading_advice, summarize_simulated_trading_advice
 from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
 from core.technical.elder import build_elder_review
@@ -25,6 +26,7 @@ SHEET_NAMES = [
     "03_买入区间",
     "04_观察池",
     "06_外部模拟持仓",
+    "13_模拟交易建议",
 ]
 SELECTION_DISPLAY_TOP_N = 10
 WATCHLIST_DISPLAY_TOP_N = 30
@@ -62,6 +64,7 @@ COLUMN_LABELS = {
     "section": "项目",
     "description": "说明",
     "source": "来源（source）",
+    "source_tags": "来源标签（source_tags）",
     "trade_date": "交易日期（trade_date）",
     "review_date": "复核日期（review_date）",
     "latest_trade_date": "最新行情日期（latest_trade_date）",
@@ -89,6 +92,10 @@ COLUMN_LABELS = {
     "risk_score": "风险分（risk_score）",
     "select_reason": "候选原因（select_reason）",
     "risk_note": "风险提示（risk_note）",
+    "holding_status": "持仓状态（holding_status）",
+    "simulated_action": "模拟操作建议（simulated_action）",
+    "suggested_position": "建议模拟仓位（suggested_position）",
+    "action_priority": "动作优先级（action_priority）",
     "elder_score": "埃尔德分（elder_score）",
     "review_scope": "复核范围（review_scope）",
     "review_status": "复核状态（review_status）",
@@ -149,6 +156,19 @@ COLUMN_LABELS = {
     "pnl": "浮动盈亏（pnl）",
     "pnl_pct": "浮动盈亏比例（pnl_pct）",
     "position_status": "持仓状态（position_status）",
+    "position_qty": "模拟持仓数量（position_qty）",
+    "avg_cost": "平均成本（avg_cost）",
+    "unrealized_pnl": "浮动盈亏（unrealized_pnl）",
+    "unrealized_pnl_pct": "浮动盈亏比例（unrealized_pnl_pct）",
+    "holding_days": "持仓天数（holding_days）",
+    "position_action": "持仓处理建议（position_action）",
+    "position_reason": "持仓建议理由（position_reason）",
+    "add_condition": "加仓条件（add_condition）",
+    "reduce_condition": "减仓条件（reduce_condition）",
+    "exit_condition": "退出条件（exit_condition）",
+    "trigger_condition": "触发条件（trigger_condition）",
+    "invalidation_condition": "失效条件（invalidation_condition）",
+    "advice_reason": "建议理由（advice_reason）",
     "risk_status": "风险状态（risk_status）",
     "risk_status_cn": "风险状态说明（risk_status_cn）",
     "match_note": "匹配说明（match_note）",
@@ -191,6 +211,7 @@ class WorkbookExportResult:
     entry_zone_rows: int
     watchlist_rows: int
     external_position_rows: int
+    simulated_advice_rows: int = 0
     lookback_summary_rows: int = 0
 
 
@@ -204,6 +225,7 @@ class DailyResearchView:
     entry_missing_sheet: pd.DataFrame
     watchlist_sheet: pd.DataFrame
     external_sheet: pd.DataFrame
+    simulated_advice_sheet: pd.DataFrame
     lookback_sheet: pd.DataFrame
     include_lookback_summary: bool
     lookback_note: str
@@ -270,6 +292,7 @@ def export_daily_research_workbook(
         entry_zone_missing_rows=len(view.entry_missing_sheet),
         watchlist_rows=len(view.watchlist_sheet),
         external_position_rows=len(view.external_sheet),
+        simulated_advice=view.simulated_advice_sheet,
         backend_strategy_rows=backend_strategy_rows,
         lookback_status=lookback_status if view.include_lookback_summary else None,
         lookback_note=_join_notes(view.lookback_note, entry_zone_auto_note),
@@ -287,6 +310,7 @@ def export_daily_research_workbook(
         "03_买入区间": view.entry_sheet,
         "04_观察池": _empty_if_needed(view.watchlist_sheet, "暂无观察池跟踪数据。"),
         "06_外部模拟持仓": _empty_if_needed(view.external_sheet, "暂无外部模拟持仓数据。"),
+        "13_模拟交易建议": _empty_if_needed(view.simulated_advice_sheet, "暂无模拟交易建议。"),
     }
     ordered_sheet_names = [*SHEET_NAMES]
     if not view.entry_missing_sheet.empty:
@@ -310,6 +334,7 @@ def export_daily_research_workbook(
         entry_zone_rows=len(view.entry_sheet),
         watchlist_rows=len(view.watchlist_sheet),
         external_position_rows=len(view.external_sheet),
+        simulated_advice_rows=len(view.simulated_advice_sheet),
         lookback_summary_rows=len(view.lookback_sheet),
     )
 
@@ -352,6 +377,14 @@ def build_daily_research_view_from_frames(
     entry_sheet = _build_entry_zone_sheet(entry_zones, strategy_sheet, watchlist_sheet, trade_date)
     entry_missing_sheet = _build_entry_zone_missing_sheet(entry_zones, strategy_sheet, watchlist_sheet, trade_date, entry_sheet)
     external_sheet = _latest_external_positions(external_positions if isinstance(external_positions, pd.DataFrame) else pd.DataFrame())
+    simulated_advice_sheet = build_simulated_trading_advice(
+        strategy=strategy_sheet,
+        watchlist=watchlist_sheet,
+        entry_zones=entry_sheet,
+        entry_missing=entry_missing_sheet,
+        external_positions=external_sheet,
+        trade_date=trade_date,
+    )
     include_lookback_summary, lookback_note = _lookback_summary_decision(lookback_status, trade_date)
     lookback_sheet = _build_lookback_summary_sheet(lookback_status) if include_lookback_summary else pd.DataFrame()
     return DailyResearchView(
@@ -361,6 +394,7 @@ def build_daily_research_view_from_frames(
         entry_missing_sheet=entry_missing_sheet,
         watchlist_sheet=watchlist_sheet,
         external_sheet=external_sheet,
+        simulated_advice_sheet=simulated_advice_sheet,
         lookback_sheet=lookback_sheet,
         include_lookback_summary=include_lookback_summary,
         lookback_note=lookback_note,
@@ -903,10 +937,12 @@ def _build_summary_sheet(
     entry_zone_source_rows: int = 0,
     entry_zone_missing_rows: int = 0,
     backend_strategy_rows: int | None = None,
+    simulated_advice: pd.DataFrame | None = None,
     lookback_status: dict[str, Any] | None = None,
     lookback_note: str = "",
     data_quality_snapshot: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
+    advice_counts = summarize_simulated_trading_advice(simulated_advice)
     rows = [
         {"metric": "导出时间", "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
         {"metric": "研究日期", "value": selected_trade_date or "暂无"},
@@ -920,6 +956,17 @@ def _build_summary_sheet(
         {"metric": "观察池记录数量", "value": watchlist_rows},
         {"metric": "观察池展示数量", "value": watchlist_rows},
         {"metric": "外部模拟持仓记录数量", "value": external_position_rows},
+        {"metric": "模拟交易建议数量", "value": advice_counts["total"]},
+        {"metric": "可模拟买入数量", "value": advice_counts["buy"]},
+        {"metric": "等待回调数量", "value": advice_counts["wait_pullback"]},
+        {"metric": "继续观察数量", "value": advice_counts["observe"]},
+        {"metric": "暂缓数量", "value": advice_counts["pause"]},
+        {"metric": "剔除数量", "value": advice_counts["remove"]},
+        {"metric": "模拟持仓跟踪数量", "value": advice_counts["holding"]},
+        {"metric": "建议继续持有数量", "value": advice_counts["hold"]},
+        {"metric": "建议加仓数量", "value": advice_counts["add"]},
+        {"metric": "建议减仓数量", "value": advice_counts["reduce"]},
+        {"metric": "建议卖出数量", "value": advice_counts["sell"]},
     ]
     if data_quality_snapshot:
         rows.extend(
@@ -1286,6 +1333,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"买入区间: {result.entry_zone_rows}")
     print(f"观察池: {result.watchlist_rows}")
     print(f"外部模拟持仓: {result.external_position_rows}")
+    print(f"模拟交易建议: {result.simulated_advice_rows}")
     print(f"自动回看摘要: {result.lookback_summary_rows}")
     print(f"输出文件: {result.output_path}")
     return 0

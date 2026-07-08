@@ -78,6 +78,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task60": check_task60,
         "task61": check_task61,
         "task62": check_task62,
+        "task64": check_task64,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -4113,6 +4114,63 @@ def check_task62(root: Path) -> list[str]:
     return failures
 
 
+def check_task64(root: Path) -> list[str]:
+    """Check Task 64 simulated trading advice layer."""
+    failures: list[str] = []
+    required_paths = [
+        "core/advice/simulated_trading_advice.py",
+        "core/jobs/export_daily_research_workbook.py",
+        "web/streamlit_app.py",
+        "tests/test_simulated_trading_advice.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+    advice_source = read_source(root / "core/advice/simulated_trading_advice.py")
+    for phrase in [
+        "build_simulated_trading_advice",
+        "summarize_simulated_trading_advice",
+        "source_tags",
+        "simulated_position",
+        "可模拟买入",
+        "等待回调",
+        "继续持有",
+        "可模拟加仓",
+        "减仓",
+        "卖出",
+    ]:
+        if phrase not in advice_source:
+            failures.append(f"core/advice/simulated_trading_advice.py is missing Task 64 phrase: {phrase}.")
+    workbook_source = read_source(root / "core/jobs/export_daily_research_workbook.py")
+    for phrase in [
+        "13_模拟交易建议",
+        "build_simulated_trading_advice",
+        "simulated_advice_sheet",
+        "模拟交易建议数量",
+        "模拟持仓跟踪数量",
+        "06_外部模拟持仓",
+    ]:
+        if phrase not in workbook_source:
+            failures.append(f"core/jobs/export_daily_research_workbook.py is missing Task 64 phrase: {phrase}.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "模拟交易建议",
+        "_daily_research_simulated_advice",
+        "以下仅用于模拟交易和复盘，不构成真实投资建议，不自动交易。",
+        "position_action",
+        "holding_status",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 64 phrase: {phrase}.")
+    tests_source = read_source(root / "tests/test_simulated_trading_advice.py")
+    for phrase in [
+        "test_advice_scope_deduplicates_sources_and_prioritizes_holdings",
+        "test_unheld_advice_actions_cover_buy_wait_pause_and_remove",
+        "test_holding_advice_generates_position_actions",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_simulated_trading_advice.py is missing Task 64 test: {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -4211,6 +4269,7 @@ def main(argv: list[str] | None = None) -> int:
             "task60",
             "task61",
             "task62",
+            "task64",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

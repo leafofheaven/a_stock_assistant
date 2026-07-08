@@ -39,6 +39,7 @@ from core.runtime.command_runner import ALLOWED_COMMANDS, open_project_path, run
 from core.jobs.market_data_progress import DEFAULT_PROGRESS_PATH, read_market_data_progress
 from core.jobs.run_scheduled_daily_update import DEFAULT_STATUS_PATH, read_scheduled_status
 from core.jobs.export_daily_research_workbook import build_daily_research_view_from_frames, build_lookback_status_display
+from core.advice.simulated_trading_advice import summarize_simulated_trading_advice
 from core.runtime.progress import parse_progress_line
 from core.technical.elder import build_elder_review
 from core.external_positions.importer import position_template_frame, trade_template_frame
@@ -96,6 +97,11 @@ DISPLAY_COLUMN_LABELS = {
     "action_hint": "操作提示",
     "elder_reason": "复核原因",
     "source": "来源",
+    "source_tags": "来源标签",
+    "holding_status": "持仓状态",
+    "simulated_action": "模拟操作建议",
+    "suggested_position": "建议模拟仓位",
+    "action_priority": "动作优先级",
     "review_date": "复核日期",
     "latest_trade_date": "最新行情日期",
     "trade_date": "交易日期",
@@ -111,6 +117,19 @@ DISPLAY_COLUMN_LABELS = {
     "entry_zone_status_cn": "区间状态",
     "select_reason": "候选原因",
     "risk_note": "风险提示",
+    "position_qty": "模拟持仓数量",
+    "avg_cost": "平均成本",
+    "unrealized_pnl": "浮动盈亏",
+    "unrealized_pnl_pct": "浮动盈亏比例",
+    "holding_days": "持仓天数",
+    "position_action": "持仓处理建议",
+    "position_reason": "持仓建议理由",
+    "add_condition": "加仓条件",
+    "reduce_condition": "减仓条件",
+    "exit_condition": "退出条件",
+    "trigger_condition": "触发条件",
+    "invalidation_condition": "失效条件",
+    "advice_reason": "建议理由",
 }
 
 FACTOR_SCORE_COLUMNS = [
@@ -776,6 +795,7 @@ def _apply_daily_research_view_to_tables(tables: dict[str, Any], view: Any | Non
     tables["_daily_research_watchlist"] = view.watchlist_sheet
     tables["_daily_research_entry_zones"] = view.entry_sheet
     tables["_daily_research_entry_zone_missing"] = view.entry_missing_sheet
+    tables["_daily_research_simulated_advice"] = view.simulated_advice_sheet
 
 
 def _safe_read_dashboard_price_history(
@@ -1092,7 +1112,7 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     _render_database_status(st, dashboard_data.get("tables", {}).get("_database_status", {}))
     st.caption("日常一键命令：python -m core.jobs.run_daily_workflow --backup-before-run --format all")
 
-    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "观察池跟踪", "买入区间分析", "外部模拟持仓导入", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
+    tabs = st.tabs(["今日选股", "个股详情", "因子排名", "选股逻辑", "观察池跟踪", "买入区间分析", "模拟交易建议", "外部模拟持仓导入", "持仓池", "策略回测", "数据更新状态", "本地控制台"])
     with tabs[0]:
         _render_section(st, "今日选股", _render_selection_tab, st, dashboard_data.get("selection", pd.DataFrame()), dashboard_data.get("tables", {}))
     with tabs[1]:
@@ -1114,14 +1134,16 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     with tabs[5]:
         _render_section(st, "买入区间分析", _render_entry_zone_tab, st, dashboard_data.get("tables", {}))
     with tabs[6]:
-        _render_section(st, "外部模拟持仓导入", _render_external_positions_tab, st, dashboard_data.get("tables", {}))
+        _render_section(st, "模拟交易建议", _render_simulated_trading_advice_tab, st, dashboard_data.get("tables", {}))
     with tabs[7]:
-        _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
+        _render_section(st, "外部模拟持仓导入", _render_external_positions_tab, st, dashboard_data.get("tables", {}))
     with tabs[8]:
-        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}), dashboard_data.get("tables", {}))
+        _render_section(st, "持仓池", _render_positions_tab, st, dashboard_data.get("positions", pd.DataFrame()))
     with tabs[9]:
-        _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
+        _render_section(st, "策略回测", _render_backtest_tab, st, dashboard_data.get("backtest", {}), dashboard_data.get("tables", {}))
     with tabs[10]:
+        _render_section(st, "数据更新状态", _render_status_tab, st, dashboard_data.get("tables", {}))
+    with tabs[11]:
         _render_section(st, "本地控制台", _render_local_console_tab, st, dashboard_data.get("tables", {}))
 
 
@@ -1384,6 +1406,58 @@ def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
         st.write("买入区间缺失说明")
         display_dataframe(st, missing_zones, columns=["ts_code", "name", "source", "missing_reason"])
     st.caption("生成报告：python -m core.jobs.export_entry_zone_report --format all")
+
+
+def _render_simulated_trading_advice_tab(st: Any, tables: dict[str, Any]) -> None:
+    """Render paper-trading advice from the shared daily research view."""
+    st.subheader("模拟交易建议")
+    st.warning("以下仅用于模拟交易和复盘，不构成真实投资建议，不自动交易。")
+    advice = tables.get("_daily_research_simulated_advice", pd.DataFrame())
+    if not isinstance(advice, pd.DataFrame) or advice.empty:
+        st.info("暂无模拟交易建议。请先生成今日候选、观察池和买入区间数据。")
+        return
+    counts = summarize_simulated_trading_advice(advice)
+    metrics = [
+        ("可模拟买入", counts.get("buy", 0)),
+        ("等待回调", counts.get("wait_pullback", 0)),
+        ("继续观察", counts.get("observe", 0)),
+        ("暂缓", counts.get("pause", 0)),
+        ("剔除", counts.get("remove", 0)),
+        ("已建仓跟踪", counts.get("holding", 0)),
+        ("继续持有", counts.get("hold", 0)),
+        ("可模拟加仓", counts.get("add", 0)),
+        ("减仓", counts.get("reduce", 0)),
+        ("卖出", counts.get("sell", 0)),
+    ]
+    for column, (label, value) in zip(st.columns(len(metrics)), metrics):
+        column.metric(label, value)
+    display_columns = [
+        "ts_code",
+        "name",
+        "source",
+        "source_tags",
+        "holding_status",
+        "simulated_action",
+        "suggested_position",
+        "position_action",
+        "close",
+        "entry_low",
+        "entry_high",
+        "stop_loss",
+        "target_price",
+        "reward_risk_ratio",
+        "action_hint",
+        "elder_score",
+        "trigger_condition",
+        "invalidation_condition",
+        "position_reason",
+        "add_condition",
+        "reduce_condition",
+        "exit_condition",
+        "advice_reason",
+        "risk_note",
+    ]
+    display_dataframe(st, advice, columns=display_columns)
 
 
 def parse_external_position_text(text: str) -> pd.DataFrame:

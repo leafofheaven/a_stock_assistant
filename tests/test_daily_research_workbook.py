@@ -41,6 +41,8 @@ def test_export_daily_research_workbook_writes_required_sheets(tmp_path: Path) -
     assert result.entry_zone_rows == 2
     assert result.watchlist_rows == 1
     assert result.external_position_rows == 1
+    assert result.simulated_advice_rows == 2
+    assert "13_模拟交易建议" in workbook.sheetnames
 
 
 FORBIDDEN_RANK_HEADERS = {
@@ -124,8 +126,34 @@ def test_workbook_uses_chinese_name_with_english_field_labels(tmp_path: Path) ->
         "买入区间下限（entry_low）",
         "止损价（stop_loss）",
         "盈亏比（reward_risk_ratio）",
+        "模拟操作建议（simulated_action）",
+        "持仓处理建议（position_action）",
     ]:
         assert header in all_headers
+
+
+def test_daily_research_workbook_includes_simulated_trading_advice(tmp_path: Path) -> None:
+    """Workbook should include paper-trading advice built from the visible daily view."""
+    store = _seed_store(tmp_path)
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(output_path=output, settings=_settings(store), store=store)
+
+    workbook = load_workbook(output)
+    advice = workbook["13_模拟交易建议"]
+    headers = _headers(advice)
+    values = _sheet_values(advice)
+    assert "股票代码（ts_code）" in headers
+    assert "模拟操作建议（simulated_action）" in headers
+    assert "持仓处理建议（position_action）" in headers
+    assert "来源标签（source_tags）" in headers
+    assert "000001.SZ" in values
+    assert "000002.SZ" in values
+    assert advice.max_row == 3
+    summary_values = _sheet_values(workbook["00_摘要"])
+    assert "模拟交易建议数量" in summary_values
+    assert "模拟持仓跟踪数量" in summary_values
+    assert "06_外部模拟持仓" in workbook.sheetnames
 
 
 def test_daily_research_workbook_includes_lookback_summary_when_status_exists(tmp_path: Path) -> None:

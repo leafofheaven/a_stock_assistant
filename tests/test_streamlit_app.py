@@ -688,6 +688,7 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
         "选股逻辑",
         "观察池跟踪",
         "买入区间分析",
+        "模拟交易建议",
         "外部模拟持仓导入",
         "持仓池",
         "策略回测",
@@ -695,6 +696,18 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
         "本地控制台",
     ]
     assert fake_streamlit.info_messages
+
+
+def test_streamlit_exposes_simulated_trading_advice_tab_and_shared_frame() -> None:
+    """Task 64 page should expose paper-trading advice from the shared daily view."""
+    source = Path("web/streamlit_app.py").read_text(encoding="utf-8")
+
+    assert "模拟交易建议" in source
+    assert "_daily_research_simulated_advice" in source
+    assert "summarize_simulated_trading_advice" in source
+    assert "以下仅用于模拟交易和复盘，不构成真实投资建议，不自动交易。" in source
+    assert "holding_status" in source
+    assert "position_action" in source
 
 
 def test_render_dashboard_shows_database_locked_status(monkeypatch) -> None:
