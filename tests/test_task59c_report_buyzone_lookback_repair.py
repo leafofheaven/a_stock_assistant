@@ -38,6 +38,7 @@ def test_entry_zone_sheet_uses_visible_candidate_and_watchlist_scope(tmp_path: P
     watchlist_codes = {row["股票代码（ts_code）"] for row in _sheet_records(workbook["04_观察池"])}
     entry_rows = _sheet_records(workbook["03_买入区间"])
     entry_codes = {row["股票代码（ts_code）"] for row in entry_rows}
+    assert len(_sheet_records(workbook["01_今日候选"])) == 10
     assert len(_sheet_records(workbook["04_观察池"])) == 30
     assert entry_codes == candidate_codes | watchlist_codes
     assert len(entry_rows) == len(entry_codes)
@@ -46,6 +47,35 @@ def test_entry_zone_sheet_uses_visible_candidate_and_watchlist_scope(tmp_path: P
     for row in entry_rows:
         expected_source = "selection" if row["股票代码（ts_code）"] in candidate_codes else "watchlist"
         assert row["来源（source）"] == expected_source
+
+
+def test_entry_zone_missing_sheet_lists_visible_scope_gaps(tmp_path: Path) -> None:
+    store = _seed_research_scope_store(tmp_path)
+    store.upsert_dataframe(
+        "entry_zone_snapshots",
+        pd.DataFrame(
+            [
+                _entry_zone_row("000001.SZ", "股票1", source="selection"),
+                _entry_zone_row("000011.SZ", "观察11", source="watchlist"),
+            ]
+        ),
+    )
+    output = tmp_path / "daily_research.xlsx"
+
+    export_daily_research_workbook(trade_date="20260706", output_path=output, settings=_settings(store), store=store, lookback_status_path=tmp_path / "missing.json")
+
+    workbook = load_workbook(output)
+    candidates = {row["股票代码（ts_code）"] for row in _sheet_records(workbook["01_今日候选"])}
+    watchlist = {row["股票代码（ts_code）"] for row in _sheet_records(workbook["04_观察池"])}
+    source_scope = candidates | watchlist
+    entry_rows = _sheet_records(workbook["03_买入区间"])
+    missing_rows = _sheet_records(workbook["12_买入区间缺失说明"])
+
+    assert len(candidates) == 10
+    assert len(watchlist) == 30
+    assert {row["股票代码（ts_code）"] for row in entry_rows} == {"000001.SZ", "000011.SZ"}
+    assert {row["股票代码（ts_code）"] for row in missing_rows} == source_scope - {"000001.SZ", "000011.SZ"}
+    assert {row["缺失原因（missing_reason）"] for row in missing_rows} == {"未生成买入区间快照"}
 
 
 def test_entry_zone_duplicate_prefers_selection_source(tmp_path: Path) -> None:
@@ -246,7 +276,7 @@ def _seed_research_scope_store(tmp_path: Path) -> DuckDBStore:
             "fundamental_score": 60,
             "volatility_score": 60,
         }
-        for idx, code in enumerate(codes[:10], start=1)
+        for idx, code in enumerate(codes[:30], start=1)
     ]
     store.upsert_dataframe("strategy_result", pd.DataFrame(strategy_rows))
     watch_codes = [*codes[:5], *codes[10:57]]
@@ -293,6 +323,29 @@ def _seed_research_scope_store(tmp_path: Path) -> DuckDBStore:
 
 def _settings(store: DuckDBStore) -> SimpleNamespace:
     return SimpleNamespace(duckdb_path=store.db_path, data_provider="akshare", real_universe_preset="full")
+
+
+def _entry_zone_row(ts_code: str, name: str, *, source: str) -> dict[str, object]:
+    return {
+        "ts_code": ts_code,
+        "name": name,
+        "trade_date": "20260706",
+        "close": 10.5,
+        "ema13": 10.0,
+        "ema22": 9.8,
+        "ema60": 9.0,
+        "entry_low": 9.8,
+        "entry_high": 10.2,
+        "entry_mid": 10.0,
+        "stop_loss": 9.2,
+        "target_price": 11.6,
+        "reward_risk_ratio": 2.0,
+        "entry_zone_status": "near_zone",
+        "entry_zone_status_cn": "接近买入区间",
+        "chase_risk": "medium",
+        "chase_risk_cn": "中",
+        "source": source,
+    }
 
 
 def _write_lookback_status(tmp_path: Path, as_of_trade_date: str, *, valid_sample_count: int) -> Path:
