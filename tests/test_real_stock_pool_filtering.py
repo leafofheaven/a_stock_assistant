@@ -40,16 +40,16 @@ def test_akshare_fallback_missing_list_date_and_valuation_do_not_empty_universe(
     assert tradeable["avg_amount_20d"].min() > 100_000_000
 
 
-def test_default_stock_pool_rules_still_exclude_missing_list_date_and_financials() -> None:
-    """Formal default filtering should remain stricter unless compatibility is enabled."""
+def test_default_stock_pool_rules_use_price_history_and_do_not_require_market_cap() -> None:
+    """Default filtering should match current free-data fields and not empty the universe."""
     stock_basic, daily_price, daily_basic = _akshare_like_frames()
     trade_date = str(daily_price["trade_date"].max())
 
     result = build_tradeable_universe(stock_basic, daily_price, daily_basic, trade_date)
 
-    assert result["is_tradeable"].sum() == 0
-    assert result["exclude_reason"].str.contains("listed less than 120 days").all()
-    assert result["exclude_reason"].str.contains("severe financial data missing").all()
+    assert result["is_tradeable"].sum() == 3
+    assert not result["exclude_reason"].str.contains("listed less than 120 days").any()
+    assert not result["exclude_reason"].str.contains("severe financial data missing").any()
 
 
 def test_run_daily_selection_uses_latest_real_trade_date_not_system_date(tmp_path: Path) -> None:

@@ -79,6 +79,9 @@ class Settings(BaseSettings):
         validation_alias="ENABLE_REAL_VALUATION_ENRICHMENT",
     )
     min_listing_days: int = Field(default=120, validation_alias="MIN_LISTING_DAYS")
+    allow_missing_list_date_with_price_history: bool = Field(default=True, validation_alias="ALLOW_MISSING_LIST_DATE_WITH_PRICE_HISTORY")
+    min_price_history_days: int = Field(default=60, validation_alias="MIN_PRICE_HISTORY_DAYS")
+    allow_missing_valuation: bool = Field(default=False, validation_alias="ALLOW_MISSING_VALUATION")
     min_avg_amount_20d: float = Field(default=100_000_000, validation_alias="MIN_AVG_AMOUNT_20D")
     min_median_amount_20d: float = Field(default=50_000_000, validation_alias="MIN_MEDIAN_AMOUNT_20D")
     min_latest_amount: float = Field(default=30_000_000, validation_alias="MIN_LATEST_AMOUNT")

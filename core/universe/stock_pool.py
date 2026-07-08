@@ -27,7 +27,7 @@ def build_tradeable_universe(
     daily_price: pd.DataFrame,
     daily_basic: pd.DataFrame,
     trade_date: str,
-    allow_missing_list_date_with_price_history: bool = False,
+    allow_missing_list_date_with_price_history: bool = True,
     min_price_history_days: int = 60,
     allow_missing_valuation: bool = False,
     min_listing_days: int = 120,
@@ -41,10 +41,9 @@ def build_tradeable_universe(
 
     The function keeps one output row per stock in ``stock_basic`` and records
     every exclusion reason instead of dropping rows silently.
-    By default, missing listing dates and severe financial missingness remain
-    exclusions. AKShare fallback callers may opt in to price-history based
-    listing age checks and nullable PE/PB handling because those fields are not
-    consistently available from the fallback data source.
+    Missing listing dates can be validated with local price history because
+    several free data sources do not provide complete ``list_date`` fields.
+    Market-cap fields are diagnostic only and are not hard tradeability gates.
     """
     if stock_basic.empty:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
@@ -281,7 +280,7 @@ def _suspended_days(price_window: pd.DataFrame) -> int:
 
 def _has_severe_financial_missing(daily_basic_window: pd.DataFrame, allow_missing_valuation: bool = False) -> bool:
     """Return whether key daily basic indicators are severely missing."""
-    required_columns = ["turnover_rate", "pe", "pb", "total_mv", "circ_mv"]
+    required_columns = ["turnover_rate"]
     if daily_basic_window.empty:
         return True
     missing_columns = [column for column in required_columns if column not in daily_basic_window.columns]

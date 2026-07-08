@@ -71,6 +71,7 @@ def test_run_daily_selection_with_real_mock_data_generates_candidates(tmp_path: 
     assert summary["top_candidates"]
     assert "最新行情日期" in summary["result_location"]
     assert summary["factor_scores_written_rows"] > 0
+    assert summary["factor_scores_written_rows"] == summary["stock_pool_count"]
     assert summary["strategy_result_written_rows"] == summary["candidate_count"]
     assert summary["local_display_selection_count"] == summary["candidate_count"]
     assert summary["wrote_to_database"] is True

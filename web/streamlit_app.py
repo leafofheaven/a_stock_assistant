@@ -279,7 +279,50 @@ def summarize_watchlist_snapshot(snapshot_df: pd.DataFrame) -> dict[str, int]:
         latest_date = df[date_col].dropna().astype(str).max()
         df = df[df[date_col].astype(str) == str(latest_date)]
     counts = df.get("watch_status", pd.Series(dtype=str)).fillna("active_watch").astype(str).value_counts().to_dict()
-    return {"total": int(len(df)), **{key: int(value) for key, value in counts.items()}}
+    summary = {"total": int(len(df)), **{key: int(value) for key, value in counts.items()}}
+    derived = _derive_watchlist_status_counts(df)
+    for key, value in derived.items():
+        summary[key] = max(int(summary.get(key, 0) or 0), int(value))
+    return summary
+
+
+def _derive_watchlist_status_counts(df: pd.DataFrame) -> dict[str, int]:
+    """Derive watchlist card counts from current user-facing status fields."""
+    if df.empty:
+        return {}
+    text_columns = [
+        "watch_status_label",
+        "entry_zone_status_cn",
+        "daily_note",
+        "action_hint",
+        "elder_reason",
+        "weekly_trend",
+        "force_signal",
+    ]
+
+    def contains(row: pd.Series, keywords: tuple[str, ...]) -> bool:
+        text = " ".join(str(row.get(column) or "") for column in text_columns if column in row.index)
+        return any(keyword in text for keyword in keywords)
+
+    status = df.get("watch_status", pd.Series([""] * len(df), index=df.index)).fillna("").astype(str)
+    new_flags = pd.Series(False, index=df.index)
+    for column in ["new_candidate_flag", "is_new_candidate"]:
+        if column in df.columns:
+            new_flags = new_flags | df[column].fillna(False).astype(bool)
+    return {
+        "new_candidate": int(((status == "new_candidate") | new_flags).sum()),
+        "strong_watch": int(
+            ((status == "strong_watch") | df.apply(lambda row: contains(row, ("位于买入区间", "接近买入区间", "趋势确认")), axis=1)).sum()
+        ),
+        "wait_pullback": int(
+            ((status == "wait_pullback") | df.apply(lambda row: contains(row, ("等待回调", "高于买入区间")), axis=1)).sum()
+        ),
+        "overheated": int(((status == "overheated") | df.apply(lambda row: contains(row, ("短线过热", "追高风险")), axis=1)).sum()),
+        "weakening": int(((status == "weakening") | df.apply(lambda row: contains(row, ("趋势偏弱", "暂缓", "暂不进入")), axis=1)).sum()),
+        "invalidated": int(
+            ((status == "invalidated") | df.apply(lambda row: contains(row, ("人工复核", "建议复核")), axis=1)).sum()
+        ),
+    }
 
 
 def dataframe_to_csv(df: pd.DataFrame) -> str:
@@ -447,6 +490,72 @@ def summarize_basic_data_quality(
         "stock_basic": _field_quality(stock_basic, ["name", "industry", "market", "list_date"]),
         "daily_basic": _field_quality(daily_basic, ["turnover_rate", "pe", "pb", "total_mv", "circ_mv"]),
     }
+
+
+VALUATION_FIELD_ROLES: dict[str, str] = {
+    "turnover_rate": "核心可交易字段",
+    "pe": "当前基本面评分核心字段",
+    "pb": "估值参考字段",
+    "total_mv": "可选诊断字段",
+    "circ_mv": "可选诊断字段",
+}
+
+
+def summarize_daily_basic_quality_for_trade_date(daily_basic: pd.DataFrame, trade_date: str | None) -> pd.DataFrame:
+    """Summarize daily_basic completeness for one research date."""
+    target = _compact_date(trade_date)
+    df = _filter_trade_date_frame(daily_basic, target)
+    quality = _field_quality(df, list(VALUATION_FIELD_ROLES))
+    return pd.DataFrame(
+        [
+            {
+                "字段": field,
+                "角色": VALUATION_FIELD_ROLES[field],
+                "非空率": stats["non_null_rate"],
+                "缺失数量": stats["missing_count"],
+                "统计交易日": target or "",
+                "样本数量": len(df),
+            }
+            for field, stats in quality.items()
+        ]
+    )
+
+
+def _filter_trade_date_frame(df: pd.DataFrame, trade_date: str | None) -> pd.DataFrame:
+    """Filter a DataFrame by compact trade_date, keeping empty shape on missing data."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame()
+    target = _compact_date(trade_date)
+    if not target or "trade_date" not in df.columns:
+        return df.copy()
+    dates = df["trade_date"].map(_compact_date)
+    return df.loc[dates == target].copy()
+
+
+def _daily_basic_for_quality(daily_basic: pd.DataFrame | None, trade_date: str | None, tables: dict[str, Any] | None = None) -> pd.DataFrame:
+    """Return daily_basic rows for the selected date, reading DuckDB if the light frame lacks them."""
+    frame = daily_basic if isinstance(daily_basic, pd.DataFrame) else pd.DataFrame()
+    filtered = _filter_trade_date_frame(frame, trade_date)
+    if not filtered.empty or not trade_date:
+        return filtered
+    db_path = str((tables or {}).get("_duckdb_path") or "")
+    if not db_path:
+        return filtered
+    try:
+        from core.storage.duckdb_store import DuckDBStore
+
+        store = DuckDBStore(db_path)
+        with store.connect(read_only=True) as connection:
+            return connection.execute(
+                """
+                SELECT trade_date, ts_code, turnover_rate, pe, pb, total_mv, circ_mv
+                FROM daily_basic
+                WHERE replace(CAST(trade_date AS VARCHAR), '-', '') = ?
+                """,
+                [_compact_date(trade_date)],
+            ).fetchdf()
+    except Exception:
+        return filtered
 
 
 def _field_quality(df: pd.DataFrame, fields: list[str]) -> dict[str, dict[str, float | int]]:
@@ -987,7 +1096,15 @@ def render_dashboard(data: dict[str, Any] | None = None) -> None:
     with tabs[1]:
         _render_section(st, "个股详情", _render_stock_detail_tab, st, dashboard_data.get("stock_basic", pd.DataFrame()), dashboard_data.get("price", pd.DataFrame()), dashboard_data.get("factor_scores", pd.DataFrame()))
     with tabs[2]:
-        _render_section(st, "因子排名", _render_factor_ranking_tab, st, dashboard_data.get("factor_scores", pd.DataFrame()), dashboard_data.get("daily_basic", pd.DataFrame()))
+        _render_section(
+            st,
+            "因子排名",
+            _render_factor_ranking_tab,
+            st,
+            dashboard_data.get("factor_scores", pd.DataFrame()),
+            dashboard_data.get("daily_basic", pd.DataFrame()),
+            dashboard_data.get("tables", {}),
+        )
     with tabs[3]:
         _render_section(st, "选股逻辑", _render_selection_logic_tab, st, dashboard_data.get("selection", pd.DataFrame()))
     with tabs[4]:
@@ -1383,27 +1500,25 @@ def _render_stock_detail_tab(
             display_dataframe(st, elder, columns=[column for column in elder_columns if column in elder.columns])
 
 
-def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame, daily_basic: pd.DataFrame | None = None) -> None:
+def _render_factor_ranking_tab(
+    st: Any,
+    factor_df: pd.DataFrame,
+    daily_basic: pd.DataFrame | None = None,
+    tables: dict[str, Any] | None = None,
+) -> None:
     st.subheader("因子排名")
     if factor_df.empty:
         st.info("暂无因子评分数据。")
         return
-    basic_quality = summarize_basic_data_quality(
-        pd.DataFrame(),
-        daily_basic if isinstance(daily_basic, pd.DataFrame) else pd.DataFrame(),
+    dates = sorted(factor_df["trade_date"].dropna().astype(str).unique(), reverse=True) if "trade_date" in factor_df.columns else []
+    trade_date = st.selectbox("交易日期", dates) if dates else None
+    quality_frame = summarize_daily_basic_quality_for_trade_date(
+        _daily_basic_for_quality(daily_basic, trade_date, tables),
+        trade_date,
     )
-    valuation_quality = basic_quality.get("daily_basic", {})
-    if valuation_quality:
-        st.write("估值字段完整率")
-        display_dataframe(
-            st,
-            pd.DataFrame(
-                [
-                    {"field": field, "non_null_rate": stats["non_null_rate"], "missing_count": stats["missing_count"]}
-                    for field, stats in valuation_quality.items()
-                ]
-            ),
-        )
+    if not quality_frame.empty:
+        st.write("当前选中交易日估值字段完整率")
+        display_dataframe(st, quality_frame)
     missing = summarize_factor_missing(factor_df)
     if missing:
         st.write("因子非空率")
@@ -1420,8 +1535,6 @@ def _render_factor_ranking_tab(st: Any, factor_df: pd.DataFrame, daily_basic: pd
                 ]
             ),
         )
-    dates = sorted(factor_df["trade_date"].astype(str).unique()) if "trade_date" in factor_df.columns else []
-    trade_date = st.selectbox("交易日期", dates) if dates else None
     industry = st.selectbox("行业筛选", get_industry_options(factor_df), key="factor_industry")
     factor_col = st.selectbox("因子", [column for column in FACTOR_SCORE_COLUMNS if column in factor_df.columns])
     ranking = filter_factor_ranking(factor_df, trade_date, industry, factor_col)
@@ -1900,7 +2013,7 @@ def _status_history_frame(status: dict[str, Any]) -> pd.DataFrame:
 def _status_module_frame(status: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"模块": "综合分", "可用股票数量": int(status.get("factor_ready_symbol_count", 0) or 0), "说明": "最新交易日 factor_scores 可用"},
+            {"模块": "综合分", "可用股票数量": int(status.get("factor_ready_symbol_count", 0) or 0), "说明": "通过股票池过滤并生成 factor_scores 的股票数量，不等同于行情覆盖数量"},
             {"模块": "埃尔德复核", "可用股票数量": int(status.get("elder_ready_symbol_count", 0) or 0), "说明": "最新观察池 / 复核快照可用"},
             {"模块": "买入区间", "可用股票数量": int(status.get("entry_zone_ready_symbol_count", 0) or 0), "说明": "买入区间快照可用"},
             {"模块": "自动回看", "可用股票数量": int(status.get("lookback_ready_symbol_count", 0) or 0), "说明": "候选且历史样本足够"},

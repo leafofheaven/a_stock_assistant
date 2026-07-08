@@ -29,7 +29,9 @@ from web.streamlit_app import (
     _status_page_quality_snapshot,
     _render_section,
     _lightweight_database_metrics,
+    summarize_daily_basic_quality_for_trade_date,
     summarize_update_status,
+    summarize_watchlist_snapshot,
 )
 from core.storage.duckdb_store import DuckDBStore
 
@@ -111,6 +113,68 @@ def test_display_dataframe_makes_mixed_object_columns_arrow_safe() -> None:
     rendered = fake.dataframes[0]
     assert rendered["数量"].tolist() == ["4995 / 5055", "60"]
     assert all(isinstance(value, str) for value in rendered["数量"].tolist())
+
+
+def test_daily_basic_quality_uses_current_factor_trade_date() -> None:
+    """Valuation completeness should use the selected research date, not a mixed history window."""
+    daily_basic = pd.DataFrame(
+        {
+            "trade_date": ["20260705", "20260705", "20260706", "20260706"],
+            "ts_code": ["000001.SZ", "000002.SZ", "000001.SZ", "000002.SZ"],
+            "turnover_rate": [None, None, 1.2, 0.8],
+            "pe": [None, None, 10.0, 15.0],
+            "pb": [None, None, 1.1, 1.3],
+            "total_mv": [None, None, None, None],
+            "circ_mv": [None, None, None, None],
+        }
+    )
+
+    quality = summarize_daily_basic_quality_for_trade_date(daily_basic, "20260706")
+    by_field = quality.set_index("字段").to_dict("index")
+
+    assert by_field["pe"]["非空率"] == 1.0
+    assert by_field["pb"]["非空率"] == 1.0
+    assert by_field["total_mv"]["非空率"] == 0.0
+    assert by_field["total_mv"]["角色"] == "可选诊断字段"
+    assert by_field["circ_mv"]["角色"] == "可选诊断字段"
+    assert by_field["pe"]["统计交易日"] == "20260706"
+
+
+def test_watchlist_summary_derives_cards_from_display_fields() -> None:
+    """Watchlist cards should not all be zero when watch_status is generic."""
+    snapshot = pd.DataFrame(
+        [
+            {
+                "ts_code": f"000{i:03d}.SZ",
+                "trade_date": "20260706",
+                "watch_status": "active_watch",
+                "watch_status_label": label,
+                "entry_zone_status_cn": zone,
+                "action_hint": hint,
+                "daily_note": note,
+            }
+            for i, (label, zone, hint, note) in enumerate(
+                [
+                    ("正常观察", "接近买入区间", "趋势确认，进入人工复核", ""),
+                    ("正常观察", "高于买入区间", "趋势尚可，等待回调", ""),
+                    ("正常观察", "", "短线过热，不追", "追高风险高"),
+                    ("正常观察", "", "趋势偏弱，暂不进入", ""),
+                    ("正常观察", "", "建议人工复核", ""),
+                ]
+                * 6,
+                start=1,
+            )
+        ]
+    )
+
+    summary = summarize_watchlist_snapshot(snapshot)
+
+    assert summary["total"] == 30
+    assert summary["strong_watch"] > 0
+    assert summary["wait_pullback"] > 0
+    assert summary["overheated"] > 0
+    assert summary["weakening"] > 0
+    assert summary["invalidated"] > 0
 
 
 def test_display_order_continuous_after_sort() -> None:

@@ -42,11 +42,11 @@ FACTOR_DEFINITION_TEXT: dict[str, dict[str, str]] = {
         "data_quality_notes": "成交额或换手率缺失时，流动性分项可能偏低或为空。",
     },
     "fundamental_score": {
-        "meaning": "观察 ROE、PE、PB、营收增长等基础估值 / 财务字段。",
-        "input_fields": "daily_basic.pe, daily_basic.pb, daily_basic.total_mv, daily_basic.circ_mv",
+        "meaning": "观察当前已实现的估值字段质量，最小真实评分路径主要来自市盈率倒数指标。",
+        "input_fields": "daily_basic.pe；daily_basic.pb 作为估值参考；daily_basic.total_mv / daily_basic.circ_mv 若未来数据源提供，仅作扩展或诊断字段。",
         "calculation_hint": "由基本面类基础因子横截面标准化为 0-100 分。",
         "score_direction": "分数越高，当前规则下基本面 / 估值分项越靠前。",
-        "data_quality_notes": "AKShare fallback 下历史 PE/PB 可能不完整，当前优先看最新交易日字段。",
+        "data_quality_notes": "total_mv / circ_mv 在当前免费数据源下可能为空，当前不作为硬性股票池过滤门槛；PE 缺失会影响基本面分项。",
     },
     "volatility_score": {
         "meaning": "观察近 20 日波动率和 60 日最大回撤，反映风险暴露。",
