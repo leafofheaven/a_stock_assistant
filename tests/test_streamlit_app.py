@@ -698,6 +698,32 @@ def test_render_dashboard_creates_title_and_tabs_for_empty_data(monkeypatch) -> 
     assert fake_streamlit.info_messages
 
 
+def test_streamlit_trade_calendar_status_row_contains_coverage_fields() -> None:
+    """Status page should expose trade-calendar coverage separately from data coverage."""
+    from web.streamlit_app import _trade_calendar_status_row
+
+    row = _trade_calendar_status_row(
+        {
+            "calendar_source": "trade_calendar",
+            "calendar_exists": True,
+            "coverage_start": "20240101",
+            "coverage_end": "20271231",
+            "covers_today": True,
+            "covers_next_30_days": True,
+            "recent_open_trade_date": "20260706",
+            "next_open_trade_date": "20260707",
+            "target_trade_date": "20260706",
+            "reason": "今天不是交易日",
+        }
+    )
+
+    assert row["交易日历来源"] == "trade_calendar"
+    assert row["trade_calendar 是否存在"] == "是"
+    assert row["覆盖今天"] == "是"
+    assert row["覆盖未来 30 天"] == "是"
+    assert row["最近一个交易日"] == "20260706"
+
+
 def test_streamlit_exposes_simulated_trading_advice_tab_and_shared_frame() -> None:
     """Task 64 page should expose paper-trading advice from the shared daily view."""
     source = Path("web/streamlit_app.py").read_text(encoding="utf-8")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, time
+from datetime import datetime, timedelta, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -27,6 +27,52 @@ class UpdateTargetTradeDate:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON/Streamlit friendly payload."""
         return asdict(self)
+
+
+def summarize_trade_calendar_status(
+    store: Any,
+    now: datetime | None = None,
+    exchange: str = "SSE",
+    cutoff_time: str = "18:00",
+) -> dict[str, Any]:
+    """Return a read-only status summary for the local trade calendar."""
+    current = _to_shanghai_time(now or datetime.now(tz=SHANGHAI_TZ))
+    today = current.strftime("%Y%m%d")
+    calendar = _read_trade_calendar(store, exchange)
+    decision = resolve_update_target_trade_date(store, now=current, cutoff_time=cutoff_time, calendar_market=exchange)
+    if calendar.empty or "cal_date" not in calendar.columns:
+        return {
+            "calendar_exists": False,
+            "calendar_source": decision.calendar_source,
+            "exchange": exchange,
+            "coverage_start": "",
+            "coverage_end": "",
+            "covers_today": False,
+            "covers_next_30_days": False,
+            "recent_open_trade_date": decision.latest_completed_trade_date,
+            "next_open_trade_date": "",
+            "target_trade_date": decision.target_trade_date,
+            "reason": decision.reason,
+        }
+    frame = calendar.copy()
+    frame["cal_date"] = frame["cal_date"].map(_compact_date)
+    frame = frame[frame["cal_date"].astype(str).str.len() == 8]
+    dates = sorted(frame["cal_date"].dropna().astype(str).unique())
+    open_dates = _open_dates(frame)
+    next_30 = (current + timedelta(days=30)).strftime("%Y%m%d")
+    return {
+        "calendar_exists": bool(dates),
+        "calendar_source": decision.calendar_source,
+        "exchange": exchange,
+        "coverage_start": dates[0] if dates else "",
+        "coverage_end": dates[-1] if dates else "",
+        "covers_today": today in set(dates),
+        "covers_next_30_days": bool(dates and dates[-1] >= next_30),
+        "recent_open_trade_date": _latest_open_date_on_or_before(open_dates, today),
+        "next_open_trade_date": _next_open_date_after(open_dates, today),
+        "target_trade_date": decision.target_trade_date,
+        "reason": decision.reason,
+    }
 
 
 def resolve_update_target_trade_date(
@@ -138,6 +184,16 @@ def _previous_open_date(open_dates: list[str], today: str) -> str:
     if previous:
         return previous[-1]
     return ""
+
+
+def _latest_open_date_on_or_before(open_dates: list[str], today: str) -> str:
+    candidates = [date for date in open_dates if date <= today]
+    return candidates[-1] if candidates else ""
+
+
+def _next_open_date_after(open_dates: list[str], today: str) -> str:
+    candidates = [date for date in open_dates if date > today]
+    return candidates[0] if candidates else ""
 
 
 def _latest_daily_price_date(store: Any) -> str:
