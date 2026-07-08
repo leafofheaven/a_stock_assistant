@@ -42,7 +42,17 @@ from core.jobs.export_daily_research_workbook import build_daily_research_view_f
 from core.advice.simulated_trading_advice import summarize_simulated_trading_advice
 from core.runtime.progress import parse_progress_line
 from core.technical.elder import build_elder_review
-from core.external_positions.importer import position_template_frame, trade_template_frame
+from app.config import get_settings
+from core.storage.duckdb_store import DuckDBStore, DuckDBStoreError
+from core.external_positions.importer import (
+    import_external_positions_frame,
+    import_external_trades_and_rebuild_positions_frame,
+    position_template_excel_bytes,
+    position_template_frame,
+    read_uploaded_table,
+    trade_template_excel_bytes,
+    trade_template_frame,
+)
 
 ALLOWED_COMMANDS.setdefault("run_full_batch_update", [sys.executable, "-m", "core.jobs.run_full_batch_update"])
 ALLOWED_COMMANDS.setdefault("preflight_data_source", [sys.executable, "-m", "core.jobs.preflight_data_source"])
@@ -1480,32 +1490,71 @@ def latest_external_positions(tables: dict[str, Any]) -> pd.DataFrame:
 
 def _render_external_positions_tab(st: Any, tables: dict[str, Any]) -> None:
     st.subheader("外部模拟持仓导入")
-    st.caption("仅供个人研究使用，不自动交易。不会读取同花顺、雪球 cookie 或登录态。")
-    trade_csv = dataframe_to_csv(trade_template_frame())
-    position_csv = dataframe_to_csv(position_template_frame())
-    cols = st.columns(2)
-    cols[0].download_button("下载交易记录模板", trade_csv, file_name="external_trades_template.csv", mime="text/csv")
-    cols[1].download_button("下载持仓快照模板", position_csv, file_name="external_position_snapshots_template.csv", mime="text/csv")
-    st.write("命令行导入")
-    st.code(
-        "python -m core.jobs.import_external_trades --file path/to/external_trades.csv\n"
-        "python -m core.jobs.import_external_positions --file path/to/external_position_snapshots.csv\n"
-        "python -m core.jobs.match_external_positions\n"
-        "python -m core.jobs.export_external_position_report --format all"
+    st.caption("仅供个人研究和模拟复盘使用，不自动交易，不构成真实投资建议。")
+    st.write("模拟交易记录导入")
+    st.info("日常只需要维护这张交易流水表，系统会自动计算当前持仓和加权成本。")
+    st.download_button(
+        "下载模拟交易记录模板.xlsx",
+        trade_template_excel_bytes(),
+        file_name="模拟交易记录模板.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    uploaded = st.file_uploader("上传 CSV 预览（页面仅预览，正式导入请用命令）", type=["csv"])
-    if uploaded is not None:
-        preview = pd.read_csv(uploaded, dtype=str, keep_default_na=False)
-        st.write("上传预览")
-        display_dataframe(st, preview.head(20))
-    pasted = st.text_area("粘贴 CSV 或制表符分隔内容预览", height=120)
-    if pasted.strip():
+    uploaded_trades = st.file_uploader("上传模拟交易记录 Excel", type=["xlsx", "csv"], key="external_trade_upload")
+    if uploaded_trades is not None:
         try:
-            parsed = parse_external_position_text(pasted)
-            st.write("粘贴内容预览")
-            display_dataframe(st, parsed.head(20))
+            trade_preview = read_uploaded_table(uploaded_trades, getattr(uploaded_trades, "name", ""))
+            st.write("上传预览（前 20 行）")
+            display_dataframe(st, trade_preview.head(20))
+            validation_errors = _validate_uploaded_columns(trade_preview, ["trade_date", "ts_code", "side", "quantity", "price"])
+            if validation_errors:
+                st.warning("字段校验未通过：" + "；".join(validation_errors))
+            elif st.button("导入模拟交易记录", key="import_external_trades_button"):
+                _run_external_trade_import(st, trade_preview, getattr(uploaded_trades, "name", ""))
         except Exception as exc:
-            st.warning(f"解析失败：{exc}")
+            st.error(f"读取上传文件失败：{exc}")
+
+    with st.expander("高级：手动校正当前持仓", expanded=False):
+        st.caption("仅在需要手动修正当前持仓快照时使用。日常建议维护交易记录，由系统自动重建持仓。")
+        st.download_button(
+            "下载持仓快照模板.xlsx",
+            position_template_excel_bytes(),
+            file_name="模拟持仓快照模板.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        uploaded_positions = st.file_uploader("上传持仓快照 Excel", type=["xlsx", "csv"], key="external_position_upload")
+        if uploaded_positions is not None:
+            try:
+                position_preview = read_uploaded_table(uploaded_positions, getattr(uploaded_positions, "name", ""))
+                st.write("持仓快照预览（前 20 行）")
+                display_dataframe(st, position_preview.head(20))
+                validation_errors = _validate_uploaded_columns(position_preview, ["snapshot_date", "ts_code", "quantity", "cost_price"])
+                if validation_errors:
+                    st.warning("字段校验未通过：" + "；".join(validation_errors))
+                elif st.button("导入持仓快照", key="import_external_positions_button"):
+                    _run_external_position_import(st, position_preview, getattr(uploaded_positions, "name", ""))
+            except Exception as exc:
+                st.error(f"读取持仓快照失败：{exc}")
+
+    with st.expander("高级：CSV / 命令行导入", expanded=False):
+        trade_csv = dataframe_to_csv(trade_template_frame())
+        position_csv = dataframe_to_csv(position_template_frame())
+        cols = st.columns(2)
+        cols[0].download_button("下载交易记录 CSV 模板", trade_csv, file_name="external_trades_template.csv", mime="text/csv")
+        cols[1].download_button("下载持仓快照 CSV 模板", position_csv, file_name="external_position_snapshots_template.csv", mime="text/csv")
+        st.code(
+            "python -m core.jobs.import_external_trades --file path/to/external_trades.csv\n"
+            "python -m core.jobs.import_external_positions --file path/to/external_position_snapshots.csv\n"
+            "python -m core.jobs.match_external_positions\n"
+            "python -m core.jobs.export_external_position_report --format all"
+        )
+        pasted = st.text_area("粘贴 CSV 或制表符分隔内容预览", height=120)
+        if pasted.strip():
+            try:
+                parsed = parse_external_position_text(pasted)
+                st.write("粘贴内容预览")
+                display_dataframe(st, parsed.head(20))
+            except Exception as exc:
+                st.warning(f"解析失败：{exc}")
     positions = latest_external_positions(tables)
     if positions.empty:
         st.info("暂无外部模拟持仓快照。")
@@ -1532,6 +1581,70 @@ def _render_external_positions_tab(st: Any, tables: dict[str, Any]) -> None:
         "match_note",
     ]
     display_dataframe(st, positions, columns=display_columns)
+
+
+def _validate_uploaded_columns(df: pd.DataFrame, required: list[str]) -> list[str]:
+    missing = [column for column in required if column not in df.columns]
+    return [f"缺少必填字段：{', '.join(missing)}"] if missing else []
+
+
+def _run_external_trade_import(st: Any, frame: pd.DataFrame, source_file: str) -> None:
+    try:
+        result = import_external_trades_and_rebuild_positions_frame(
+            frame,
+            store=DuckDBStore(get_settings().duckdb_path),
+            source_file=source_file,
+        )
+    except DuckDBStoreError as exc:
+        st.error(str(exc))
+        return
+    except Exception as exc:
+        st.error(f"导入失败：{exc}")
+        return
+    _render_external_import_result(st, result)
+
+
+def _run_external_position_import(st: Any, frame: pd.DataFrame, source_file: str) -> None:
+    try:
+        result = import_external_positions_frame(
+            frame,
+            store=DuckDBStore(get_settings().duckdb_path),
+            source_file=source_file,
+        )
+    except DuckDBStoreError as exc:
+        st.error(str(exc))
+        return
+    except Exception as exc:
+        st.error(f"导入失败：{exc}")
+        return
+    _render_external_import_result(st, result)
+
+
+def _render_external_import_result(st: Any, result: dict[str, Any]) -> None:
+    if result.get("status") == "success":
+        st.success("导入完成，已自动重建模拟持仓。")
+    elif result.get("status") == "partial_success":
+        st.warning("导入部分完成，请检查错误行。")
+    else:
+        st.error("导入失败，请检查字段和交易流水。")
+    summary = pd.DataFrame(
+        [
+            {"指标": "导入状态", "值": result.get("status", "")},
+            {"指标": "导入交易行数", "值": result.get("imported_rows", 0)},
+            {"指标": "无效/跳过行数", "值": result.get("invalid_rows", result.get("skipped_rows", 0))},
+            {"指标": "影响股票数量", "值": len(result.get("affected_symbols", []))},
+            {"指标": "最新交易日期", "值": result.get("latest_trade_date", "")},
+            {"指标": "最新持仓快照日期", "值": result.get("latest_snapshot_date", "")},
+            {"指标": "重建持仓行数", "值": result.get("rebuilt_position_rows", "")},
+            {"指标": "当前持仓数量", "值": result.get("current_position_count", "")},
+        ]
+    )
+    display_dataframe(st, summary)
+    if result.get("warning"):
+        st.warning(str(result["warning"]))
+    if result.get("error_rows"):
+        st.write("错误行")
+        display_dataframe(st, pd.DataFrame(result["error_rows"]).head(20))
 
 
 def _render_stock_detail_tab(
