@@ -774,6 +774,7 @@ def _apply_daily_research_view_to_tables(tables: dict[str, Any], view: Any | Non
     tables["_daily_research_selection"] = view.strategy_sheet
     tables["_daily_research_watchlist"] = view.watchlist_sheet
     tables["_daily_research_entry_zones"] = view.entry_sheet
+    tables["_daily_research_entry_zone_missing"] = view.entry_missing_sheet
 
 
 def _safe_read_dashboard_price_history(
@@ -1344,6 +1345,9 @@ def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
     if entry_zones.empty:
         st.info("暂无买入区间快照。请运行 python -m core.jobs.calculate_entry_zones。")
         return
+    missing_zones = tables.get("_daily_research_entry_zone_missing", pd.DataFrame())
+    if not isinstance(missing_zones, pd.DataFrame):
+        missing_zones = pd.DataFrame()
     counts = entry_zones["entry_zone_status"].fillna("unknown").value_counts().to_dict() if "entry_zone_status" in entry_zones.columns else {}
     cols = st.columns(6)
     metrics = [
@@ -1356,6 +1360,9 @@ def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
     ]
     for col, (label, value) in zip(cols, metrics):
         col.metric(label, value)
+    source_total = len(entry_zones) + len(missing_zones)
+    if source_total:
+        st.caption(f"展示范围：今日候选 Top10 + 当前观察池 Top30 去重后 {source_total} 只；已生成买入区间 {len(entry_zones)} 只，缺失 {len(missing_zones)} 只。")
     display_columns = [
         "ts_code",
         "name",
@@ -1372,6 +1379,9 @@ def _render_entry_zone_tab(st: Any, tables: dict[str, Any]) -> None:
         "price_action_note",
     ]
     display_dataframe(st, entry_zones, columns=display_columns)
+    if not missing_zones.empty:
+        st.write("买入区间缺失说明")
+        display_dataframe(st, missing_zones, columns=["ts_code", "name", "source", "missing_reason"])
     st.caption("生成报告：python -m core.jobs.export_entry_zone_report --format all")
 
 

@@ -76,6 +76,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task59b": check_task59b,
         "task59c": check_task59c,
         "task61": check_task61,
+        "task62": check_task62,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -4028,6 +4029,46 @@ def check_task61(root: Path) -> list[str]:
     return failures
 
 
+def check_task62(root: Path) -> list[str]:
+    """Check Task 62 daily research display-scope repairs."""
+    failures: list[str] = []
+    required_paths = [
+        "core/jobs/export_daily_research_workbook.py",
+        "web/streamlit_app.py",
+        "tests/test_task59c_report_buyzone_lookback_repair.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+    workbook_source = read_source(root / "core/jobs/export_daily_research_workbook.py")
+    for phrase in [
+        "SELECTION_DISPLAY_TOP_N = 10",
+        "WATCHLIST_DISPLAY_TOP_N = 30",
+        "entry_missing_sheet",
+        "12_买入区间缺失说明",
+        "_entry_zone_source_scope",
+        "后端候选池数量",
+        "日报展示候选数量",
+    ]:
+        if phrase not in workbook_source:
+            failures.append(f"core/jobs/export_daily_research_workbook.py is missing Task 62 phrase: {phrase}.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "_daily_research_entry_zone_missing",
+        "今日候选 Top10 + 当前观察池 Top30",
+        "买入区间缺失说明",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 62 phrase: {phrase}.")
+    tests_source = read_source(root / "tests/test_task59c_report_buyzone_lookback_repair.py")
+    for phrase in [
+        "test_entry_zone_missing_sheet_lists_visible_scope_gaps",
+        "len(candidates) == 10",
+        "12_买入区间缺失说明",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_task59c_report_buyzone_lookback_repair.py is missing Task 62 test phrase: {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -4124,6 +4165,7 @@ def main(argv: list[str] | None = None) -> int:
             "task59b",
             "task59c",
             "task61",
+            "task62",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

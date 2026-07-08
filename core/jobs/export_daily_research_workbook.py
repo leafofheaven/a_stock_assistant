@@ -26,6 +26,8 @@ SHEET_NAMES = [
     "04_观察池",
     "06_外部模拟持仓",
 ]
+SELECTION_DISPLAY_TOP_N = 10
+WATCHLIST_DISPLAY_TOP_N = 30
 
 SENSITIVE_KEYWORDS = ("token", "key", "password", "secret", "api密钥", "smtp")
 SENSITIVE_VALUE_MARKERS = ("sk-",)
@@ -118,6 +120,7 @@ COLUMN_LABELS = {
     "reward_risk_ratio": "盈亏比（reward_risk_ratio）",
     "entry_zone_status": "买入区间状态（entry_zone_status）",
     "entry_zone_status_cn": "买入区间状态说明（entry_zone_status_cn）",
+    "missing_reason": "缺失原因（missing_reason）",
     "chase_risk": "追高风险（chase_risk）",
     "chase_risk_cn": "追高风险说明（chase_risk_cn）",
     "price_action_note": "价格行为说明（price_action_note）",
@@ -198,6 +201,7 @@ class DailyResearchView:
     trade_date: str
     strategy_sheet: pd.DataFrame
     entry_sheet: pd.DataFrame
+    entry_missing_sheet: pd.DataFrame
     watchlist_sheet: pd.DataFrame
     external_sheet: pd.DataFrame
     lookback_sheet: pd.DataFrame
@@ -245,6 +249,7 @@ def export_daily_research_workbook(
     )
     data_quality_snapshot = _safe_data_quality_snapshot(resolved_store, selected_trade_date)
     lookback_status = _read_lookback_status(lookback_status_path)
+    backend_strategy_rows = len(_latest_by_date(strategy, "trade_date", selected_trade_date))
     view = build_daily_research_view_from_frames(
         strategy=strategy,
         entry_zones=entry_zones,
@@ -261,8 +266,11 @@ def export_daily_research_workbook(
         strategy_rows=len(view.strategy_sheet),
         elder_rows=embedded_elder_rows,
         entry_zone_rows=len(view.entry_sheet),
+        entry_zone_source_rows=len(view.entry_sheet) + len(view.entry_missing_sheet),
+        entry_zone_missing_rows=len(view.entry_missing_sheet),
         watchlist_rows=len(view.watchlist_sheet),
         external_position_rows=len(view.external_sheet),
+        backend_strategy_rows=backend_strategy_rows,
         lookback_status=lookback_status if view.include_lookback_summary else None,
         lookback_note=_join_notes(view.lookback_note, entry_zone_auto_note),
         data_quality_snapshot=data_quality_snapshot,
@@ -281,6 +289,9 @@ def export_daily_research_workbook(
         "06_外部模拟持仓": _empty_if_needed(view.external_sheet, "暂无外部模拟持仓数据。"),
     }
     ordered_sheet_names = [*SHEET_NAMES]
+    if not view.entry_missing_sheet.empty:
+        sheets["12_买入区间缺失说明"] = view.entry_missing_sheet
+        ordered_sheet_names.append("12_买入区间缺失说明")
     if view.include_lookback_summary:
         sheets["11_自动回看摘要"] = view.lookback_sheet
         ordered_sheet_names.append("11_自动回看摘要")
@@ -339,6 +350,7 @@ def build_daily_research_view_from_frames(
     current_watchlist_sheet = _attach_elder_fields(current_watchlist_sheet, daily_price, "观察池")
     watchlist_sheet = _with_display_order(_preferred_columns(current_watchlist_sheet, _watchlist_columns()))
     entry_sheet = _build_entry_zone_sheet(entry_zones, strategy_sheet, watchlist_sheet, trade_date)
+    entry_missing_sheet = _build_entry_zone_missing_sheet(entry_zones, strategy_sheet, watchlist_sheet, trade_date, entry_sheet)
     external_sheet = _latest_external_positions(external_positions if isinstance(external_positions, pd.DataFrame) else pd.DataFrame())
     include_lookback_summary, lookback_note = _lookback_summary_decision(lookback_status, trade_date)
     lookback_sheet = _build_lookback_summary_sheet(lookback_status) if include_lookback_summary else pd.DataFrame()
@@ -346,6 +358,7 @@ def build_daily_research_view_from_frames(
         trade_date=trade_date,
         strategy_sheet=strategy_sheet,
         entry_sheet=entry_sheet,
+        entry_missing_sheet=entry_missing_sheet,
         watchlist_sheet=watchlist_sheet,
         external_sheet=external_sheet,
         lookback_sheet=lookback_sheet,
@@ -435,6 +448,7 @@ def _build_strategy_sheet(strategy: pd.DataFrame, trade_date: str, price_df: pd.
         frame = frame.sort_values("total_score", ascending=False, na_position="last")
     if "ts_code" in frame.columns:
         frame = frame.drop_duplicates("ts_code", keep="first")
+    frame = frame.head(SELECTION_DISPLAY_TOP_N)
     frame = _attach_elder_fields(frame, price_df, "今日候选")
     columns = [
         "display_order",
@@ -495,12 +509,12 @@ def _attach_elder_fields(frame: pd.DataFrame, price_df: pd.DataFrame | None, sco
 
 def _current_watchlist_scope(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or "watch_status" not in frame.columns:
-        return frame.copy().head(30)
+        return frame.copy().head(WATCHLIST_DISPLAY_TOP_N)
     current_statuses = {"active", "entry_zone", "triggered", "active_watch", "strong_watch", "wait_pullback", "near_buy_zone"}
     result = frame[frame["watch_status"].fillna("active").astype(str).isin(current_statuses)].copy()
     if "ts_code" in result.columns:
         result = result.drop_duplicates("ts_code", keep="last")
-    return result.reset_index(drop=True).head(30)
+    return result.reset_index(drop=True).head(WATCHLIST_DISPLAY_TOP_N)
 
 
 def _build_entry_zone_sheet(
@@ -549,15 +563,13 @@ def _build_entry_zone_sheet(
         frame["source"] = ""
     if "source" in frame.columns:
         frame = frame[frame["source"].fillna("").astype(str).isin({"selection", "watchlist", ""})].copy()
-    selection_codes = _frame_codes(strategy)
-    watchlist_codes = _frame_codes(watchlist)
-    visible_codes = selection_codes | watchlist_codes
+    source_scope = _entry_zone_source_scope(strategy, watchlist)
+    source_map = dict(zip(source_scope.get("ts_code", pd.Series(dtype=str)).astype(str), source_scope.get("source", pd.Series(dtype=str)).astype(str)))
+    visible_codes = set(source_map)
     if visible_codes and "ts_code" in frame.columns:
         frame = frame[frame["ts_code"].astype(str).isin(visible_codes)].copy()
     if not frame.empty and "ts_code" in frame.columns:
-        frame["source"] = frame["ts_code"].astype(str).map(
-            lambda code: "selection" if code in selection_codes else ("watchlist" if code in watchlist_codes else "")
-        )
+        frame["source"] = frame["ts_code"].astype(str).map(lambda code: source_map.get(code, ""))
         source_priority = {"selection": 0, "": 1, "watchlist": 2}
         frame["_source_priority"] = frame["source"].fillna("").astype(str).map(source_priority).fillna(3)
         frame = frame.sort_values(["_source_priority", "ts_code"]).drop_duplicates("ts_code", keep="first")
@@ -565,8 +577,49 @@ def _build_entry_zone_sheet(
     return _with_display_order(_preferred_columns(frame, columns))
 
 
+def _build_entry_zone_missing_sheet(
+    entry_zones: pd.DataFrame,
+    strategy: pd.DataFrame,
+    watchlist: pd.DataFrame,
+    trade_date: str,
+    entry_sheet: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build missing entry-zone explanation for the visible research universe."""
+    source_scope = _entry_zone_source_scope(strategy, watchlist)
+    columns = ["display_order", "trade_date", "ts_code", "name", "source", "missing_reason"]
+    if source_scope.empty:
+        return pd.DataFrame(columns=columns)
+    present_codes = _frame_codes(entry_sheet)
+    missing = source_scope[~source_scope["ts_code"].astype(str).isin(present_codes)].copy()
+    if missing.empty:
+        return pd.DataFrame(columns=columns)
+    same_day = _rows_at_date(entry_zones, "trade_date", trade_date)
+    same_day_codes = _frame_codes(same_day)
+    missing["trade_date"] = trade_date
+    missing["missing_reason"] = missing["ts_code"].astype(str).map(
+        lambda code: "缺少买入区间数据，请重新运行 calculate_entry_zones" if code in same_day_codes else "未生成买入区间快照"
+    )
+    return _with_display_order(_preferred_columns(missing, columns))
+
+
+def _entry_zone_source_scope(strategy: pd.DataFrame, watchlist: pd.DataFrame) -> pd.DataFrame:
+    """Return Top10 selection + Top30 watchlist visible universe with selection priority."""
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source, frame in [("selection", strategy), ("watchlist", watchlist)]:
+        if not isinstance(frame, pd.DataFrame) or frame.empty or "ts_code" not in frame.columns:
+            continue
+        for _, row in frame.iterrows():
+            code = str(row.get("ts_code") or "").strip()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            rows.append({"ts_code": code, "name": row.get("name"), "source": source})
+    return pd.DataFrame(rows, columns=["ts_code", "name", "source"])
+
+
 def _visible_research_codes(strategy: pd.DataFrame, watchlist: pd.DataFrame) -> set[str]:
-    return _frame_codes(strategy) | _frame_codes(watchlist)
+    return _frame_codes(_entry_zone_source_scope(strategy, watchlist))
 
 
 def _frame_codes(frame: pd.DataFrame) -> set[str]:
@@ -847,6 +900,9 @@ def _build_summary_sheet(
     entry_zone_rows: int,
     watchlist_rows: int,
     external_position_rows: int,
+    entry_zone_source_rows: int = 0,
+    entry_zone_missing_rows: int = 0,
+    backend_strategy_rows: int | None = None,
     lookback_status: dict[str, Any] | None = None,
     lookback_note: str = "",
     data_quality_snapshot: dict[str, Any] | None = None,
@@ -854,10 +910,15 @@ def _build_summary_sheet(
     rows = [
         {"metric": "导出时间", "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
         {"metric": "研究日期", "value": selected_trade_date or "暂无"},
+        {"metric": "后端候选池数量", "value": backend_strategy_rows if backend_strategy_rows is not None else strategy_rows},
         {"metric": "今日候选数量", "value": strategy_rows},
+        {"metric": "日报展示候选数量", "value": strategy_rows},
         {"metric": "已嵌入埃尔德字段记录数量", "value": elder_rows},
         {"metric": "买入区间记录数量", "value": entry_zone_rows},
+        {"metric": "买入区间来源展示全集数量", "value": entry_zone_source_rows},
+        {"metric": "买入区间缺失数量", "value": entry_zone_missing_rows},
         {"metric": "观察池记录数量", "value": watchlist_rows},
+        {"metric": "观察池展示数量", "value": watchlist_rows},
         {"metric": "外部模拟持仓记录数量", "value": external_position_rows},
     ]
     if data_quality_snapshot:
