@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.sample_data import get_sample_dashboard_data
-from core.calendar.trading_calendar import resolve_update_target_trade_date
+from core.calendar.trading_calendar import resolve_update_target_trade_date, summarize_trade_calendar_status
 from core.explain.selection_logic import (
     explain_candidates,
     explanations_to_dataframe,
@@ -54,6 +54,7 @@ ALLOWED_COMMANDS.setdefault("run_scheduled_daily_update", [sys.executable, "-m",
 ALLOWED_COMMANDS.setdefault("install_scheduled_daily_update", [sys.executable, "-m", "core.jobs.install_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("uninstall_scheduled_daily_update", [sys.executable, "-m", "core.jobs.uninstall_scheduled_daily_update"])
 ALLOWED_COMMANDS.setdefault("run_lookback_analysis", [sys.executable, "-m", "core.jobs.run_lookback_analysis"])
+ALLOWED_COMMANDS.setdefault("update_trade_calendar", [sys.executable, "-m", "core.jobs.update_trade_calendar"])
 
 CORE_LOGIC_GUIDE_PATH = PROJECT_ROOT / "docs" / "user_guides" / "core_logic_guide.md"
 CORE_LOGIC_GUIDE_DOWNLOAD_NAME = "A股选股辅助系统_核心逻辑说明.md"
@@ -1832,6 +1833,7 @@ def _render_status_tab(st: Any, tables: dict[str, pd.DataFrame]) -> None:
     status = {**legacy_status, **snapshot}
 
     _safe_render_status_block(st, "数据质量看板", _render_status_quality_main, st, scheduled, status)
+    _safe_render_status_block(st, "交易日历状态", _render_trade_calendar_status, st, tables, status)
     _safe_render_status_block(st, "数据更新操作", _render_user_level_data_update_actions, st, scheduled, status)
     _safe_render_status_block(st, "高级信息", _render_status_advanced_sections, st, tables, scheduled, legacy_status)
 
@@ -1842,6 +1844,69 @@ def _safe_render_status_block(st: Any, label: str, func: Any, *args: Any) -> Non
         func(*args)
     except Exception as exc:
         st.error(f"{label} 加载失败：{exc}")
+
+
+def _render_trade_calendar_status(st: Any, tables: dict[str, pd.DataFrame], status: dict[str, Any]) -> None:
+    """Render local A-share trading-calendar status separately from coverage."""
+    st.write("交易日历状态")
+    calendar_status = _streamlit_trade_calendar_status(tables, status)
+    display_dataframe(st, pd.DataFrame([_trade_calendar_status_row(calendar_status)]))
+    if not calendar_status.get("calendar_exists") or not calendar_status.get("covers_today") or not calendar_status.get("covers_next_30_days"):
+        st.warning("交易日历缺失或覆盖不足。请运行 python -m core.jobs.update_trade_calendar 同步交易日历。")
+
+
+def _streamlit_trade_calendar_status(tables: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
+    db_path = str(tables.get("_duckdb_path") or "")
+    if not db_path:
+        return {
+            "calendar_exists": False,
+            "calendar_source": status.get("planned_update_calendar_source") or "暂无",
+            "coverage_start": "",
+            "coverage_end": "",
+            "covers_today": False,
+            "covers_next_30_days": False,
+            "recent_open_trade_date": "",
+            "next_open_trade_date": "",
+            "target_trade_date": status.get("planned_update_target_date") or "",
+            "reason": status.get("planned_update_reason") or "",
+        }
+    try:
+        from app.config import get_settings
+        from core.storage.duckdb_store import DuckDBStore
+
+        settings = get_settings()
+        return summarize_trade_calendar_status(
+            DuckDBStore(db_path),
+            cutoff_time=getattr(settings, "daily_update_cutoff_time", "18:00") or "18:00",
+        )
+    except Exception:
+        return {
+            "calendar_exists": False,
+            "calendar_source": status.get("planned_update_calendar_source") or "暂无",
+            "coverage_start": "",
+            "coverage_end": "",
+            "covers_today": False,
+            "covers_next_30_days": False,
+            "recent_open_trade_date": "",
+            "next_open_trade_date": "",
+            "target_trade_date": status.get("planned_update_target_date") or "",
+            "reason": "交易日历状态读取失败。",
+        }
+
+
+def _trade_calendar_status_row(calendar_status: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "交易日历来源": calendar_status.get("calendar_source") or "暂无",
+        "trade_calendar 是否存在": "是" if calendar_status.get("calendar_exists") else "否",
+        "覆盖起始日期": calendar_status.get("coverage_start") or "暂无",
+        "覆盖结束日期": calendar_status.get("coverage_end") or "暂无",
+        "覆盖今天": "是" if calendar_status.get("covers_today") else "否",
+        "覆盖未来 30 天": "是" if calendar_status.get("covers_next_30_days") else "否",
+        "最近一个交易日": calendar_status.get("recent_open_trade_date") or "暂无",
+        "下一个交易日": calendar_status.get("next_open_trade_date") or "暂无",
+        "计划更新目标日期": calendar_status.get("target_trade_date") or "暂无",
+        "判断说明": calendar_status.get("reason") or "暂无",
+    }
 
 
 def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: dict[str, Any], legacy_status: dict[str, Any]) -> dict[str, Any]:

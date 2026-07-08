@@ -78,6 +78,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task60": check_task60,
         "task61": check_task61,
         "task62": check_task62,
+        "task63": check_task63,
         "task64": check_task64,
     }
     if task_name not in task_checks:
@@ -4114,6 +4115,51 @@ def check_task62(root: Path) -> list[str]:
     return failures
 
 
+def check_task63(root: Path) -> list[str]:
+    """Check Task 63 local trade-calendar maintenance."""
+    failures: list[str] = []
+    required_paths = [
+        "core/jobs/update_trade_calendar.py",
+        "core/calendar/trading_calendar.py",
+        "web/streamlit_app.py",
+        "tests/test_trade_calendar_update.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+    job_source = read_source(root / "core/jobs/update_trade_calendar.py")
+    for phrase in [
+        "update_trade_calendar",
+        "trade_calendar",
+        "exchange",
+        "cal_date",
+        "is_open",
+        "normalize_trade_calendar",
+        "provider_factory",
+        "warning",
+    ]:
+        if phrase not in job_source:
+            failures.append(f"core/jobs/update_trade_calendar.py is missing Task 63 phrase: {phrase}.")
+    if "20260101" in job_source or "20260706" in job_source:
+        failures.append("update_trade_calendar.py should not hardcode calendar dates or holidays.")
+    calendar_source = read_source(root / "core/calendar/trading_calendar.py")
+    for phrase in ["summarize_trade_calendar_status", "coverage_start", "covers_next_30_days", "next_open_trade_date"]:
+        if phrase not in calendar_source:
+            failures.append(f"core/calendar/trading_calendar.py is missing Task 63 status phrase: {phrase}.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["交易日历状态", "update_trade_calendar", "请运行 python -m core.jobs.update_trade_calendar", "覆盖未来 30 天"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 63 page phrase: {phrase}.")
+    tests_source = read_source(root / "tests/test_trade_calendar_update.py")
+    for phrase in [
+        "test_update_trade_calendar_writes_provider_rows",
+        "test_resolver_uses_trade_calendar_after_update",
+        "test_provider_failure_keeps_existing_calendar",
+        "test_trade_calendar_status_reports_coverage",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_trade_calendar_update.py is missing Task 63 test: {phrase}.")
+    return failures
+
+
 def check_task64(root: Path) -> list[str]:
     """Check Task 64 simulated trading advice layer."""
     failures: list[str] = []
@@ -4269,6 +4315,7 @@ def main(argv: list[str] | None = None) -> int:
             "task60",
             "task61",
             "task62",
+            "task63",
             "task64",
         ],
     )
