@@ -80,6 +80,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task62": check_task62,
         "task63": check_task63,
         "task64": check_task64,
+        "task65": check_task65,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -4217,6 +4218,60 @@ def check_task64(root: Path) -> list[str]:
     return failures
 
 
+def check_task65(root: Path) -> list[str]:
+    """Check Task 65 Streamlit trade-record import and position rebuild."""
+    failures: list[str] = []
+    required_paths = [
+        "core/external_positions/importer.py",
+        "web/streamlit_app.py",
+        "tests/test_external_position_importer.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+    importer_source = read_source(root / "core/external_positions/importer.py")
+    for phrase in [
+        "trade_template_excel_bytes",
+        "position_template_excel_bytes",
+        "read_uploaded_table",
+        "import_external_trades_and_rebuild_positions_frame",
+        "rebuild_external_positions_from_trades",
+        "sell quantity exceeds current holding",
+        "同花顺模拟",
+        "默认账户",
+    ]:
+        if phrase not in importer_source:
+            failures.append(f"core/external_positions/importer.py is missing Task 65 phrase: {phrase}.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in [
+        "下载模拟交易记录模板.xlsx",
+        "上传模拟交易记录 Excel",
+        "导入模拟交易记录",
+        "日常只需要维护这张交易流水表",
+        "自动计算当前持仓和加权成本",
+        "高级：手动校正当前持仓",
+        "下载持仓快照模板.xlsx",
+        "上传持仓快照 Excel",
+        "导入持仓快照",
+        "仅供个人研究和模拟复盘使用，不自动交易，不构成真实投资建议。",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 65 phrase: {phrase}.")
+    tests_source = read_source(root / "tests/test_external_position_importer.py")
+    for phrase in [
+        "test_trade_xlsx_template_contains_template_and_field_notes",
+        "test_position_xlsx_template_contains_template_and_field_notes",
+        "test_trades_rebuild_weighted_cost_and_partial_sell",
+        "test_full_sell_removes_current_position",
+        "test_oversell_fails_and_does_not_write",
+        "test_chinese_side_amount_auto_and_default_account",
+        "test_duplicate_trade_import_does_not_double_position",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_external_position_importer.py is missing Task 65 test: {phrase}.")
+    if "external_position_template.xlsx" in streamlit_source + importer_source:
+        failures.append("Task 65 should generate templates dynamically, not hardcode external_position_template.xlsx.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -4317,6 +4372,7 @@ def main(argv: list[str] | None = None) -> int:
             "task62",
             "task63",
             "task64",
+            "task65",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")
