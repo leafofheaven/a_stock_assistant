@@ -91,6 +91,7 @@ class Settings(BaseSettings):
         default=False,
         validation_alias="RUN_LOOKBACK_AFTER_DAILY_UPDATE",
     )
+    daily_update_cutoff_time: str = Field(default="18:00", validation_alias="DAILY_UPDATE_CUTOFF_TIME")
 
     @field_validator("log_level")
     @classmethod

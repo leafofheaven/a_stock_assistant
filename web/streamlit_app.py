@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.sample_data import get_sample_dashboard_data
+from core.calendar.trading_calendar import resolve_update_target_trade_date
 from core.explain.selection_logic import (
     explain_candidates,
     explanations_to_dataframe,
@@ -1783,6 +1784,8 @@ def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: di
             result.setdefault("planned_update_trade_date", planned_date or scheduled_date)
             result.setdefault("current_research_trade_date", current_research_date or scheduled_date)
             result.setdefault("latest_local_trade_date", latest_local_date or current_research_date or scheduled_date)
+            result.setdefault("planned_update_reason", dates.get("planned_update_reason") or "")
+            result.setdefault("planned_update_calendar_source", dates.get("planned_update_calendar_source") or "")
             if dates["date_status_note"]:
                 result.setdefault("formal_result_warning_reason", dates["date_status_note"])
             return result
@@ -1799,6 +1802,8 @@ def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: di
             result["planned_update_trade_date"] = planned_date or target_date
             result["current_research_trade_date"] = target_date
             result["latest_local_trade_date"] = latest_local_date or current_research_date or target_date
+            result["planned_update_reason"] = dates.get("planned_update_reason") or ""
+            result["planned_update_calendar_source"] = dates.get("planned_update_calendar_source") or ""
             if dates["date_status_note"]:
                 result["formal_result_warning_reason"] = dates["date_status_note"]
             return result
@@ -1819,6 +1824,8 @@ def _status_page_quality_snapshot(tables: dict[str, pd.DataFrame], scheduled: di
         "planned_update_trade_date": planned_date or target_date,
         "current_research_trade_date": target_date,
         "latest_local_trade_date": latest_local_date or current_research_date or target_date,
+        "planned_update_reason": dates.get("planned_update_reason") or "",
+        "planned_update_calendar_source": dates.get("planned_update_calendar_source") or "",
         "formal_result_warning_reason": dates["date_status_note"] or "当前缺少数据质量快照，请运行刷新数据状态或检查 DuckDB。",
     }
 
@@ -1843,6 +1850,8 @@ def _status_snapshot_from_loaded_tables(
         "planned_update_trade_date": dates.get("planned_update_trade_date") or dates.get("planned_update_target_date") or trade_date,
         "current_research_trade_date": trade_date,
         "latest_local_trade_date": dates.get("latest_local_trade_date") or trade_date,
+        "planned_update_reason": dates.get("planned_update_reason") or "",
+        "planned_update_calendar_source": dates.get("planned_update_calendar_source") or "",
         "formal_result_usable": False,
         "formal_result_warning_reason": dates.get("date_status_note") or "当前使用页面已加载表估算覆盖率，请运行刷新数据状态获取完整快照。",
     }
@@ -1881,8 +1890,9 @@ def resolve_streamlit_research_dates(
 ) -> dict[str, Any]:
     """Resolve the dates Streamlit should use for research views and update status.
 
-    Task 60 TODO: replace this lightweight split with exchange-calendar and
-    intraday/after-close target-date logic.
+    The planned update target uses the same A-share trading-calendar helper as
+    scheduled updates; the research display date remains the latest local
+    selection/price date.
     """
     tables = tables or {}
     scheduled = scheduled or {}
@@ -1900,23 +1910,46 @@ def resolve_streamlit_research_dates(
         _latest_date(tables.get("strategy_result", pd.DataFrame()), "trade_date") if isinstance(tables.get("strategy_result"), pd.DataFrame) else "",
         latest_local_trade_date,
     )
+    update_target = _resolve_update_target_for_streamlit(tables)
     planned_update_target_date = _first_compact_date(
+        update_target.get("target_trade_date"),
         scheduled.get("latest_completed_trade_date"),
         scheduled.get("research_trade_date"),
         scheduled.get("planned_update_target_date"),
         scheduled.get("planned_update_trade_date"),
     )
-    note = ""
+    note = str(update_target.get("reason") or "")
     if planned_update_target_date and current_research_trade_date and planned_update_target_date > current_research_trade_date:
-        note = f"计划目标日期 {planned_update_target_date} 尚未完成更新，当前研究仍使用 {current_research_trade_date}。"
+        suffix = f"计划目标日期 {planned_update_target_date} 尚未完成更新，当前研究仍使用 {current_research_trade_date}。"
+        note = f"{note} {suffix}".strip()
     return {
         "latest_local_trade_date": latest_local_trade_date,
         "current_research_trade_date": current_research_trade_date,
         "planned_update_target_date": planned_update_target_date,
         "planned_update_trade_date": planned_update_target_date,
         "planned_target_is_current": bool(planned_update_target_date and planned_update_target_date == current_research_trade_date),
+        "planned_update_reason": str(update_target.get("reason") or ""),
+        "planned_update_calendar_source": str(update_target.get("calendar_source") or ""),
         "date_status_note": note,
     }
+
+
+def _resolve_update_target_for_streamlit(tables: dict[str, Any]) -> dict[str, Any]:
+    db_path = str(tables.get("_duckdb_path") or "")
+    if not db_path:
+        return {}
+    try:
+        from app.config import get_settings
+        from core.storage.duckdb_store import DuckDBStore
+
+        settings = get_settings()
+        decision = resolve_update_target_trade_date(
+            DuckDBStore(db_path),
+            cutoff_time=getattr(settings, "daily_update_cutoff_time", "18:00") or "18:00",
+        )
+        return decision.to_dict()
+    except Exception:
+        return {}
 
 
 def _first_compact_date(*values: Any) -> str:
@@ -1962,6 +1995,7 @@ def _status_conclusion_row(scheduled: dict[str, Any], status: dict[str, Any]) ->
         "当前阶段": scheduled.get("stage") or "暂无",
         "最新本地可用交易日": status.get("latest_local_trade_date") or "暂无",
         "计划更新目标日期": status.get("planned_update_target_date") or status.get("planned_update_trade_date") or "暂无",
+        "计划目标判断来源": status.get("planned_update_calendar_source") or "暂无",
         "当前研究展示日期": status.get("current_research_trade_date") or status.get("latest_completed_trade_date") or status.get("research_trade_date") or "暂无",
         "数据质量": status.get("data_quality_status") or "unknown",
         "核心价格行情": "可用" if status.get("core_price_data_usable") is True else "不足",
@@ -1971,7 +2005,7 @@ def _status_conclusion_row(scheduled: dict[str, Any], status: dict[str, Any]) ->
         "正式全字段结果": "可用" if status.get("formal_full_market_result_usable") is True else "不可用",
         "核心行情状态": status.get("core_price_data_status") or _core_price_status(status),
         "增强数据状态": status.get("enhanced_data_status") or _enhanced_data_status(status),
-        "主要提示": status.get("formal_result_warning_reason") or scheduled.get("failure_reason") or "暂无",
+        "主要提示": status.get("formal_result_warning_reason") or status.get("planned_update_reason") or scheduled.get("failure_reason") or "暂无",
     }
 
 

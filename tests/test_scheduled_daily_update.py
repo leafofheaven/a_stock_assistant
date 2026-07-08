@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
+
+import pandas as pd
 
 from core.factors.scoring import DEFAULT_WEIGHTS
 from core.jobs.install_scheduled_daily_update import build_launchd_plist, install_scheduled_daily_update
@@ -21,10 +23,45 @@ from core.jobs.uninstall_scheduled_daily_update import uninstall_scheduled_daily
 from core.notifications.email import send_email_notification
 from core.notifications.macos import build_macos_notification
 from core.runtime.command_runner import ALLOWED_COMMANDS
+from core.storage.duckdb_store import DuckDBStore
 
 
 def _settings(tmp_path: Path) -> SimpleNamespace:
-    return SimpleNamespace(duckdb_path=tmp_path / "mock.duckdb")
+    db_path = tmp_path / "mock.duckdb"
+    store = DuckDBStore(db_path)
+    store.initialize()
+    store.upsert_dataframe(
+        "trade_calendar",
+        pd.DataFrame(
+            [
+                {"exchange": "SSE", "cal_date": "20260701", "is_open": 1},
+                {"exchange": "SSE", "cal_date": "20260702", "is_open": 1},
+                {"exchange": "SSE", "cal_date": "20260703", "is_open": 1},
+                {"exchange": "SSE", "cal_date": "20260707", "is_open": 1},
+            ]
+        ),
+    )
+    symbols = ["000001.SZ", "000002.SZ"]
+    store.upsert_dataframe(
+        "stock_basic",
+        pd.DataFrame(
+            [
+                {"ts_code": code, "symbol": code.split(".")[0], "name": code, "market": "主板", "exchange": "SZSE"}
+                for code in symbols
+            ]
+        ),
+    )
+    for table_name, extra in [
+        ("daily_price", {"close": 10.0, "amount": 100_000_000}),
+        ("daily_basic", {"turnover_rate": 1.0, "pe": 10.0, "pb": 1.0}),
+        ("adj_factor", {"adj_factor": 1.0}),
+    ]:
+        rows = []
+        for trade_date in ["20260701", "20260702", "20260703", "20260707"]:
+            for code in symbols:
+                rows.append({"ts_code": code, "trade_date": trade_date, **extra})
+        store.upsert_dataframe(table_name, pd.DataFrame(rows))
+    return SimpleNamespace(duckdb_path=db_path, daily_update_cutoff_time="18:00")
 
 
 def _status_paths(tmp_path: Path) -> tuple[Path, Path]:
@@ -963,6 +1000,24 @@ def test_before_scheduled_time_uses_previous_completed_trade_date_unless_allow_i
     assert default_result["research_trade_date"] == "20260702"
     assert intraday_result["research_trade_date"] == "20260703"
     assert intraday_result["formal_run"] is False
+
+
+def test_allow_intraday_uses_shanghai_today_not_input_timezone_date(tmp_path: Path) -> None:
+    """allow_intraday should use helper-resolved Beijing today, not current.strftime from another timezone."""
+    status_path, lock_path = _status_paths(tmp_path)
+    result = _successful_scheduled_run(
+        tmp_path,
+        status_path,
+        lock_path,
+        now=datetime(2026, 7, 6, 16, 30, tzinfo=timezone.utc),
+        update_limit=0,
+        allow_intraday=True,
+        workbook=lambda: _mock_workbook(tmp_path, trade_date="20260707"),
+    )
+
+    assert result["run_date"] == "20260706"
+    assert result["research_trade_date"] == "20260707"
+    assert result["latest_completed_trade_date"] == "20260707"
 
 
 def test_intraday_force_does_not_block_1800_formal_run(tmp_path: Path) -> None:
