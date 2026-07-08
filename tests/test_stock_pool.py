@@ -94,10 +94,75 @@ def test_build_tradeable_universe_excludes_too_many_suspended_days() -> None:
 
 def test_build_tradeable_universe_excludes_severe_financial_missing() -> None:
     """Stocks with severely missing daily basic data should be excluded."""
-    result = build_tradeable_universe(_stock_basic(), _daily_price(), _daily_basic(), "20240131")
+    daily_basic = _daily_basic()
+    daily_basic.loc[daily_basic["ts_code"] == "000007.SZ", "turnover_rate"] = None
+    result = build_tradeable_universe(_stock_basic(), _daily_price(), daily_basic, "20240131")
 
     row = _row(result, "000007.SZ")
 
+    assert bool(row["is_tradeable"]) is False
+    assert "severe financial data missing" in row["exclude_reason"]
+
+
+def test_missing_list_date_with_enough_price_history_is_not_recent_listing() -> None:
+    """Missing list_date should be accepted when local price history is long enough."""
+    result = build_tradeable_universe(
+        pd.DataFrame([{"ts_code": "000001.SZ", "name": "平安银行", "industry": "银行", "list_date": None}]),
+        _single_stock_price_history(days=65),
+        _single_stock_daily_basic(days=65),
+        "20240329",
+    )
+
+    row = _row(result, "000001.SZ")
+    assert bool(row["is_tradeable"]) is True
+    assert "listed less than 120 days" not in row["exclude_reason"]
+
+
+def test_missing_list_date_with_short_price_history_is_recent_listing() -> None:
+    """Missing list_date should still be excluded when price history is too short."""
+    result = build_tradeable_universe(
+        pd.DataFrame([{"ts_code": "000001.SZ", "name": "平安银行", "industry": "银行", "list_date": None}]),
+        _single_stock_price_history(days=20),
+        _single_stock_daily_basic(days=20),
+        "20240129",
+    )
+
+    row = _row(result, "000001.SZ")
+    assert bool(row["is_tradeable"]) is False
+    assert "listed less than 120 days" in row["exclude_reason"]
+
+
+def test_missing_total_mv_and_circ_mv_do_not_trigger_severe_financial_missing() -> None:
+    """Market-cap fields are diagnostic and should not be hard tradeability gates."""
+    basic = _single_stock_daily_basic(days=65)
+    basic["total_mv"] = None
+    basic["circ_mv"] = None
+
+    result = build_tradeable_universe(
+        pd.DataFrame([{"ts_code": "000001.SZ", "name": "平安银行", "industry": "银行", "list_date": None}]),
+        _single_stock_price_history(days=65),
+        basic,
+        "20240329",
+    )
+
+    row = _row(result, "000001.SZ")
+    assert bool(row["is_tradeable"]) is True
+    assert "severe financial data missing" not in row["exclude_reason"]
+
+
+def test_missing_turnover_rate_still_triggers_severe_financial_missing() -> None:
+    """Turnover remains a core daily_basic field for tradeability."""
+    basic = _single_stock_daily_basic(days=65)
+    basic["turnover_rate"] = None
+
+    result = build_tradeable_universe(
+        pd.DataFrame([{"ts_code": "000001.SZ", "name": "平安银行", "industry": "银行", "list_date": None}]),
+        _single_stock_price_history(days=65),
+        basic,
+        "20240329",
+    )
+
+    row = _row(result, "000001.SZ")
     assert bool(row["is_tradeable"]) is False
     assert "severe financial data missing" in row["exclude_reason"]
 
@@ -163,6 +228,41 @@ def _daily_basic() -> pd.DataFrame:
                 row.update({"pe": None, "pb": None, "total_mv": None, "circ_mv": None})
             rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _single_stock_price_history(days: int) -> pd.DataFrame:
+    dates = pd.bdate_range("2024-01-01", periods=days).strftime("%Y%m%d").tolist()
+    return pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": trade_date,
+                "close": 10.0,
+                "vol": 1000,
+                "amount": 150_000_000,
+                "is_suspended": False,
+            }
+            for trade_date in dates
+        ]
+    )
+
+
+def _single_stock_daily_basic(days: int) -> pd.DataFrame:
+    dates = pd.bdate_range("2024-01-01", periods=days).strftime("%Y%m%d").tolist()
+    return pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": trade_date,
+                "turnover_rate": 2.0,
+                "pe": 10.0,
+                "pb": 1.0,
+                "total_mv": 20_000_000_000,
+                "circ_mv": 15_000_000_000,
+            }
+            for trade_date in dates
+        ]
+    )
 
 
 def _row(result: pd.DataFrame, ts_code: str) -> pd.Series:

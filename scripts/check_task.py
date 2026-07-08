@@ -75,6 +75,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task59": check_task59,
         "task59b": check_task59b,
         "task59c": check_task59c,
+        "task61": check_task61,
     }
     if task_name not in task_checks:
         return [f"Unsupported task: {task_name}"]
@@ -3941,6 +3942,92 @@ def check_task59c(root: Path) -> list[str]:
     return failures
 
 
+def check_task61(root: Path) -> list[str]:
+    """Check Task 61 tradeable-universe filter repairs."""
+    failures: list[str] = []
+    required_paths = [
+        "core/universe/stock_pool.py",
+        "app/config.py",
+        "core/jobs/run_daily_selection.py",
+        "core/jobs/diagnose_factors.py",
+        "core/jobs/diagnose_backtest.py",
+        "core/explain/selection_logic.py",
+        "tests/test_stock_pool.py",
+        "tests/test_real_data_e2e_validation.py",
+        "tests/test_streamlit_app.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+
+    stock_pool_source = read_source(root / "core/universe/stock_pool.py")
+    for phrase in [
+        "allow_missing_list_date_with_price_history: bool = True",
+        "min_price_history_days",
+        "price_history_days < min_price_history_days",
+        'required_columns = ["turnover_rate"]',
+    ]:
+        if phrase not in stock_pool_source:
+            failures.append(f"core/universe/stock_pool.py is missing Task 61 phrase: {phrase}.")
+    if 'required_columns = ["turnover_rate", "pe", "pb", "total_mv", "circ_mv"]' in stock_pool_source:
+        failures.append("total_mv/circ_mv must not be severe financial required_columns.")
+
+    config_source = read_source(root / "app/config.py")
+    for phrase in [
+        "ALLOW_MISSING_LIST_DATE_WITH_PRICE_HISTORY",
+        "MIN_PRICE_HISTORY_DAYS",
+        "ALLOW_MISSING_VALUATION",
+    ]:
+        if phrase not in config_source:
+            failures.append(f"app/config.py is missing Task 61 setting: {phrase}.")
+
+    for rel_path in ["core/jobs/run_daily_selection.py", "core/jobs/diagnose_factors.py", "core/jobs/diagnose_backtest.py"]:
+        source = read_source(root / rel_path)
+        for phrase in ["allow_missing_list_date_with_price_history", "min_price_history_days", "allow_missing_valuation"]:
+            if phrase not in source:
+                failures.append(f"{rel_path} is missing unified Task 61 setting usage: {phrase}.")
+
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    if "通过股票池过滤并生成 factor_scores 的股票数量" not in streamlit_source:
+        failures.append("web/streamlit_app.py should explain factor_ready_symbol_count as filtered factor_scores count.")
+    for phrase in [
+        "当前选中交易日估值字段完整率",
+        "当前基本面评分核心字段",
+        "可选诊断字段",
+        "_derive_watchlist_status_counts",
+    ]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 61 page phrase: {phrase}.")
+
+    logic_source = read_source(root / "core/explain/selection_logic.py")
+    for phrase in [
+        "最小真实评分路径主要来自市盈率倒数指标",
+        "daily_basic.pb 作为估值参考",
+        "不作为硬性股票池过滤门槛",
+    ]:
+        if phrase not in logic_source:
+            failures.append(f"core/explain/selection_logic.py is missing Task 61 explanation phrase: {phrase}.")
+
+    tests_source = read_source(root / "tests/test_stock_pool.py")
+    for phrase in [
+        "test_missing_list_date_with_enough_price_history_is_not_recent_listing",
+        "test_missing_list_date_with_short_price_history_is_recent_listing",
+        "test_missing_total_mv_and_circ_mv_do_not_trigger_severe_financial_missing",
+        "test_missing_turnover_rate_still_triggers_severe_financial_missing",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_stock_pool.py is missing {phrase}.")
+    e2e_source = read_source(root / "tests/test_real_data_e2e_validation.py")
+    if 'summary["factor_scores_written_rows"] == summary["stock_pool_count"]' not in e2e_source:
+        failures.append("tests/test_real_data_e2e_validation.py should assert factor_scores rows equal stock_pool_count.")
+    streamlit_tests = read_source(root / "tests/test_streamlit_app.py")
+    for phrase in [
+        "test_daily_basic_quality_uses_current_factor_trade_date",
+        "test_watchlist_summary_derives_cards_from_display_fields",
+    ]:
+        if phrase not in streamlit_tests:
+            failures.append(f"tests/test_streamlit_app.py is missing Task 61 page test: {phrase}.")
+    return failures
+
+
 def check_paths(root: Path, relative_paths: list[str]) -> list[str]:
     """Return failures for missing required paths."""
     return [f"Missing required path: {path}" for path in relative_paths if not (root / path).exists()]
@@ -4036,6 +4123,7 @@ def main(argv: list[str] | None = None) -> int:
             "task59",
             "task59b",
             "task59c",
+            "task61",
         ],
     )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Repository root.")

@@ -207,15 +207,14 @@ def _try_real_data_summary(store: DuckDBStore, settings: Settings, *, top_n: int
 
     latest_trade_date = str(daily_price["trade_date"].dropna().astype(str).max())
     try:
-        is_akshare = settings.data_provider == "akshare"
         universe = build_tradeable_universe(
             stock_basic,
             daily_price,
             daily_basic,
             latest_trade_date,
-            allow_missing_list_date_with_price_history=is_akshare,
-            min_price_history_days=60,
-            allow_missing_valuation=is_akshare,
+            allow_missing_list_date_with_price_history=getattr(settings, "allow_missing_list_date_with_price_history", True),
+            min_price_history_days=getattr(settings, "min_price_history_days", 60),
+            allow_missing_valuation=getattr(settings, "allow_missing_valuation", False),
             min_listing_days=getattr(settings, "min_listing_days", 120),
             min_avg_amount_20d=getattr(settings, "min_avg_amount_20d", 100_000_000),
             min_median_amount_20d=getattr(settings, "min_median_amount_20d", 50_000_000),

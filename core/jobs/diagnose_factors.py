@@ -141,15 +141,14 @@ def _diagnose_real_tables(
             data_quality_notes=data_quality_notes,
         )
 
-    is_akshare = settings.data_provider == "akshare"
     universe = build_tradeable_universe(
         stock_basic,
         daily_price,
         daily_basic,
         latest_trade_date,
-        allow_missing_list_date_with_price_history=is_akshare,
-        min_price_history_days=60,
-        allow_missing_valuation=is_akshare,
+        allow_missing_list_date_with_price_history=getattr(settings, "allow_missing_list_date_with_price_history", True),
+        min_price_history_days=getattr(settings, "min_price_history_days", 60),
+        allow_missing_valuation=getattr(settings, "allow_missing_valuation", False),
     )
     tradeable = universe[universe["is_tradeable"].fillna(False)].copy()
     if tradeable.empty:

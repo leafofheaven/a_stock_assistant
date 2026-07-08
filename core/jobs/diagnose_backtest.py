@@ -198,7 +198,6 @@ def _build_score_history(
     if len(dates) < 20:
         return pd.DataFrame(), ["可用行情少于 20 个交易日，无法进行最小回测。"]
 
-    is_akshare = settings.data_provider == "akshare"
     score_frames: list[pd.DataFrame] = []
     for trade_date in dates:
         universe = build_tradeable_universe(
@@ -206,9 +205,9 @@ def _build_score_history(
             daily_price,
             daily_basic,
             trade_date,
-            allow_missing_list_date_with_price_history=is_akshare,
-            min_price_history_days=60,
-            allow_missing_valuation=is_akshare,
+            allow_missing_list_date_with_price_history=getattr(settings, "allow_missing_list_date_with_price_history", True),
+            min_price_history_days=getattr(settings, "min_price_history_days", 60),
+            allow_missing_valuation=getattr(settings, "allow_missing_valuation", False),
         )
         tradeable = universe[universe["is_tradeable"].fillna(False)].copy()
         if tradeable.empty:
