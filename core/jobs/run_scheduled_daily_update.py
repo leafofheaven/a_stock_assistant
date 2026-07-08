@@ -17,6 +17,7 @@ import time as time_module
 from typing import Any, Callable, Iterator
 
 from app.config import Settings, get_settings
+from core.calendar.trading_calendar import resolve_update_target_trade_date
 from core.diagnostics.data_quality_snapshot import build_data_quality_snapshot
 from core.jobs.backup_local_data import backup_local_data
 from core.jobs.calculate_entry_zones import calculate_entry_zones
@@ -1172,15 +1173,12 @@ def _formal_run_note(current: datetime, *, scheduled_time: str) -> str:
 
 def _latest_completed_trade_date(current: datetime, *, scheduled_time: str, allow_intraday: bool, settings: Settings) -> str:
     """Return the latest completed trade date for scheduled research outputs."""
-    scheduled = _parse_time(scheduled_time)
-    if allow_intraday and is_trade_day_local(current, settings=settings):
-        return current.strftime("%Y%m%d")
-    if is_trade_day_local(current, settings=settings) and current.time() >= scheduled:
-        return current.strftime("%Y%m%d")
-    day = current.date() - timedelta(days=1)
-    while day.weekday() >= 5:
-        day -= timedelta(days=1)
-    return day.strftime("%Y%m%d")
+    store = DuckDBStore(settings.duckdb_path)
+    cutoff = getattr(settings, "daily_update_cutoff_time", scheduled_time) or scheduled_time
+    decision = resolve_update_target_trade_date(store, now=current, cutoff_time=cutoff)
+    if allow_intraday and decision.is_today_trade_day:
+        return decision.today
+    return decision.target_trade_date
 
 
 def _intraday_warning(current: datetime, *, scheduled_time: str, allow_intraday: bool, settings: Settings) -> str:

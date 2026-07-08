@@ -323,6 +323,14 @@ def test_missing_quality_fields_fallbacks_to_readonly_snapshot(monkeypatch) -> N
         return {"data_quality_snapshot_source": "readonly_duckdb_sql", "latest_daily_price_symbol_count": 68}
 
     monkeypatch.setattr("web.streamlit_app.build_data_quality_snapshot", fake_snapshot)
+    monkeypatch.setattr(
+        "web.streamlit_app.resolve_update_target_trade_date",
+        lambda *args, **kwargs: type(
+            "Decision",
+            (),
+            {"to_dict": lambda self: {"target_trade_date": "20260703", "reason": "测试固定目标", "calendar_source": "trade_calendar"}},
+        )(),
+    )
     snapshot = _status_page_quality_snapshot({"_duckdb_path": "data/a_stock_assistant.duckdb"}, {"research_trade_date": "20260703"}, {})
 
     assert calls[0]["latest_completed_trade_date"] == "20260703"

@@ -75,6 +75,7 @@ def run_task_check(task_name: str, root: Path) -> list[str]:
         "task59": check_task59,
         "task59b": check_task59b,
         "task59c": check_task59c,
+        "task60": check_task60,
         "task61": check_task61,
         "task62": check_task62,
     }
@@ -3943,6 +3944,49 @@ def check_task59c(root: Path) -> list[str]:
     return failures
 
 
+def check_task60(root: Path) -> list[str]:
+    """Check Task 60 trading-calendar update-target repairs."""
+    failures: list[str] = []
+    required_paths = [
+        "core/calendar/trading_calendar.py",
+        "app/config.py",
+        "web/streamlit_app.py",
+        "core/jobs/run_scheduled_daily_update.py",
+        "tests/test_data_update_status.py",
+    ]
+    failures.extend(check_paths(root, required_paths))
+    calendar_source = read_source(root / "core/calendar/trading_calendar.py")
+    for phrase in [
+        "resolve_update_target_trade_date",
+        "Asia/Shanghai",
+        "trade_calendar",
+        "local_price_fallback",
+        "尚未过安全更新时间",
+    ]:
+        if phrase not in calendar_source:
+            failures.append(f"core/calendar/trading_calendar.py is missing Task 60 phrase: {phrase}.")
+    config_source = read_source(root / "app/config.py")
+    if "DAILY_UPDATE_CUTOFF_TIME" not in config_source:
+        failures.append("app/config.py is missing DAILY_UPDATE_CUTOFF_TIME.")
+    streamlit_source = read_source(root / "web/streamlit_app.py")
+    for phrase in ["resolve_update_target_trade_date", "planned_update_reason", "planned_update_calendar_source"]:
+        if phrase not in streamlit_source:
+            failures.append(f"web/streamlit_app.py is missing Task 60 phrase: {phrase}.")
+    scheduled_source = read_source(root / "core/jobs/run_scheduled_daily_update.py")
+    if "resolve_update_target_trade_date" not in scheduled_source:
+        failures.append("run_scheduled_daily_update should use resolve_update_target_trade_date.")
+    tests_source = read_source(root / "tests/test_data_update_status.py")
+    for phrase in [
+        "test_trade_day_before_cutoff_uses_previous_trade_date",
+        "test_trade_day_after_cutoff_uses_today",
+        "test_non_trade_day_uses_recent_completed_trade_date",
+        "test_missing_calendar_falls_back_to_latest_daily_price",
+    ]:
+        if phrase not in tests_source:
+            failures.append(f"tests/test_data_update_status.py is missing {phrase}.")
+    return failures
+
+
 def check_task61(root: Path) -> list[str]:
     """Check Task 61 tradeable-universe filter repairs."""
     failures: list[str] = []
@@ -4164,6 +4208,7 @@ def main(argv: list[str] | None = None) -> int:
             "task59",
             "task59b",
             "task59c",
+            "task60",
             "task61",
             "task62",
         ],
